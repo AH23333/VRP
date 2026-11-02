@@ -70,9 +70,14 @@ def test_dead_code_entry_name_excluded(con):
         "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, content_hash)"
         " VALUES ('fm','p','mod.main','Function','main','src/main.ts','hash-m')"
     )
+    con.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, content_hash)"
+        " VALUES ('ft','p','mod.test_helper','Function','test_helper','src/util.ts','hash-t')"
+    )
     con.commit()
     names = [r["qualified_name"] for r in s5_dossier.dead_code(con)]
     assert "mod.main" not in names
+    assert "mod.test_helper" not in names
 
 
 def test_dup_clusters(con):

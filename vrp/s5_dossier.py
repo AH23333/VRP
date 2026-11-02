@@ -13,7 +13,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import s1_cbm
+from . import s1_cbm, s2_deadcode
 
 ARCH_SHARE = 0.4
 VIEWS_SHARE = 0.4
@@ -26,10 +26,11 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _rows(con: sqlite3.Connection, sql: str, limit: int) -> list[dict]:
+def _rows(con: sqlite3.Connection, sql: str, limit: int | None) -> list[dict]:
     cur = con.execute(sql)
     cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchmany(limit)]
+    rows = cur.fetchall() if limit is None else cur.fetchmany(limit)
+    return [dict(zip(cols, row)) for row in rows]
 
 
 def hotspots(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
@@ -47,7 +48,9 @@ def mutual_cycles(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
 
 
 def dead_code(con: sqlite3.Connection, limit: int = 50) -> list[dict]:
-    return _rows(con, "SELECT qualified_name, label, file_path FROM v_dead_code ORDER BY qualified_name", limit)
+    rows = _rows(con, "SELECT qualified_name, label, file_path, name FROM v_dead_code", None)
+    filtered = [r for r in rows if s2_deadcode.is_candidate(r["name"], r["file_path"])]
+    return filtered[:limit]
 
 
 def dup_clusters(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
@@ -129,7 +132,9 @@ def strongly_connected(con: sqlite3.Connection, report_cap: int = SCC_REPORT_CAP
 
 
 def get_architecture(name: str, timeout: int = 300) -> dict:
-    return s1_cbm.run_cli(["get_architecture", "--project", name], timeout=timeout)
+    return s1_cbm.run_cli(
+        ["get_architecture", "--project", name, "--format", "json"], timeout=timeout
+    )
 
 
 def _findings_summary(con: sqlite3.Connection) -> dict:

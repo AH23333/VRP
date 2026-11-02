@@ -181,11 +181,12 @@ GROUP BY a.src_fid, a.dst_fid;
 
 DROP VIEW IF EXISTS v_dead_code;
 CREATE VIEW v_dead_code AS
-SELECT s.fid, s.qualified_name, s.label, s.file_path, s.name
+SELECT s.fid, s.qualified_name, s.label, s.file_path, s.name, s.start_line, s.end_line
 FROM symbols s
-WHERE s.label IN ('Function', 'Method', 'Class', 'Interface', 'Struct', 'Enum')
+WHERE s.label IN ('Function', 'Method')
+  AND s.file_path != ''
   AND s.name NOT IN ('main', 'run', 'app', 'index', 'setup', 'teardown', 'handler', 'cli')
-  AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = s.fid)
+  AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = s.fid AND e.type IN ('CALLS', 'CALL_REFERENCE', 'MENTIONS', 'SPAWNS'))
   AND NOT EXISTS (SELECT 1 FROM usage_hints u WHERE u.dst_fid = s.fid)
   AND NOT EXISTS (SELECT 1 FROM test_linkage t WHERE t.target_fid = s.fid);
 

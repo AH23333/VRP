@@ -174,6 +174,8 @@ def cmd_dossier(args) -> int:
     facts_db = repo / ".vrp" / "facts.db"
     if not facts_db.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_db}")
+    con, _ = _open_facts_rw(repo)
+    con.close()
     dossier = s5_dossier.build_dossier(repo, facts_db, name, budget=args.budget)
     _print_step("S5 dossier", {k: dossier[k] for k in ("generated_at", "project", "budget", "out")})
     return 0
