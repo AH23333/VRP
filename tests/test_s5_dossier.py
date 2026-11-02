@@ -11,6 +11,23 @@ SCHEMA = Path(__file__).parent.parent / "vrp" / "schema" / "facts_schema.sql"
 VIEW_NAMES = {"v_hotspots", "v_cycles", "v_dead_code", "v_dup_clusters", "v_coupling"}
 
 
+def _dump_facts(tmp_path: Path, con) -> Path:
+    facts_db = tmp_path / "facts.db"
+    dump = sqlite3.connect(facts_db)
+    dump.executescript(SCHEMA.read_text(encoding="utf-8"))
+    for row in con.execute("SELECT fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash FROM symbols"):
+        dump.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            row,
+        )
+    for row in con.execute("SELECT src_fid, dst_fid, type, evidence FROM edges"):
+        dump.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES (?,?,?,?)", row)
+    dump.commit()
+    dump.close()
+    return facts_db
+
+
 @pytest.fixture
 def con():
     con = sqlite3.connect(":memory:")
@@ -108,30 +125,76 @@ def test_fit_noop_when_small():
     assert s5_dossier._fit(payload, cap=1000) is payload
 
 
-def test_build_dossier(tmp_path, con, monkeypatch):
-    facts_db = tmp_path / "facts.db"
-    dump = sqlite3.connect(facts_db)
-    dump.executescript(SCHEMA.read_text(encoding="utf-8"))
-    for row in con.execute("SELECT fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash FROM symbols"):
-        dump.execute(
-            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            row,
-        )
-    for row in con.execute("SELECT src_fid, dst_fid, type, evidence FROM edges"):
-        dump.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES (?,?,?,?)", row)
-    dump.commit()
-    dump.close()
-    monkeypatch.setattr("vrp.s5_dossier.get_architecture", lambda name: {"modules": ["one", "two"]})
-    dossier = s5_dossier.build_dossier(tmp_path, facts_db, "p", budget=32000)
+def test_build_dossier(tmp_path, con):
+    facts_db = _dump_facts(tmp_path, con)
+    dossier = s5_dossier.build_dossier(
+        tmp_path,
+        facts_db,
+        "p",
+        budget=32000,
+        architecture={"modules": ["one", "two"]},
+        skip_external=True,
+    )
     assert dossier["project"] == "p"
+    assert dossier["task"] == "T4"
     assert dossier["views"]["architecture"] == {"modules": ["one", "two"]}
     assert dossier["views"]["sql_views"]["hotspots"][0]["qualified_name"].startswith("mod.")
     assert dossier["views"]["summary"]["counts"]["symbols"] == 3
+    assert dossier["views"]["repo_map_brief"]["status"] == "skipped"
+    assert dossier["views"]["raw_pack"]["status"] == "skipped"
+    assert dossier["views"]["repomap"]["files_included"] >= 1
     assert dossier["out"].endswith("dossier.json")
     persisted = json.loads((tmp_path / ".vrp" / "dossier.json").read_text(encoding="utf-8"))
     assert persisted["project"] == "p"
     check = sqlite3.connect(facts_db)
-    rows = check.execute("SELECT view FROM dossier_views ORDER BY view").fetchall()
+    rows = check.execute("SELECT view FROM dossier_views ORDER BY rowid").fetchall()
     check.close()
-    assert [r[0] for r in rows] == ["architecture", "sql_views", "summary"]
+    assert [r[0] for r in rows] == list(s5_dossier.SECTION_ORDER)
+
+
+def test_build_dossier_unknown_task(tmp_path):
+    with pytest.raises(ValueError, match="unknown task"):
+        s5_dossier.build_dossier(tmp_path, tmp_path / "facts.db", "p", task="T9")
+
+
+def test_task_profiles_complete_and_balanced():
+    for task, profile in s5_dossier.TASK_PROFILES.items():
+        assert sum(profile.values()) == pytest.approx(1.0), task
+        assert set(profile) == set(s5_dossier.SECTION_ORDER), task
+        assert all(share > 0 for share in profile.values()), task
+
+
+def test_cap_brief_truncates():
+    brief = {"status": "ok", "text": "x" * 3000, "chars": 3000}
+    capped = s5_dossier._cap_brief(brief, 100)
+    assert capped["text"].endswith("...[truncated]")
+    assert len(capped["text"]) < 130
+    assert capped["truncated"] is True
+    assert capped["chars"] == 3000
+
+
+def test_cap_brief_noop():
+    brief = {"status": "ok", "text": "short", "chars": 5}
+    assert s5_dossier._cap_brief(brief, 100) is brief
+    failed = {"status": "failed", "reason": "x"}
+    assert s5_dossier._cap_brief(failed, 100) is failed
+
+
+def test_build_dossier_t3_raw_pack_pointer(tmp_path, con, monkeypatch):
+    facts_db = _dump_facts(tmp_path, con)
+    monkeypatch.setattr("vrp.s5_dossier.get_architecture", lambda name: {"modules": []})
+    monkeypatch.setattr(
+        "vrp.s5_dossier.s5_cabrief.repo_map_brief",
+        lambda repo, max_tokens=4000, timeout=120: {"status": "ok", "text": "map text", "chars": 8, "max_tokens": max_tokens},
+    )
+    monkeypatch.setattr(
+        "vrp.s5_dossier.s5_rawpack.build_raw_pack",
+        lambda repo, timeout=600: {"status": "ok", "path": str(repo / ".vrp" / "repomix-output.xml"), "bytes": 1024, "sha256": "ab12"},
+    )
+    dossier = s5_dossier.build_dossier(tmp_path, facts_db, "p", budget=32000, task="T3")
+    raw = dossier["views"]["raw_pack"]
+    assert raw["status"] == "ok"
+    assert raw["recommended_read_chars"] == max(1, int(32000 * s5_dossier.TASK_PROFILES["T3"]["raw_pack"]))
+    brief = dossier["views"]["repo_map_brief"]
+    assert brief["status"] == "ok"
+    assert brief["max_tokens"] == max(200, min(20000, int(32000 * s5_dossier.TASK_PROFILES["T3"]["repo_map_brief"]) // 4))

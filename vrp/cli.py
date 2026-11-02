@@ -176,8 +176,18 @@ def cmd_dossier(args) -> int:
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_db}")
     con, _ = _open_facts_rw(repo)
     con.close()
-    dossier = s5_dossier.build_dossier(repo, facts_db, name, budget=args.budget)
-    _print_step("S5 dossier", {k: dossier[k] for k in ("generated_at", "project", "budget", "out")})
+    dossier = s5_dossier.build_dossier(
+        repo,
+        facts_db,
+        name,
+        budget=args.budget,
+        task=args.task,
+        skip_external=args.skip_external,
+    )
+    _print_step(
+        "S5 dossier",
+        {k: dossier[k] for k in ("generated_at", "project", "budget", "task", "out")},
+    )
     return 0
 
 
@@ -262,10 +272,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-graph", action="store_true", help="skip CBM persistence index + detect_changes")
     p.set_defaults(func=cmd_freeze)
 
-    p = sub.add_parser("dossier", help="S5: assemble dossier (SQL views + CBM architecture, budget-capped)")
+    p = sub.add_parser(
+        "dossier",
+        help="S5: assemble dossier (six sections, task-typed budget profile)",
+    )
     p.add_argument("repo")
     p.add_argument("--name", help="CBM project name override")
     p.add_argument("--budget", type=int, default=32000, help="total char budget for dossier JSON")
+    p.add_argument(
+        "--task",
+        choices=sorted(s5_dossier.TASK_PROFILES),
+        default=s5_dossier.DEFAULT_TASK,
+        help="task profile: T1 equivalent-refactor / T2 cleanup / T3 fix / T4 improvement",
+    )
+    p.add_argument(
+        "--skip-external",
+        action="store_true",
+        help="skip external tool calls (CBM get_architecture, code-atlas repo_map, repomix)",
+    )
     p.set_defaults(func=cmd_dossier)
 
     p = sub.add_parser("status", help="facts.db summary")

@@ -1,9 +1,10 @@
-"""S5 dossier: SQL view assembly + CBM architecture + budget allocation (v6 s7).
+"""S5 dossier: view assembly + budget allocation (v6 s7).
 
-v1 scope (self-built views only): five facts.db SQL views (hotspots / cycles /
-dead_code / dup_clusters / coupling), Python-side Tarjan SCC for real cycles,
-CBM get_architecture thin wrapper, budget-capped assembly into dossier_views
-+ .vrp/dossier.json. repomix / repomap / code-atlas views come in a later batch.
+Six sections assembled under a task-typed budget profile (T1 equivalent
+refactor / T2 cleanup / T3 fix-up / T4 improvement, v2 gate-matrix taxonomy):
+architecture (CBM get_architecture), repo_map_brief (code-atlas MCP),
+repomap (aider-algorithm port on facts.db), sql_views (five facts.db views),
+summary (findings/annotations/counts), raw_pack (repomix artifact pointer).
 """
 
 from __future__ import annotations
@@ -13,13 +14,46 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import s1_cbm, s2_deadcode
+from . import s1_cbm, s2_deadcode, s5_cabrief, s5_rawpack, s5_repomap
 
-ARCH_SHARE = 0.4
-VIEWS_SHARE = 0.4
-SUMMARY_SHARE = 0.2
 DEFAULT_BUDGET = 32000
 SCC_REPORT_CAP = 20
+DEFAULT_TASK = "T4"
+TASK_PROFILES: dict[str, dict[str, float]] = {
+    "T1": {
+        "repomap": 0.30,
+        "sql_views": 0.25,
+        "architecture": 0.15,
+        "repo_map_brief": 0.10,
+        "raw_pack": 0.05,
+        "summary": 0.15,
+    },
+    "T2": {
+        "sql_views": 0.40,
+        "repomap": 0.20,
+        "summary": 0.15,
+        "architecture": 0.10,
+        "repo_map_brief": 0.10,
+        "raw_pack": 0.05,
+    },
+    "T3": {
+        "raw_pack": 0.30,
+        "sql_views": 0.20,
+        "summary": 0.20,
+        "repomap": 0.15,
+        "architecture": 0.10,
+        "repo_map_brief": 0.05,
+    },
+    "T4": {
+        "architecture": 0.25,
+        "sql_views": 0.20,
+        "repomap": 0.20,
+        "repo_map_brief": 0.15,
+        "summary": 0.10,
+        "raw_pack": 0.10,
+    },
+}
+SECTION_ORDER = ("architecture", "repo_map_brief", "repomap", "sql_views", "summary", "raw_pack")
 
 
 def _utc_now() -> str:
@@ -164,13 +198,25 @@ def _fit(payload: dict, cap: int) -> dict:
     return trimmed
 
 
+def _cap_brief(brief: dict, cap: int) -> dict:
+    text = brief.get("text")
+    if not isinstance(text, str) or len(text) <= cap:
+        return brief
+    return {**brief, "text": text[:cap] + "\n...[truncated]", "chars": len(text), "truncated": True}
+
+
 def build_dossier(
     repo: Path,
     facts_db: Path,
     name: str,
     budget: int = DEFAULT_BUDGET,
+    task: str = DEFAULT_TASK,
     architecture: dict | None = None,
+    skip_external: bool = False,
 ) -> dict:
+    if task not in TASK_PROFILES:
+        raise ValueError(f"unknown task: {task!r} (expected one of {', '.join(TASK_PROFILES)})")
+    caps = {section: max(1, int(budget * share)) for section, share in TASK_PROFILES[task].items()}
     con = sqlite3.connect(f"file:{facts_db}?mode=ro", uri=True)
     con.row_factory = None
     try:
@@ -190,25 +236,51 @@ def build_dossier(
                 for table in ("symbols", "edges", "test_linkage")
             },
         }
+        repomap_payload = s5_repomap.render_repomap(con, char_budget=caps["repomap"])
     finally:
         con.close()
-    if architecture is None:
-        architecture = get_architecture(name)
-    arch_cap = max(1, int(budget * ARCH_SHARE))
-    views_cap = max(1, int(budget * VIEWS_SHARE))
-    summary_cap = max(1, int(budget * SUMMARY_SHARE))
+    if architecture is not None:
+        arch_payload = architecture
+    elif skip_external:
+        arch_payload = {"status": "skipped", "reason": "external calls disabled"}
+    else:
+        arch_payload = get_architecture(name)
+    if skip_external:
+        brief_payload = {"status": "skipped", "reason": "external calls disabled"}
+        raw_payload = {"status": "skipped", "reason": "external calls disabled"}
+    else:
+        brief_payload = _cap_brief(
+            s5_cabrief.repo_map_brief(
+                repo,
+                max_tokens=max(200, min(20000, caps["repo_map_brief"] // 4)),
+                timeout=180,
+            ),
+            caps["repo_map_brief"],
+        )
+        raw_payload = s5_rawpack.build_raw_pack(repo)
+        if raw_payload.get("status") == "ok":
+            raw_payload["recommended_read_chars"] = caps["raw_pack"]
     sections = {
-        "architecture": _fit(architecture, arch_cap),
-        "sql_views": _fit(views_payload, views_cap),
-        "summary": _fit(summary_payload, summary_cap),
+        "architecture": _fit(arch_payload, caps["architecture"]),
+        "repo_map_brief": brief_payload,
+        "repomap": repomap_payload,
+        "sql_views": _fit(views_payload, caps["sql_views"]),
+        "summary": _fit(summary_payload, caps["summary"]),
+        "raw_pack": raw_payload,
     }
-    dossier = {"generated_at": _utc_now(), "project": name, "budget": budget, "views": sections}
+    dossier = {
+        "generated_at": _utc_now(),
+        "project": name,
+        "budget": budget,
+        "task": task,
+        "views": sections,
+    }
     con = sqlite3.connect(facts_db)
     try:
-        for section, payload in sections.items():
+        for section in SECTION_ORDER:
             con.execute(
                 "INSERT INTO dossier_views (view, payload_json) VALUES (?, ?)",
-                (section, json.dumps(payload, ensure_ascii=False)),
+                (section, json.dumps(sections[section], ensure_ascii=False)),
             )
         con.commit()
     finally:
