@@ -220,9 +220,9 @@ def _etl_edges(dst: sqlite3.Connection, src: sqlite3.Connection, project: str, f
     dst.executemany("INSERT INTO history_coupling (src_fid, dst_fid, properties_json) VALUES (?,?,?)", history_rows)
     dst.executemany("INSERT INTO test_linkage (test_fid, target_fid, source, properties_json) VALUES (?,?,?,?)", tests_rows)
     dst.executemany(
-        "INSERT INTO findings (pathology, kind, anchor_fid, related_fid, file_path, start_line, end_line, payload_json)"
-        " VALUES (?,?,?,?,?,?,?,?)",
-        findings_rows,
+        "INSERT INTO findings (pathology, kind, source, anchor_fid, related_fid, file_path, start_line, end_line, payload_json)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        [(r[0], r[1], "etl", *r[2:]) for r in findings_rows],
     )
 
     stats["edges"] = len(edge_rows)

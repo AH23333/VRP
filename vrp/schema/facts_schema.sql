@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS findings (
     id INTEGER PRIMARY KEY,
     pathology TEXT NOT NULL,
     kind TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'etl',
     anchor_fid TEXT,
     related_fid TEXT,
     file_path TEXT,
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS findings (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_findings_pathology ON findings(pathology);
+CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source);
 CREATE INDEX IF NOT EXISTS idx_findings_anchor ON findings(anchor_fid);
 
 CREATE TABLE IF NOT EXISTS discrepancy_ledger (
