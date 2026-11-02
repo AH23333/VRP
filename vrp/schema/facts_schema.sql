@@ -159,3 +159,51 @@ CREATE TABLE IF NOT EXISTS baseline (
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+DROP VIEW IF EXISTS v_hotspots;
+CREATE VIEW v_hotspots AS
+SELECT fid, qualified_name, label, file_path, fan_in, fan_out, hint_in, tests, (fan_in + hint_in + tests) AS score FROM (
+    SELECT s.fid AS fid, s.qualified_name AS qualified_name, s.label AS label, s.file_path AS file_path,
+           (SELECT COUNT(*) FROM edges e WHERE e.dst_fid = s.fid) AS fan_in,
+           (SELECT COUNT(*) FROM edges e WHERE e.src_fid = s.fid) AS fan_out,
+           (SELECT COUNT(*) FROM usage_hints u WHERE u.dst_fid = s.fid) AS hint_in,
+           (SELECT COUNT(*) FROM test_linkage t WHERE t.target_fid = s.fid) AS tests
+    FROM symbols s
+);
+
+DROP VIEW IF EXISTS v_cycles;
+CREATE VIEW v_cycles AS
+SELECT a.src_fid AS fid_a, a.dst_fid AS fid_b
+FROM edges a
+JOIN edges b ON b.src_fid = a.dst_fid AND b.dst_fid = a.src_fid
+WHERE a.src_fid < a.dst_fid
+GROUP BY a.src_fid, a.dst_fid;
+
+DROP VIEW IF EXISTS v_dead_code;
+CREATE VIEW v_dead_code AS
+SELECT s.fid, s.qualified_name, s.label, s.file_path, s.name
+FROM symbols s
+WHERE s.label IN ('Function', 'Method', 'Class', 'Interface', 'Struct', 'Enum')
+  AND s.name NOT IN ('main', 'run', 'app', 'index', 'setup', 'teardown', 'handler', 'cli')
+  AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = s.fid)
+  AND NOT EXISTS (SELECT 1 FROM usage_hints u WHERE u.dst_fid = s.fid)
+  AND NOT EXISTS (SELECT 1 FROM test_linkage t WHERE t.target_fid = s.fid);
+
+DROP VIEW IF EXISTS v_dup_clusters;
+CREATE VIEW v_dup_clusters AS
+SELECT content_hash, COUNT(*) AS copies,
+       GROUP_CONCAT(qualified_name, '|') AS members,
+       GROUP_CONCAT(DISTINCT file_path) AS files
+FROM symbols
+WHERE content_hash != ''
+GROUP BY content_hash
+HAVING COUNT(*) > 1;
+
+DROP VIEW IF EXISTS v_coupling;
+CREATE VIEW v_coupling AS
+SELECT sf.file_path AS file_a, st.file_path AS file_b, COUNT(*) AS edge_count
+FROM edges e
+JOIN symbols sf ON sf.fid = e.src_fid
+JOIN symbols st ON st.fid = e.dst_fid
+WHERE sf.file_path != st.file_path
+GROUP BY sf.file_path, st.file_path;
