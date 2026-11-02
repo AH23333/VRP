@@ -27,6 +27,7 @@ def load_graph(con: sqlite3.Connection) -> tuple[dict[str, list[str]], dict[str,
     for fid, qn, name, label, file_path, start_line, end_line in con.execute(
         "SELECT fid, qualified_name, name, label, file_path, start_line, end_line FROM symbols"
         " WHERE start_line IS NOT NULL AND file_path != ''"
+        " AND file_path NOT GLOB '<*' AND file_path NOT GLOB '>*'"
     ):
         symbols[fid] = {
             "qualified_name": qn,
