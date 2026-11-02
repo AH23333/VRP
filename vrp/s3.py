@@ -27,7 +27,7 @@ def window_text(repo: Path, file_path: str, start_line: int, end_line: int) -> s
     if not target.is_file():
         return None
     lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
-    if start_line < 1 or start_line > len(lines):
+    if start_line < 1 or start_line > len(lines) or end_line < start_line:
         return None
     end = min(end_line, len(lines))
     return "\n".join(lines[start_line - 1 : end])
