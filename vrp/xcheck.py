@@ -169,6 +169,9 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
             else:
                 ledger.append(("cbm_only", f"{src_name}@{src_file}", f"{dst_name}@{dst_file}", "CALLS", None, None, detail))
 
+        facts.execute(
+            "DELETE FROM discrepancy_ledger WHERE category IN ('ca_only','ca_only_builtin_target','cbm_only','cbm_only_test_source')"
+        )
         facts.executemany(
             "INSERT INTO discrepancy_ledger (category, src_key, dst_key, cbm_edge_type, ca_confidence, ca_provenance, detail_json)"
             " VALUES (?,?,?,?,?,?,?)",
