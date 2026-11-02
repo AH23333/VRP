@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
-from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_mutate, s2_p4, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_mutate, s2_p4, s3, xcheck
 
 
 def _repo_arg(value: str) -> Path:
@@ -107,6 +107,45 @@ def cmd_mutate_plan(args) -> int:
     return 0
 
 
+def _open_facts_rw(repo: Path):
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = sqlite3.connect(facts_path)
+    etl_mod.ensure_schema(con)
+    return con, facts_path
+
+
+def cmd_validate(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        anchors = s3.validate_anchors(con, repo)
+        cov = s3.coverage(con)
+    finally:
+        con.close()
+    result = {"anchors": anchors, "coverage": {"total": cov["total"], "annotated": cov["annotated"]}}
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_gate(args) -> int:
+    repo = _repo_arg(args.repo)
+    claims_path = Path(args.claims)
+    if not claims_path.is_file():
+        raise SystemExit(f"claims file not found: {claims_path}")
+    claims = json.loads(claims_path.read_text(encoding="utf-8"))
+    if not isinstance(claims, list):
+        raise SystemExit("claims file must be a JSON array")
+    con, _ = _open_facts_rw(repo)
+    try:
+        result = s3.gate_claims(con, repo, claims)
+    finally:
+        con.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -170,6 +209,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--budget", type=int, default=50)
     p.set_defaults(func=cmd_mutate_plan)
+
+    p = sub.add_parser("validate", help="S3: anchor revalidation (active/cosmetic/stale) + coverage -> gate_results")
+    p.add_argument("repo")
+    p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser("gate", help="S3: evidence gate merge of AI claims (quote-or-rejected)")
+    p.add_argument("repo")
+    p.add_argument("claims", help="JSON file with a claims array")
+    p.set_defaults(func=cmd_gate)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")

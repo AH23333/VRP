@@ -79,6 +79,11 @@ def _copy_table_simple(dst: sqlite3.Connection, rows, table: str, columns: int):
 OWNED_TABLES = ("annotations", "transactions", "gate_results", "dossier_views", "baseline")
 
 
+def ensure_schema(con: sqlite3.Connection) -> None:
+    con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    con.commit()
+
+
 def snapshot_owned(db_path: Path) -> dict[str, list[tuple]]:
     if not db_path.exists():
         return {}
