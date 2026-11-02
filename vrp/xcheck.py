@@ -49,7 +49,7 @@ BUILTINISH = frozenset(
 )
 
 
-def _ca_js_path() -> Path | None:
+def ca_js_path() -> Path | None:
     env = os.environ.get("VRP_CODE_ATLAS_JS")
     if env and Path(env).exists():
         return Path(env)
@@ -66,6 +66,9 @@ def _ca_js_path() -> Path | None:
     if local.exists():
         return local
     return None
+
+
+_ca_js_path = ca_js_path
 
 
 def index_with_code_atlas(repo: Path, reindex: bool = False, timeout: int = 900) -> dict:
