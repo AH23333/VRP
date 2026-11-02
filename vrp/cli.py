@@ -37,9 +37,7 @@ def cmd_index(args) -> int:
 
 def cmd_etl(args) -> int:
     repo = _repo_arg(args.repo)
-    name = args.name or repo.name
-    if args.cbm_name:
-        name = args.cbm_name
+    name = args.cbm_name or repo.name
     result = etl_mod.run_etl(repo, name)
     printable = {k: v for k, v in result.items()}
     print(json.dumps(printable, ensure_ascii=False, indent=2))
