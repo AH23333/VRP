@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
-from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_mutate, xcheck
 
 
 def _repo_arg(value: str) -> Path:
@@ -90,6 +90,21 @@ def cmd_s2(args) -> int:
     return 0
 
 
+def cmd_mutate_plan(args) -> int:
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = sqlite3.connect(f"file:{facts_path}?mode=ro", uri=True)
+    try:
+        targets = s2_mutate.mutation_targets(con, args.budget)
+    finally:
+        con.close()
+    out = s2_mutate.write_plan(repo, targets)
+    print(json.dumps({"budget": args.budget, "selected": len(targets), "plan": str(out)}, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -148,6 +163,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("s2", help="S2: ast-grep pathology scan -> findings")
     p.add_argument("repo")
     p.set_defaults(func=cmd_s2)
+
+    p = sub.add_parser("mutate-plan", help="S2 P8: mutation budget sampler (test_linkage pre-filter)")
+    p.add_argument("repo")
+    p.add_argument("--budget", type=int, default=50)
+    p.set_defaults(func=cmd_mutate_plan)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")
