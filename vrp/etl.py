@@ -76,6 +76,46 @@ def _copy_table_simple(dst: sqlite3.Connection, rows, table: str, columns: int):
     dst.executemany(f"INSERT OR REPLACE INTO {table} VALUES ({placeholders})", rows)
 
 
+OWNED_TABLES = ("annotations", "transactions", "gate_results", "dossier_views", "baseline")
+
+
+def snapshot_owned(db_path: Path) -> dict[str, list[tuple]]:
+    if not db_path.exists():
+        return {}
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    snap: dict[str, list[tuple]] = {}
+    try:
+        for table in OWNED_TABLES:
+            try:
+                snap[table] = con.execute(f"SELECT * FROM {table}").fetchall()
+            except sqlite3.OperationalError:
+                pass
+        try:
+            snap["findings_kept"] = con.execute(
+                "SELECT * FROM findings WHERE source != 'etl'"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            pass
+    finally:
+        con.close()
+    return snap
+
+
+def restore_owned(dst: sqlite3.Connection, snap: dict[str, list[tuple]]) -> None:
+    for table in OWNED_TABLES:
+        rows = snap.get(table)
+        if not rows:
+            continue
+        cols = len(rows[0])
+        placeholders = ",".join("?" * cols)
+        dst.executemany(f"INSERT OR REPLACE INTO {table} VALUES ({placeholders})", rows)
+    kept = snap.get("findings_kept")
+    if kept:
+        cols = len(kept[0])
+        placeholders = ",".join("?" * cols)
+        dst.executemany(f"INSERT OR REPLACE INTO findings VALUES ({placeholders})", kept)
+
+
 def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
     repo = repo.resolve()
     db_path = s1_cbm.cbm_db_path(cbm_name)
@@ -85,10 +125,12 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
     store_meta = s1_cbm.read_store_meta(db_path)
     out_db = out_db or (repo / ".vrp" / "facts.db")
     out_db.parent.mkdir(parents=True, exist_ok=True)
+    snap = snapshot_owned(out_db)
     if out_db.exists():
         out_db.unlink()
     dst = sqlite3.connect(out_db)
     dst.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    restore_owned(dst, snap)
 
     src = s1_cbm.connect_ro(db_path)
     hasher = _ContentHasher(repo)

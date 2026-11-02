@@ -107,3 +107,55 @@ CREATE TABLE IF NOT EXISTS discrepancy_ledger (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_category ON discrepancy_ledger(category);
+
+CREATE TABLE IF NOT EXISTS annotations (
+    id INTEGER PRIMARY KEY,
+    qualified_name TEXT NOT NULL,
+    file_path TEXT NOT NULL DEFAULT '',
+    start_line INTEGER,
+    end_line INTEGER,
+    symbol_hash TEXT NOT NULL DEFAULT '',
+    window_hash TEXT NOT NULL DEFAULT '',
+    author TEXT NOT NULL DEFAULT 'ai',
+    kind TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_qn ON annotations(qualified_name);
+CREATE INDEX IF NOT EXISTS idx_annotations_status ON annotations(status);
+
+CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY,
+    tid TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    declared_moves TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'proposed',
+    payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_transactions_tid ON transactions(tid);
+
+CREATE TABLE IF NOT EXISTS gate_results (
+    id INTEGER PRIMARY KEY,
+    gate TEXT NOT NULL,
+    status TEXT NOT NULL,
+    detail_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_gate_results_gate ON gate_results(gate);
+
+CREATE TABLE IF NOT EXISTS dossier_views (
+    id INTEGER PRIMARY KEY,
+    view TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dossier_views_view ON dossier_views(view);
+
+CREATE TABLE IF NOT EXISTS baseline (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
