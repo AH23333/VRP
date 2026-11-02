@@ -169,6 +169,9 @@ SELECT fid, qualified_name, label, file_path, fan_in, fan_out, hint_in, tests, (
            (SELECT COUNT(*) FROM usage_hints u WHERE u.dst_fid = s.fid) AS hint_in,
            (SELECT COUNT(*) FROM test_linkage t WHERE t.target_fid = s.fid) AS tests
     FROM symbols s
+    WHERE s.file_path != ''
+      AND s.file_path NOT GLOB '<*'
+      AND s.file_path NOT GLOB '>*'
 );
 
 DROP VIEW IF EXISTS v_cycles;
