@@ -1,10 +1,11 @@
-"""S5 code-atlas repo_map brief: one-shot MCP stdio client (v6 s7 预算化简报).
+"""S5 code-atlas one-shot MCP stdio client (v6 s7 预算化简报).
 
-code-atlas CLI exposes only index/serve; repo_map is an MCP tool. This module
-speaks minimal MCP over stdio (initialize -> notifications/initialized ->
-tools/call) against a light-mode server (--no-watch --no-lsp --no-download
---no-embeddings). Any failure degrades gracefully per v6: the dossier falls
-back to the remaining views.
+code-atlas CLI exposes only index/serve; repo_map and verify_changes are MCP
+tools. This module speaks minimal MCP over stdio (initialize ->
+notifications/initialized -> tools/call) against a light-mode server
+(--no-watch --no-lsp --no-download --no-embeddings). Any failure degrades
+gracefully per v6: the dossier falls back to the remaining views, the S6 gate
+treats verify_changes as an optional cross-check.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ def _read_response(stdout, want_id: int) -> dict | None:
     return None
 
 
-def repo_map_brief(repo: Path, max_tokens: int = 4000, timeout: int = 120) -> dict:
+def call_code_atlas(repo: Path, tool: str, arguments: dict, timeout: int = 120) -> dict:
     node = shutil.which("node")
     js = ca_js_path()
     if node is None:
@@ -89,12 +90,12 @@ def repo_map_brief(repo: Path, max_tokens: int = 4000, timeout: int = 120) -> di
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
-                "params": {"name": "repo_map", "arguments": {"max_tokens": max_tokens}},
+                "params": {"name": tool, "arguments": arguments},
             },
         )
         response = _read_response(proc.stdout, 2)
         if response is None:
-            return {"status": "failed", "reason": "no repo_map response" + (" (timeout)" if timed_out.is_set() else "")}
+            return {"status": "failed", "reason": f"no {tool} response" + (" (timeout)" if timed_out.is_set() else "")}
     finally:
         watchdog.cancel()
         if proc.stdin:
@@ -109,5 +110,12 @@ def repo_map_brief(repo: Path, max_tokens: int = 4000, timeout: int = 120) -> di
     content = response.get("result", {}).get("content", [])
     text = content[0].get("text", "") if content else ""
     if not text:
-        return {"status": "failed", "reason": "empty repo_map content"}
-    return {"status": "ok", "text": text, "chars": len(text), "max_tokens": max_tokens}
+        return {"status": "failed", "reason": f"empty {tool} content"}
+    return {"status": "ok", "text": text, "chars": len(text)}
+
+
+def repo_map_brief(repo: Path, max_tokens: int = 4000, timeout: int = 120) -> dict:
+    result = call_code_atlas(repo, "repo_map", {"max_tokens": max_tokens}, timeout)
+    if result["status"] == "ok":
+        result["max_tokens"] = max_tokens
+    return result
