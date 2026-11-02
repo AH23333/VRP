@@ -119,9 +119,24 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+VRP_ARTIFACT_DIRS = (".vrp/", ".codebase-memory/", ".code-atlas/")
+
+
+def _is_vrp_artifact(path: str) -> bool:
+    norm = path.strip().strip('"')
+    if " -> " in norm:
+        norm = norm.split(" -> ")[-1]
+    return norm.startswith(VRP_ARTIFACT_DIRS)
+
+
 def git_clean(repo: Path) -> bool:
     proc = _git(repo, "status", "--porcelain")
-    return proc.returncode == 0 and not proc.stdout.strip()
+    if proc.returncode != 0:
+        return False
+    for line in proc.stdout.splitlines():
+        if line.strip() and not _is_vrp_artifact(line[3:]):
+            return False
+    return True
 
 
 def git_head(repo: Path) -> str:
@@ -131,6 +146,8 @@ def git_head(repo: Path) -> str:
 
 def git_commit_all(repo: Path, message: str) -> str:
     _git(repo, "add", "-A")
+    for artifact in (".vrp", ".codebase-memory", ".code-atlas"):
+        _git(repo, "reset", "-q", "HEAD", "--", artifact)
     proc = _git(repo, "commit", "-m", message)
     if proc.returncode != 0:
         raise RuntimeError(f"git commit failed: {proc.stderr.strip()[:500]}")
