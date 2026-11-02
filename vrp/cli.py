@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
-from . import s0_precheck, s1_cbm, s2_astgrep, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, xcheck
 
 
 def _repo_arg(value: str) -> Path:
@@ -82,8 +82,10 @@ def cmd_s2(args) -> int:
     con = sqlite3.connect(facts_path)
     try:
         result = s2_astgrep.scan(con, repo)
+        dead = s2_deadcode.scan(con)
     finally:
         con.close()
+    result["dead_code_candidates"] = dead["total"]
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
