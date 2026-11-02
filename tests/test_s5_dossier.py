@@ -73,8 +73,7 @@ def test_mutual_cycles(con):
 def test_strongly_connected(con):
     result = s5_dossier.strongly_connected(con)
     assert result["scc_count"] == 1
-    assert result["max_size"] == 2
-    assert result["largest"] == [["mod.a", "mod.b"]]
+    assert result["largest"] == [{"size": 2, "members": ["mod.a", "mod.b"]}]
 
 
 def test_dead_code_view(con):
@@ -118,6 +117,13 @@ def test_fit_trims_longest_list():
     assert len(json.dumps(fitted, ensure_ascii=False)) <= 2000
     assert fitted["small"] == "x"
     assert len(fitted["big"]) < 500
+
+
+def test_fit_terminates_when_unshrinkable():
+    payload = {"huge": "x" * 5000, "stub": [1]}
+    fitted = s5_dossier._fit(payload, cap=200)
+    assert fitted["huge"] == "x" * 5000
+    assert fitted["stub"] == [1]
 
 
 def test_fit_noop_when_small():

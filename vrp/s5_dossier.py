@@ -18,6 +18,8 @@ from . import s1_cbm, s2_deadcode, s5_cabrief, s5_rawpack, s5_repomap
 
 DEFAULT_BUDGET = 32000
 SCC_REPORT_CAP = 20
+SCC_MEMBER_CAP = 30
+DUP_MEMBERS_CHARS = 300
 DEFAULT_TASK = "T4"
 TASK_PROFILES: dict[str, dict[str, float]] = {
     "T1": {
@@ -60,8 +62,8 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _rows(con: sqlite3.Connection, sql: str, limit: int | None) -> list[dict]:
-    cur = con.execute(sql)
+def _rows(con: sqlite3.Connection, sql: str, limit: int | None, params: tuple = ()) -> list[dict]:
+    cur = con.execute(sql, params)
     cols = [d[0] for d in cur.description]
     rows = cur.fetchall() if limit is None else cur.fetchmany(limit)
     return [dict(zip(cols, row)) for row in rows]
@@ -90,8 +92,9 @@ def dead_code(con: sqlite3.Connection, limit: int = 50) -> list[dict]:
 def dup_clusters(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
     return _rows(
         con,
-        "SELECT copies, members, files FROM v_dup_clusters ORDER BY copies DESC, content_hash",
+        "SELECT copies, substr(members, 1, ?) AS members, files FROM v_dup_clusters ORDER BY copies DESC, content_hash",
         limit,
+        params=(DUP_MEMBERS_CHARS,),
     )
 
 
@@ -161,7 +164,10 @@ def strongly_connected(con: sqlite3.Connection, report_cap: int = SCC_REPORT_CAP
     return {
         "scc_count": len(components),
         "max_size": max((len(c) for c in components), default=0),
-        "largest": named[:report_cap],
+        "largest": [
+            {"size": len(c), "members": c[:SCC_MEMBER_CAP]}
+            for c in named[:report_cap]
+        ],
     }
 
 
@@ -190,11 +196,11 @@ def _fit(payload: dict, cap: int) -> dict:
         return payload
     trimmed = {k: (list(v) if isinstance(v, list) else v) for k, v in payload.items()}
     while len(json.dumps(trimmed, ensure_ascii=False)) > cap:
-        lists = [(k, len(v)) for k, v in trimmed.items() if isinstance(v, list) and v]
+        lists = [(k, len(v)) for k, v in trimmed.items() if isinstance(v, list) and len(v) > 1]
         if not lists:
             break
         key = max(lists, key=lambda kv: kv[1])[0]
-        trimmed[key] = trimmed[key][: max(1, len(trimmed[key]) // 2)]
+        trimmed[key] = trimmed[key][: len(trimmed[key]) // 2]
     return trimmed
 
 
