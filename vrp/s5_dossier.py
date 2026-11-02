@@ -283,6 +283,7 @@ def build_dossier(
     }
     con = sqlite3.connect(facts_db)
     try:
+        con.execute("DELETE FROM dossier_views")
         for section in SECTION_ORDER:
             con.execute(
                 "INSERT INTO dossier_views (view, payload_json) VALUES (?, ?)",
