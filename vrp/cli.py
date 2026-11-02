@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
-from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_mutate, s2_p4, s3, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_mutate, s2_p4, s3, s4_freeze, xcheck
 
 
 def _repo_arg(value: str) -> Path:
@@ -146,6 +146,28 @@ def cmd_gate(args) -> int:
     return 0
 
 
+def cmd_freeze(args) -> int:
+    repo = _repo_arg(args.repo)
+    name = args.name or repo.name
+    facts_db = repo / ".vrp" / "facts.db"
+    facts_db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(facts_db)
+    try:
+        etl_mod.ensure_schema(con)
+    finally:
+        con.close()
+    summary = s4_freeze.freeze(
+        repo,
+        facts_db,
+        name,
+        timeout=args.timeout,
+        skip_commands=args.skip_commands,
+        skip_graph=args.skip_graph,
+    )
+    _print_step("S4 freeze", summary)
+    return 0
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -218,6 +240,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("claims", help="JSON file with a claims array")
     p.set_defaults(func=cmd_gate)
+
+    p = sub.add_parser("freeze", help="S4: run discovered commands -> runtime_evidence + CBM graph baseline")
+    p.add_argument("repo")
+    p.add_argument("--name", help="CBM project name override")
+    p.add_argument("--timeout", type=int, default=900, help="per-command timeout (s)")
+    p.add_argument("--skip-commands", action="store_true")
+    p.add_argument("--skip-graph", action="store_true", help="skip CBM persistence index + detect_changes")
+    p.set_defaults(func=cmd_freeze)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")
