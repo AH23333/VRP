@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
-from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_mutate, s2_p4, s3, s4_freeze, s5_dossier, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_mutate, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, xcheck
 
 
 def _repo_arg(value: str) -> Path:
@@ -191,6 +191,34 @@ def cmd_dossier(args) -> int:
     return 0
 
 
+def cmd_transact(args) -> int:
+    repo = _repo_arg(args.repo)
+    name = args.name or repo.name
+    facts_db = repo / ".vrp" / "facts.db"
+    if not facts_db.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_db}")
+    con, _ = _open_facts_rw(repo)
+    con.close()
+    if not s6_transact.git_clean(repo):
+        raise SystemExit(f"working tree not clean - commit or stash first: {repo}")
+    verdict = s6_transact.transact(
+        repo,
+        Path(args.transaction),
+        name,
+        confirm=args.confirm,
+        timeout=args.timeout,
+    )
+    summary = {
+        "tid": verdict["tid"],
+        "status": verdict["status"],
+        "failed_gate": verdict["failed_gate"],
+        "commit": verdict.get("commit"),
+        "confidence": verdict.get("confidence"),
+    }
+    _print_step(f"S6 transact {verdict['type']}", summary)
+    return 0 if verdict["status"] == "committed" else 1
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -291,6 +319,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip external tool calls (CBM get_architecture, code-atlas repo_map, repomix)",
     )
     p.set_defaults(func=cmd_dossier)
+
+    p = sub.add_parser(
+        "transact",
+        help="S6: execute refactor transaction (edits -> G1-G5 gates -> git commit or rollback)",
+    )
+    p.add_argument("repo")
+    p.add_argument("transaction", help="transaction JSON file path")
+    p.add_argument("--name", help="CBM project name override")
+    p.add_argument("--confirm", action="store_true", help="confirm a T4 transaction")
+    p.add_argument("--timeout", type=int, default=900, help="per-command timeout for gate commands")
+    p.set_defaults(func=cmd_transact)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")
