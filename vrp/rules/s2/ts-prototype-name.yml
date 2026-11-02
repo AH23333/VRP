@@ -1,0 +1,10 @@
+id: ts-prototype-name
+language: TypeScript
+severity: hint
+note: throwaway function name suggests prototype debris
+rule:
+  kind: function_declaration
+  has:
+    field: name
+    kind: identifier
+    regex: ^(temp|tmp|foo|bar|baz)

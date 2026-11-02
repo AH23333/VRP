@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
-from . import s0_precheck, s1_cbm, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, xcheck
 
 
 def _repo_arg(value: str) -> Path:
@@ -76,6 +76,20 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_s2(args) -> int:
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = sqlite3.connect(facts_path)
+    try:
+        result = s2_astgrep.scan(con, repo)
+    finally:
+        con.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -130,6 +144,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reindex", action="store_true", help="force CBM re-index")
     p.add_argument("--cbm-name", help="CBM project name override")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("s2", help="S2: ast-grep pathology scan -> findings")
+    p.add_argument("repo")
+    p.set_defaults(func=cmd_s2)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")

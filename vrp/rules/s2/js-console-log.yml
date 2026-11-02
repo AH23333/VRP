@@ -1,0 +1,6 @@
+id: js-console-log
+language: JavaScript
+severity: info
+note: debug print left in code
+rule:
+  pattern: console.log($$$ARGS)

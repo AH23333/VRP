@@ -1,0 +1,6 @@
+id: ts-console-log
+language: TypeScript
+severity: info
+note: debug print left in code
+rule:
+  pattern: console.log($$$ARGS)

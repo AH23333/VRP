@@ -16,7 +16,7 @@ vrp = "vrp.cli:main"
 include = ["vrp*"]
 
 [tool.setuptools.package-data]
-vrp = ["schema/*.sql"]
+vrp = ["schema/*.sql", "rules/s2/*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

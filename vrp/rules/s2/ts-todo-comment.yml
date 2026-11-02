@@ -1,0 +1,7 @@
+id: ts-todo-comment
+language: TypeScript
+severity: hint
+note: TODO/FIXME/HACK marker left in code
+rule:
+  kind: comment
+  regex: TODO|FIXME|HACK

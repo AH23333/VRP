@@ -1,0 +1,10 @@
+id: py-prototype-name
+language: Python
+severity: hint
+note: throwaway function name suggests prototype debris
+rule:
+  kind: function_definition
+  has:
+    field: name
+    kind: identifier
+    regex: ^(temp|tmp|foo|bar|baz)

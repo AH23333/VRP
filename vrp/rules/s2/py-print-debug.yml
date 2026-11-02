@@ -1,0 +1,6 @@
+id: py-print-debug
+language: Python
+severity: info
+note: print() debug output in code
+rule:
+  pattern: print($$$ARGS)

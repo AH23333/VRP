@@ -1,0 +1,6 @@
+id: ts-empty-catch
+language: TypeScript
+severity: warning
+note: errors swallowed by empty catch block
+rule:
+  pattern: try { $$$BODY } catch ($ERR) {}

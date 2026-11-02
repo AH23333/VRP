@@ -1,0 +1,9 @@
+id: py-bare-except
+language: Python
+severity: warning
+note: bare except swallows all errors
+rule:
+  kind: except_clause
+  not:
+    has:
+      kind: type

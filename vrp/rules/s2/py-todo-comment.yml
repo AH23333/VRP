@@ -1,0 +1,7 @@
+id: py-todo-comment
+language: Python
+severity: hint
+note: TODO/FIXME/HACK marker left in code
+rule:
+  kind: comment
+  regex: TODO|FIXME|HACK
