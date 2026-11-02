@@ -10,27 +10,43 @@ rule since the stdlib ships no YAML parser):
 Flow: clean-tree precheck -> register tx -> apply edits -> G1 rescan
 (CBM reindex + ETL to a side facts.db; same-name reindex prunes deleted
 symbols, verified empirically) -> G2 lint/typecheck -> G3 test -> G4
-declared_moves / dangling references -> G5 dead-code monotonic (T2/T4) ->
-first failure rolls the working tree back; all pass -> git commit + promote
-facts.db. T4 requires --confirm. Every run writes .vrp/verdicts/<tid>.json.
+declared_moves / usage-edge equivalence (T1) / dangling references (T2)
+cross-checked by code-atlas verify_changes (BROKEN findings fail) -> G5
+dead-code monotonic (T2/T4) -> first failure rolls the working tree back;
+all pass -> git commit + promote facts.db. T4 requires --confirm. Every run
+writes .vrp/verdicts/<tid>.json with stable rule codes (RULE_CODES) on every
+failing gate. transact_batch consumes a directory of transaction files in
+sorted order, stopping at the first non-committed verdict.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import shutil
 import sqlite3
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import s0_precheck, s1_cbm, s2_deadcode, s4_freeze, etl
+from .s5_cabrief import call_code_atlas
 
 TX_TYPES = ("T1", "T2", "T3", "T4")
 EDIT_OPS = ("create", "modify", "delete")
 USAGE_EDGE_TYPES = ("CALLS", "CALL_REFERENCE", "MENTIONS", "SPAWNS")
 TID_SAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+RULE_CODES = {
+    ("G0", "apply-edits"): "gate/G0/apply-edits",
+    ("G1", "parse-errors"): "gate/G1/parse-errors",
+    ("G2", "static-check"): "gate/G2/static-check",
+    ("G3", "test"): "gate/G3/test",
+    ("G4", "undeclared-change"): "gate/G4/undeclared-change",
+    ("G4", "dangling-reference"): "gate/G4/dangling-reference",
+    ("G4", "edge-mismatch"): "gate/G4/edge-mismatch",
+    ("G4", "verify-broken"): "gate/G4/verify-broken",
+    ("G5", "dead-code-increase"): "gate/G5/dead-code-increase",
+}
 
 
 def _utc_now() -> str:
@@ -157,12 +173,12 @@ def _qn_set(con: sqlite3.Connection) -> set[str]:
     return {qn for qn, in con.execute("SELECT qualified_name FROM symbols")}
 
 
-def _pre_edges(con: sqlite3.Connection) -> list[tuple[str, str]]:
+def _usage_edges(con: sqlite3.Connection) -> list[tuple[str, str, str]]:
     placeholders = ",".join("?" for _ in USAGE_EDGE_TYPES)
     return [
-        (src, dst)
-        for src, dst in con.execute(
-            "SELECT ss.qualified_name, sd.qualified_name FROM edges e"
+        (src, etype, dst)
+        for src, etype, dst in con.execute(
+            "SELECT ss.qualified_name, e.type, sd.qualified_name FROM edges e"
             " JOIN symbols ss ON ss.fid = e.src_fid JOIN symbols sd ON sd.fid = e.dst_fid"
             f" WHERE e.type IN ({placeholders})",
             USAGE_EDGE_TYPES,
@@ -179,7 +195,13 @@ def _parse_gaps(con: sqlite3.Connection, edited_files: set[str]) -> list[dict]:
     return rows
 
 
-def _gate_g4(tx: dict, pre_qns: set[str], post_qns: set[str], pre_edges: list[tuple[str, str]]) -> tuple[bool, dict]:
+def _gate_g4(
+    tx: dict,
+    pre_qns: set[str],
+    post_qns: set[str],
+    pre_edges: list[tuple[str, str, str]],
+    post_edges: list[tuple[str, str, str]],
+) -> tuple[bool, dict]:
     declared_from = {move["from"] for move in tx["declared_moves"]}
     declared_to = {move["to"] for move in tx["declared_moves"]}
     for move in tx["declared_moves"]:
@@ -204,12 +226,26 @@ def _gate_g4(tx: dict, pre_qns: set[str], post_qns: set[str], pre_edges: list[tu
                 "removed": sorted(removed),
                 "added": sorted(added),
             }
+        moved = {move["from"]: move["to"] for move in tx["declared_moves"]}
+        names = set(moved) | set(moved.values())
+        pre_incident = {(s, t, d) for s, t, d in pre_edges if s in moved or d in moved}
+        post_incident = {(s, t, d) for s, t, d in post_edges if s in names or d in names}
+        expected = {(moved.get(s, s), t, moved.get(d, d)) for s, t, d in pre_incident}
+        missing = expected - post_incident
+        unexpected = post_incident - expected
+        if missing or unexpected:
+            return False, {
+                "reason": "edge-mismatch",
+                "detail": "usage edges around declared moves not preserved",
+                "missing": sorted(f"{s} -{t}-> {d}" for s, t, d in missing)[:10],
+                "unexpected": sorted(f"{s} -{t}-> {d}" for s, t, d in unexpected)[:10],
+            }
         return True, {"removed": sorted(removed), "added": sorted(added), "declared": len(tx["declared_moves"])}
     if tx["type"] == "T2":
         dangling = sorted(
             {
                 f"{src} -> {dst}"
-                for src, dst in pre_edges
+                for src, _, dst in pre_edges
                 if dst in removed and dst not in declared_from and src in post_qns and src != dst
             }
         )
@@ -217,6 +253,32 @@ def _gate_g4(tx: dict, pre_qns: set[str], post_qns: set[str], pre_edges: list[tu
             return False, {"reason": "dangling-reference", "detail": "removed symbols still referenced by surviving code", "dangling": dangling[:20]}
         return True, {"removed": sorted(removed)[:50], "removed_count": len(removed), "dangling": []}
     return False, {"reason": "skipped"}
+
+
+def _verify_changes(repo: Path, timeout: int = 180) -> dict:
+    result = call_code_atlas(repo, "verify_changes", {"max_tokens": 20000}, timeout)
+    if result["status"] != "ok":
+        return {"status": result["status"], "reason": result.get("reason", "")[:300]}
+    broken = []
+    checks = []
+    for line in result["text"].splitlines():
+        stripped = line.strip()
+        if stripped.startswith("BROKEN "):
+            broken.append(stripped[len("BROKEN "):][:300])
+        elif stripped.startswith("CHECK "):
+            checks.append(stripped[len("CHECK "):][:300])
+    return {"status": "ok", "broken": broken, "checks": checks, "chars": result["chars"]}
+
+
+def _attach_codes(gates: list[dict]) -> list[dict]:
+    for gate in gates:
+        if gate.get("status") != "fail":
+            continue
+        detail = gate.get("detail") or {}
+        code = RULE_CODES.get((gate.get("gate"), detail.get("reason")))
+        if code:
+            detail["code"] = code
+    return gates
 
 
 def _record(con: sqlite3.Connection, tx: dict, status: str, gates: list[dict]) -> None:
@@ -250,7 +312,7 @@ def transact(
     con = sqlite3.connect(facts_db)
     try:
         pre_qns = _qn_set(con)
-        pre_edges = _pre_edges(con)
+        pre_edges = _usage_edges(con)
         pre_con = sqlite3.connect(f"file:{facts_db}?mode=ro", uri=True)
         try:
             pre_dead = len(s2_deadcode.dead_code_candidates(pre_con))
@@ -260,6 +322,7 @@ def transact(
         con.close()
 
     def finish(status: str, gates: list[dict], failed_gate: str | None, extra: dict) -> dict:
+        _attach_codes(gates)
         con = sqlite3.connect(facts_db)
         try:
             _record(con, tx, status, gates)
@@ -322,6 +385,7 @@ def transact(
     post = sqlite3.connect(f"file:{post_db}?mode=ro", uri=True)
     try:
         post_qns = _qn_set(post)
+        post_edges = _usage_edges(post)
         parse_gaps = _parse_gaps(post, edited_files)
     finally:
         post.close()
@@ -361,7 +425,16 @@ def transact(
             gates.append({"gate": "G3", "status": "skipped", "detail": {"reason": "no test commands discovered"}})
 
     if failed is None and tx["type"] in ("T1", "T2"):
-        ok, detail = _gate_g4(tx, pre_qns, post_qns, pre_edges)
+        ok, detail = _gate_g4(tx, pre_qns, post_qns, pre_edges, post_edges)
+        if ok:
+            verify = _verify_changes(repo)
+            if verify["status"] == "ok":
+                detail["verify_changes"] = {"broken": len(verify["broken"]), "checks": len(verify["checks"])}
+                if verify["broken"]:
+                    ok = False
+                    detail = {"reason": "verify-broken", "broken": verify["broken"][:20], "checks": verify["checks"][:20]}
+            else:
+                detail["verify_changes"] = verify
         gates.append({"gate": "G4", "status": "pass" if ok else "fail", "detail": detail})
         if not ok:
             failed = failed or "G4"
@@ -386,6 +459,7 @@ def transact(
         return finish("rolled_back", gates, failed, {"rollback": rollback, "confidence": confidence})
 
     post_db.unlink(missing_ok=True)
+    _attach_codes(gates)
     con = sqlite3.connect(facts_db)
     try:
         _record(con, tx, "committed", gates)
@@ -406,3 +480,30 @@ def transact(
     verdict["commit"] = git_commit_all(repo, f"vrp {tx['id']}: {tx['summary']} [{tx['type']}]")
     verdict_path.write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
     return verdict
+
+
+def transact_batch(
+    repo: Path,
+    tx_dir: Path,
+    name: str,
+    confirm: bool = False,
+    timeout: int = 900,
+    continue_on_fail: bool = False,
+) -> dict:
+    paths = sorted(Path(tx_dir).glob("*.json"))
+    verdicts = []
+    stopped_at = None
+    for path in paths:
+        verdict = transact(repo, path, name, confirm=confirm, timeout=timeout)
+        verdicts.append(verdict)
+        if verdict["status"] != "committed" and not continue_on_fail:
+            stopped_at = path.name
+            break
+    return {
+        "total": len(paths),
+        "count": len(verdicts),
+        "committed": sum(1 for v in verdicts if v["status"] == "committed"),
+        "statuses": [v["status"] for v in verdicts],
+        "stopped_at": stopped_at,
+        "verdicts": verdicts,
+    }

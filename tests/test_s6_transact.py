@@ -51,7 +51,7 @@ def _write_tx(tmp_path: Path, tx: dict) -> Path:
     return path
 
 
-def _patch_pipeline(monkeypatch, post_symbols, facts_symbols_after=None):
+def _patch_pipeline(monkeypatch, post_symbols, facts_symbols_after=None, post_edges=()):
     calls = {"index": 0, "etl": []}
 
     def fake_index(repo, name, reindex=False, timeout=3600):
@@ -72,13 +72,23 @@ def _patch_pipeline(monkeypatch, post_symbols, facts_symbols_after=None):
                 " VALUES (?,?,?,?,?,?,?)",
                 (fid, "p", qn, "Function", qn.split(".")[-1], "a.py", "h-" + fid),
             )
+        if out.name.startswith("facts.db.post-"):
+            for src, dst in post_edges:
+                con.execute(
+                    "INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES (?,?,'CALLS','E2')",
+                    (src, dst),
+                )
         con.commit()
         con.close()
         return {}
 
+    def fake_call_code_atlas(repo, tool, arguments, timeout=120):
+        return {"status": "skipped", "reason": "mocked in tests"}
+
     monkeypatch.setattr(s6_transact.s1_cbm, "index_repository", fake_index)
     monkeypatch.setattr(s6_transact.etl, "run_etl", fake_etl)
     monkeypatch.setattr(s6_transact.s0_precheck, "discover_commands", lambda repo: {})
+    monkeypatch.setattr(s6_transact, "call_code_atlas", fake_call_code_atlas)
     return calls
 
 
@@ -218,6 +228,7 @@ def test_transact_t2_dangling_rolled_back(tmp_path, monkeypatch):
     assert verdict["failed_gate"] == "G4"
     g4 = next(g for g in verdict["gates"] if g["gate"] == "G4")
     assert g4["detail"]["reason"] == "dangling-reference"
+    assert g4["detail"]["code"] == "gate/G4/dangling-reference"
     assert s6_transact.git_clean(repo)
 
 
@@ -289,3 +300,247 @@ def test_transact_dirty_tree_refused_by_cli(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / "a.py").write_text("dirty = True\n", encoding="utf-8")
     assert not s6_transact.git_clean(repo)
+
+
+def test_transact_t1_edge_mismatch_rolled_back(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(
+        repo,
+        [("f1", "p.a.old", "old", "a.py"), ("f2", "p.a.caller", "caller", "b.py")],
+        edges=[("f2", "f1")],
+    )
+    _patch_pipeline(monkeypatch, [("f2", "p.a.caller"), ("f3", "p.a.new")], post_edges=[])
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-edge",
+            "type": "T1",
+            "summary": "rename forgot caller",
+            "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+            "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+        },
+    )
+    verdict = s6_transact.transact(repo, tx, "proj")
+    assert verdict["status"] == "rolled_back"
+    assert verdict["failed_gate"] == "G4"
+    g4 = next(g for g in verdict["gates"] if g["gate"] == "G4")
+    assert g4["detail"]["reason"] == "edge-mismatch"
+    assert g4["detail"]["code"] == "gate/G4/edge-mismatch"
+    assert g4["detail"]["missing"] == ["p.a.caller -CALLS-> p.a.new"]
+    assert s6_transact.git_clean(repo)
+
+
+def test_transact_t1_edge_carried_committed(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(
+        repo,
+        [("f1", "p.a.old", "old", "a.py"), ("f2", "p.a.caller", "caller", "b.py")],
+        edges=[("f2", "f1")],
+    )
+    _patch_pipeline(
+        monkeypatch,
+        [("f2", "p.a.caller"), ("f3", "p.a.new")],
+        post_edges=[("f2", "f3")],
+    )
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-edge2",
+            "type": "T1",
+            "summary": "rename with caller updated",
+            "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+            "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+        },
+    )
+    verdict = s6_transact.transact(repo, tx, "proj")
+    assert verdict["status"] == "committed"
+    g4 = next(g for g in verdict["gates"] if g["gate"] == "G4")
+    assert g4["detail"]["verify_changes"]["status"] == "skipped"
+
+
+def test_transact_t2_verify_broken_rolled_back(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(
+        repo,
+        [("f1", "p.a.helper", "helper", "a.py"), ("f2", "p.a.user", "user", "a.py")],
+        edges=[("f1", "f2")],
+    )
+    _patch_pipeline(monkeypatch, [("f2", "p.a.user")])
+    monkeypatch.setattr(
+        s6_transact,
+        "call_code_atlas",
+        lambda repo, tool, arguments, timeout=120: {
+            "status": "ok",
+            "text": (
+                "verified 1 changed file(s) against HEAD: 1 broken, 0 to check, 0 informational\n\n"
+                "BROKEN a.py: exported function helper was removed and is still referenced — b.py:3 (call)"
+            ),
+            "chars": 140,
+        },
+    )
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-vb",
+            "type": "T2",
+            "summary": "remove helper",
+            "edits": [{"file": "a.py", "op": "modify", "content": "def user():\n    return 2\n"}],
+        },
+    )
+    verdict = s6_transact.transact(repo, tx, "proj")
+    assert verdict["status"] == "rolled_back"
+    assert verdict["failed_gate"] == "G4"
+    g4 = next(g for g in verdict["gates"] if g["gate"] == "G4")
+    assert g4["detail"]["reason"] == "verify-broken"
+    assert g4["detail"]["code"] == "gate/G4/verify-broken"
+    assert any("helper" in b for b in g4["detail"]["broken"])
+    assert s6_transact.git_clean(repo)
+
+
+def test_transact_t2_verify_ok_committed(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(
+        repo,
+        [("f1", "p.a.helper", "helper", "a.py"), ("f2", "p.a.user", "user", "a.py")],
+        edges=[("f1", "f2")],
+    )
+    _patch_pipeline(monkeypatch, [("f2", "p.a.user")])
+    monkeypatch.setattr(
+        s6_transact,
+        "call_code_atlas",
+        lambda repo, tool, arguments, timeout=120: {
+            "status": "ok",
+            "text": "verified 1 changed file(s) against HEAD: 0 broken, 0 to check, 1 informational\n\nINFO a.py: exported function helper removed — no remaining references in the index",
+            "chars": 130,
+        },
+    )
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-vo",
+            "type": "T2",
+            "summary": "remove dead helper",
+            "edits": [{"file": "a.py", "op": "modify", "content": "def user():\n    return 2\n"}],
+        },
+    )
+    verdict = s6_transact.transact(repo, tx, "proj")
+    assert verdict["status"] == "committed"
+    g4 = next(g for g in verdict["gates"] if g["gate"] == "G4")
+    assert g4["detail"]["verify_changes"] == {"broken": 0, "checks": 0}
+
+
+def test_transact_batch_all_committed(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    _patch_pipeline(monkeypatch, [("f2", "p.a.new")])
+    tx_dir = tmp_path / "txs"
+    tx_dir.mkdir()
+    (tx_dir / "01-rename.json").write_text(
+        json.dumps(
+            {
+                "id": "tx-b1",
+                "type": "T1",
+                "summary": "rename",
+                "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+                "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tx_dir / "02-touch.json").write_text(
+        json.dumps(
+            {
+                "id": "tx-b2",
+                "type": "T3",
+                "summary": "touch",
+                "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 2\n"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = s6_transact.transact_batch(repo, tx_dir, "proj")
+    assert result["total"] == 2
+    assert result["count"] == 2
+    assert result["committed"] == 2
+    assert result["statuses"] == ["committed", "committed"]
+    assert result["stopped_at"] is None
+    assert s6_transact.git_clean(repo)
+    log = subprocess.run(["git", "log", "--format=%s"], cwd=repo, capture_output=True, text=True)
+    assert "vrp tx-b2: touch [T3]" in log.stdout
+    assert "vrp tx-b1: rename [T1]" in log.stdout
+
+
+def test_transact_batch_stops_on_failure(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    _patch_pipeline(monkeypatch, [("f2", "p.a.new"), ("f3", "p.a.sneaky")])
+    tx_dir = tmp_path / "txs"
+    tx_dir.mkdir()
+    (tx_dir / "01-bad.json").write_text(
+        json.dumps(
+            {
+                "id": "tx-c1",
+                "type": "T1",
+                "summary": "undeclared extra",
+                "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+                "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tx_dir / "02-good.json").write_text(
+        json.dumps(
+            {
+                "id": "tx-c2",
+                "type": "T3",
+                "summary": "touch",
+                "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 2\n"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = s6_transact.transact_batch(repo, tx_dir, "proj")
+    assert result["count"] == 1
+    assert result["statuses"] == ["rolled_back"]
+    assert result["stopped_at"] == "01-bad.json"
+    assert s6_transact.git_clean(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    assert con.execute("SELECT COUNT(*) FROM transactions WHERE tid = 'tx-c2'").fetchone()[0] == 0
+    con.close()
+
+
+def test_transact_batch_continue_on_fail(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    _patch_pipeline(monkeypatch, [("f2", "p.a.new"), ("f3", "p.a.sneaky")])
+    tx_dir = tmp_path / "txs"
+    tx_dir.mkdir()
+    (tx_dir / "01-bad.json").write_text(
+        json.dumps(
+            {
+                "id": "tx-d1",
+                "type": "T1",
+                "summary": "undeclared extra",
+                "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+                "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tx_dir / "02-good.json").write_text(
+        json.dumps(
+            {
+                "id": "tx-d2",
+                "type": "T3",
+                "summary": "touch",
+                "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 2\n"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = s6_transact.transact_batch(repo, tx_dir, "proj", continue_on_fail=True)
+    assert result["count"] == 2
+    assert result["statuses"] == ["rolled_back", "committed"]
+    assert result["stopped_at"] is None
+    assert result["committed"] == 1
+    assert s6_transact.git_clean(repo)

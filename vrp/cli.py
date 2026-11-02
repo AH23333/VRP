@@ -219,6 +219,33 @@ def cmd_transact(args) -> int:
     return 0 if verdict["status"] == "committed" else 1
 
 
+def cmd_transact_batch(args) -> int:
+    repo = _repo_arg(args.repo)
+    name = args.name or repo.name
+    facts_db = repo / ".vrp" / "facts.db"
+    if not facts_db.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_db}")
+    con, _ = _open_facts_rw(repo)
+    con.close()
+    if not s6_transact.git_clean(repo):
+        raise SystemExit(f"working tree not clean - commit or stash first: {repo}")
+    tx_dir = Path(args.tx_dir)
+    if not tx_dir.is_dir():
+        raise SystemExit(f"transaction directory not found: {tx_dir}")
+    result = s6_transact.transact_batch(
+        repo,
+        tx_dir,
+        name,
+        confirm=args.confirm,
+        timeout=args.timeout,
+        continue_on_fail=args.continue_on_fail,
+    )
+    summary = {k: result[k] for k in ("total", "count", "committed", "statuses", "stopped_at")}
+    _print_step("S6 transact-batch", summary)
+    all_committed = result["count"] == result["total"] and result["committed"] == result["count"] and result["total"] > 0
+    return 0 if all_committed else 1
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -330,6 +357,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--confirm", action="store_true", help="confirm a T4 transaction")
     p.add_argument("--timeout", type=int, default=900, help="per-command timeout for gate commands")
     p.set_defaults(func=cmd_transact)
+
+    p = sub.add_parser(
+        "transact-batch",
+        help="S6: run every transaction JSON in a directory in sorted order (stop at first non-committed)",
+    )
+    p.add_argument("repo")
+    p.add_argument("tx_dir", help="directory containing transaction JSON files (*.json)")
+    p.add_argument("--name", help="CBM project name override")
+    p.add_argument("--confirm", action="store_true", help="confirm T4 transactions")
+    p.add_argument("--timeout", type=int, default=900, help="per-command timeout for gate commands")
+    p.add_argument("--continue-on-fail", action="store_true", help="keep running after a non-committed transaction")
+    p.set_defaults(func=cmd_transact_batch)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")
