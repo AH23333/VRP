@@ -240,4 +240,10 @@ FROM edges e
 JOIN symbols sf ON sf.fid = e.src_fid
 JOIN symbols st ON st.fid = e.dst_fid
 WHERE sf.file_path != st.file_path
+  AND sf.file_path != ''
+  AND st.file_path != ''
+  AND sf.file_path NOT GLOB '<*'
+  AND sf.file_path NOT GLOB '>*'
+  AND st.file_path NOT GLOB '<*'
+  AND st.file_path NOT GLOB '>*'
 GROUP BY sf.file_path, st.file_path;
