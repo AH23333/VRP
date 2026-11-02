@@ -20,3 +20,7 @@ vrp = ["schema/*.sql", "rules/s2/*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not deep'"
+markers = [
+    "deep: 深度全量测试（真实工具集成/大仓/fuzz，仅阶段性完工时跑；平时开发被 addopts 默认排除）",
+]

@@ -116,6 +116,7 @@ def test_load_transaction_valid(tmp_path):
         {"id": "t", "type": "T9", "edits": [{"file": "a", "op": "delete"}]},
         {"id": "t", "type": "T1", "edits": []},
         {"id": "t", "type": "T1", "edits": [{"file": "C:/abs.py", "op": "delete"}]},
+        {"id": "t", "type": "T1", "edits": [{"file": "/posix-abs.py", "op": "delete"}]},
         {"id": "t", "type": "T1", "edits": [{"file": "../up.py", "op": "delete"}]},
         {"id": "t", "type": "T1", "edits": [{"file": "a.py", "op": "create"}]},
         {"id": "t", "type": "T1", "edits": [{"file": "a.py", "op": "destroy", "content": "x"}]},

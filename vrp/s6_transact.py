@@ -56,7 +56,10 @@ def _utc_now() -> str:
 def _norm_rel(file_value) -> Path:
     if not isinstance(file_value, str) or not file_value.strip():
         raise ValueError("edit.file must be a non-empty string")
-    path = Path(file_value.replace("\\", "/"))
+    normalized = file_value.replace("\\", "/")
+    if normalized.startswith("/"):
+        raise ValueError(f"edit.file must be repo-relative: {file_value}")
+    path = Path(normalized)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"edit.file must be repo-relative: {file_value}")
     return path

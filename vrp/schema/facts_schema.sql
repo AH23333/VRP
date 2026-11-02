@@ -181,14 +181,47 @@ GROUP BY a.src_fid, a.dst_fid;
 
 DROP VIEW IF EXISTS v_dead_code;
 CREATE VIEW v_dead_code AS
-SELECT s.fid, s.qualified_name, s.label, s.file_path, s.name, s.start_line, s.end_line
-FROM symbols s
-WHERE s.label IN ('Function', 'Method')
-  AND s.file_path != ''
-  AND s.name NOT IN ('main', 'run', 'app', 'index', 'setup', 'teardown', 'handler', 'cli')
-  AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = s.fid AND e.type IN ('CALLS', 'CALL_REFERENCE', 'MENTIONS', 'SPAWNS'))
-  AND NOT EXISTS (SELECT 1 FROM usage_hints u WHERE u.dst_fid = s.fid)
-  AND NOT EXISTS (SELECT 1 FROM test_linkage t WHERE t.target_fid = s.fid);
+WITH cand AS (
+  SELECT s.*, replace(s.file_path, '\', '/') AS norm
+  FROM symbols s
+  WHERE s.label IN ('Function', 'Method')
+    AND s.file_path != ''
+    AND s.name != ''
+    AND s.file_path NOT LIKE '<%'
+    AND s.file_path NOT LIKE '>%'
+)
+SELECT c.fid, c.qualified_name, c.label, c.file_path, c.name, c.start_line, c.end_line
+FROM cand c
+WHERE c.name NOT IN ('main', 'run', 'app', 'index', 'setup', 'teardown', 'handler', 'cli')
+  AND LOWER(c.name) != 'test'
+  AND c.name NOT LIKE 'test\_%' ESCAPE '\'
+  AND c.name NOT LIKE '%\_test' ESCAPE '\'
+  AND c.name NOT LIKE '\_\_%\_\_' ESCAPE '\'
+  AND NOT (c.norm LIKE 'test\_%' ESCAPE '\' OR c.norm LIKE '%/test\_%' ESCAPE '\')
+  AND c.norm NOT LIKE '%\_test.go' ESCAPE '\'
+  AND c.norm NOT LIKE '%\_test.py' ESCAPE '\'
+  AND c.norm NOT LIKE '%\_test.rs' ESCAPE '\'
+  AND c.norm NOT LIKE '%\_test.cpp' ESCAPE '\'
+  AND c.norm NOT LIKE '%\_test.lua' ESCAPE '\'
+  AND c.norm NOT LIKE '%Test.java'
+  AND c.norm NOT LIKE '%Test.kt'
+  AND c.norm NOT LIKE '%Test.cs'
+  AND c.norm NOT LIKE '%Test.php'
+  AND c.norm NOT LIKE '%Spec.scala'
+  AND c.norm NOT LIKE '%\_spec.rb' ESCAPE '\'
+  AND c.norm NOT LIKE '%.test.ts%'
+  AND c.norm NOT LIKE '%.spec.ts%'
+  AND c.norm NOT LIKE '%.test.js%'
+  AND c.norm NOT LIKE '%.spec.js%'
+  AND c.norm NOT LIKE '%.test.tsx%'
+  AND c.norm NOT LIKE '%.spec.tsx%'
+  AND c.norm NOT LIKE '%__tests__/%'
+  AND c.norm NOT LIKE '%tests/%'
+  AND c.norm NOT LIKE '%test/%'
+  AND c.norm NOT LIKE '%spec/%'
+  AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = c.fid AND e.type IN ('CALLS', 'CALL_REFERENCE', 'MENTIONS', 'SPAWNS'))
+  AND NOT EXISTS (SELECT 1 FROM usage_hints u WHERE u.dst_fid = c.fid)
+  AND NOT EXISTS (SELECT 1 FROM test_linkage t WHERE t.target_fid = c.fid);
 
 DROP VIEW IF EXISTS v_dup_clusters;
 CREATE VIEW v_dup_clusters AS
