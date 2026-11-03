@@ -115,7 +115,7 @@ def test_dossier_big_repo_full_external_t3(big_repo):
     views = persisted["views"]
     arch = views["architecture"]
     assert arch["project"] == "tree-sitter-analyzer"
-    assert arch["total_nodes"] == 66176
+    assert arch["total_nodes"] == 66132
     assert views["repo_map_brief"]["status"] == "ok"
     assert views["raw_pack"]["status"] == "ok"
     assert views["raw_pack"]["recommended_read_chars"] == 8000

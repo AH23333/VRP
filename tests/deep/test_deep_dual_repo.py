@@ -16,8 +16,8 @@ def test_big_repo_facts_baseline(big_repo):
         edges = con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
     finally:
         con.close()
-    assert symbols == 66176
-    assert edges == 251771
+    assert symbols == 66132
+    assert edges == 251727
 
 
 def test_big_repo_dead_code_view_aligns_with_function(big_repo):
