@@ -32,6 +32,10 @@ def _basename(path: str) -> str:
     return path[slash + 1 :] if slash >= 0 else path
 
 
+# Decision (2026-11-03): substring matching below is the agreed test-path
+# criterion and is kept as-is. Coexisting with the GLOB patterns in
+# facts_schema (v_dead_code) is a known trade-off - do not change either
+# side unilaterally.
 def is_test_path(path: str) -> bool:
     if not path:
         return False
