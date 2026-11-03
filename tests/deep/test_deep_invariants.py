@@ -103,24 +103,10 @@ def test_dossier_schema_stable(inv_repo):
     payload = json.loads(out.split("== S5 dossier ==")[1].strip())
     assert payload["task"] == "T2"
     doc = json.loads((inv_repo / ".vrp" / "dossier.json").read_text(encoding="utf-8"))
-    assert set(doc["views"].keys()) == {
-        "architecture",
-        "repo_map_brief",
-        "repomap",
-        "sql_views",
-        "summary",
-        "raw_pack",
-    }
+    assert set(doc["views"].keys()) == set(s5_dossier.SECTION_ORDER)
     shares = s5_dossier.TASK_PROFILES["T2"]
     assert abs(sum(shares.values()) - 1.0) < 1e-9
-    assert set(shares.keys()) == {
-        "architecture",
-        "repo_map_brief",
-        "repomap",
-        "sql_views",
-        "summary",
-        "raw_pack",
-    }
+    assert set(shares.keys()) == set(s5_dossier.SECTION_ORDER)
 
 
 @pytest.mark.parametrize("task", ["T1", "T2", "T3", "T4"])

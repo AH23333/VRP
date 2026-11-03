@@ -1,9 +1,10 @@
 """S5 dossier: view assembly + budget allocation (v6 s7).
 
-Six sections assembled under a task-typed budget profile (T1 equivalent
+Seven sections assembled under a task-typed budget profile (T1 equivalent
 refactor / T2 cleanup / T3 fix-up / T4 improvement, v2 gate-matrix taxonomy):
 architecture (CBM get_architecture), repo_map_brief (code-atlas MCP),
 repomap (aider-algorithm port on facts.db), sql_views (five facts.db views),
+evidence (discrepancy_ledger + runtime_evidence, the AI consumption surface),
 summary (findings/annotations/counts), raw_pack (repomix artifact pointer).
 """
 
@@ -24,39 +25,54 @@ DUP_MEMBERS_CHARS = 300
 DEFAULT_TASK = "T4"
 TASK_PROFILES: dict[str, dict[str, float]] = {
     "T1": {
-        "repomap": 0.30,
+        "repomap": 0.25,
         "sql_views": 0.25,
         "architecture": 0.15,
         "repo_map_brief": 0.10,
-        "raw_pack": 0.05,
+        "evidence": 0.05,
         "summary": 0.15,
+        "raw_pack": 0.05,
     },
     "T2": {
-        "sql_views": 0.40,
+        "sql_views": 0.35,
         "repomap": 0.20,
         "summary": 0.15,
         "architecture": 0.10,
         "repo_map_brief": 0.10,
+        "evidence": 0.05,
         "raw_pack": 0.05,
     },
     "T3": {
-        "raw_pack": 0.30,
+        "raw_pack": 0.25,
         "sql_views": 0.20,
         "summary": 0.20,
         "repomap": 0.15,
         "architecture": 0.10,
+        "evidence": 0.05,
         "repo_map_brief": 0.05,
     },
     "T4": {
-        "architecture": 0.25,
+        "architecture": 0.20,
         "sql_views": 0.20,
         "repomap": 0.20,
         "repo_map_brief": 0.15,
         "summary": 0.10,
+        "evidence": 0.05,
         "raw_pack": 0.10,
     },
 }
-SECTION_ORDER = ("architecture", "repo_map_brief", "repomap", "sql_views", "summary", "raw_pack")
+SECTION_ORDER = (
+    "architecture",
+    "repo_map_brief",
+    "repomap",
+    "sql_views",
+    "evidence",
+    "summary",
+    "raw_pack",
+)
+DISCREPANCY_PER_CATEGORY_CAP = 10
+DISCREPANCY_TOTAL_CAP = 40
+RUNTIME_SAMPLE_CAP = 20
 
 
 def _utc_now() -> str:
@@ -178,6 +194,43 @@ def get_architecture(name: str, timeout: int = 300) -> dict:
     )
 
 
+def _discrepancy_summary(con: sqlite3.Connection) -> dict:
+    by_category = {
+        category: count
+        for category, count in con.execute(
+            "SELECT category, COUNT(*) FROM discrepancy_ledger GROUP BY category ORDER BY 2 DESC, 1"
+        )
+    }
+    samples: list[dict] = []
+    for category in by_category:
+        rows = _rows(
+            con,
+            "SELECT category, src_key, dst_key, cbm_edge_type, ca_confidence, ca_provenance"
+            " FROM discrepancy_ledger WHERE category = ? ORDER BY id",
+            DISCREPANCY_PER_CATEGORY_CAP,
+            (category,),
+        )
+        samples.extend(rows)
+        if len(samples) >= DISCREPANCY_TOTAL_CAP:
+            break
+    return {
+        "total": sum(by_category.values()),
+        "by_category": by_category,
+        "samples": samples[:DISCREPANCY_TOTAL_CAP],
+    }
+
+
+def _runtime_evidence_summary(con: sqlite3.Connection) -> dict:
+    total = con.execute("SELECT COUNT(*) FROM runtime_evidence").fetchone()[0]
+    samples = _rows(
+        con,
+        "SELECT caller_key, callee_key, payload_json, created_at FROM runtime_evidence"
+        " ORDER BY id DESC",
+        RUNTIME_SAMPLE_CAP,
+    )
+    return {"total": total, "samples": samples}
+
+
 def _findings_summary(con: sqlite3.Connection) -> dict:
     by_source = {source: count for source, count in con.execute("SELECT source, COUNT(*) FROM findings GROUP BY source")}
     by_pathology = {
@@ -243,6 +296,10 @@ def build_dossier(
                 for table in ("symbols", "edges", "test_linkage")
             },
         }
+        evidence_payload = {
+            "discrepancies": _discrepancy_summary(con),
+            "runtime": _runtime_evidence_summary(con),
+        }
         repomap_payload = s5_repomap.render_repomap(con, char_budget=caps["repomap"])
     finally:
         con.close()
@@ -272,6 +329,7 @@ def build_dossier(
         "repo_map_brief": brief_payload,
         "repomap": repomap_payload,
         "sql_views": _fit(views_payload, caps["sql_views"]),
+        "evidence": _fit(evidence_payload, caps["evidence"]),
         "summary": _fit(summary_payload, caps["summary"]),
         "raw_pack": raw_payload,
     }

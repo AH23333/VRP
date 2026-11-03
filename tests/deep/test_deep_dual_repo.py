@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from vrp import s2_deadcode
+from vrp import s2_deadcode, s5_dossier
 from tests.deep.conftest import ROOT, run_vrp
 
 pytestmark = pytest.mark.deep
@@ -51,14 +51,7 @@ def test_big_repo_validate_baseline(big_repo):
 def test_big_repo_dossier_t2_skip_external(big_repo):
     run_vrp(["dossier", str(big_repo), "--task", "T2", "--skip-external"], cwd=ROOT, timeout=1800)
     doc = json.loads((big_repo / ".vrp" / "dossier.json").read_text(encoding="utf-8"))
-    assert set(doc["views"].keys()) == {
-        "architecture",
-        "repo_map_brief",
-        "repomap",
-        "sql_views",
-        "summary",
-        "raw_pack",
-    }
+    assert set(doc["views"].keys()) == set(s5_dossier.SECTION_ORDER)
     sql_views = doc["views"]["sql_views"]
     assert len(json.dumps(sql_views, ensure_ascii=False)) > 5000
 

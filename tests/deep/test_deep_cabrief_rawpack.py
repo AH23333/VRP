@@ -118,7 +118,7 @@ def test_dossier_big_repo_full_external_t3(big_repo):
     assert arch["total_nodes"] == 66176
     assert views["repo_map_brief"]["status"] == "ok"
     assert views["raw_pack"]["status"] == "ok"
-    assert views["raw_pack"]["recommended_read_chars"] == 9600
+    assert views["raw_pack"]["recommended_read_chars"] == 8000
     assert views["raw_pack"]["bytes"] == (big_repo / ".vrp" / "repomix-output.xml").stat().st_size
     assert views["repomap"]["files_included"] >= 1
     assert set(views["sql_views"]) == {

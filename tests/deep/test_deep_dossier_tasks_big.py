@@ -7,7 +7,7 @@ from tests.deep.conftest import ROOT, run_vrp
 
 pytestmark = pytest.mark.deep
 
-SECTION_KEYS = {"architecture", "repo_map_brief", "repomap", "sql_views", "summary", "raw_pack"}
+SECTION_KEYS = {"architecture", "repo_map_brief", "repomap", "sql_views", "evidence", "summary", "raw_pack"}
 VIEW_KEYS = {"hotspots", "mutual_cycles", "strongly_connected", "dead_code", "dup_clusters", "coupling"}
 SKIPPED_SECTIONS = ("architecture", "repo_map_brief", "raw_pack")
 

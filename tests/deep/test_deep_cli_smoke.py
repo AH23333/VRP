@@ -3,6 +3,7 @@ import sqlite3
 
 import pytest
 
+from vrp import s5_dossier
 from tests.deep.conftest import CBM_CACHE, ROOT, git, run_vrp
 
 pytestmark = pytest.mark.deep
@@ -128,14 +129,7 @@ def test_cmd_dossier_skip_external(smoke_repo):
     run_vrp(["dossier", str(smoke_repo), "--task", "T4", "--skip-external"], cwd=ROOT)
     doc = json.loads((smoke_repo / ".vrp" / "dossier.json").read_text(encoding="utf-8"))
     assert doc["task"] == "T4"
-    assert set(doc["views"].keys()) == {
-        "architecture",
-        "repo_map_brief",
-        "repomap",
-        "sql_views",
-        "summary",
-        "raw_pack",
-    }
+    assert set(doc["views"].keys()) == set(s5_dossier.SECTION_ORDER)
 
 
 def test_cmd_transact_preserved_across_etl(smoke_repo):

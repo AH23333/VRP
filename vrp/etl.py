@@ -78,7 +78,14 @@ def _copy_table_simple(dst: sqlite3.Connection, rows, table: str, columns: int):
     dst.executemany(f"INSERT OR REPLACE INTO {table} VALUES ({placeholders})", rows)
 
 
-OWNED_TABLES = ("annotations", "transactions", "gate_results", "dossier_views", "baseline")
+OWNED_TABLES = (
+    "annotations",
+    "transactions",
+    "gate_results",
+    "dossier_views",
+    "baseline",
+    "runtime_evidence",
+)
 
 
 def ensure_schema(con: sqlite3.Connection) -> None:

@@ -21,6 +21,10 @@ def _build_db(path: Path):
         "INSERT INTO findings (pathology, kind, source, payload_json) VALUES ('P2','similar_to','etl','{}')"
     )
     con.execute("INSERT INTO gate_results (gate, status, detail_json) VALUES ('G1','pass','{}')")
+    con.execute(
+        "INSERT INTO runtime_evidence (caller_key, callee_key, payload_json)"
+        " VALUES (NULL, 'test', '{\"exit_code\": 0}')"
+    )
     con.commit()
     con.close()
 
@@ -31,6 +35,8 @@ def test_snapshot_and_restore_roundtrip(tmp_path):
     snap = snapshot_owned(db)
     assert len(snap["annotations"]) == 1
     assert len(snap["gate_results"]) == 1
+    assert len(snap["runtime_evidence"]) == 1
+    assert snap["runtime_evidence"][0][2] == "test"
     assert len(snap["findings_kept"]) == 1
     assert snap["findings_kept"][0][3] == "s2-astgrep"
 
@@ -45,6 +51,8 @@ def test_snapshot_and_restore_roundtrip(tmp_path):
     assert srcs == ["s2-astgrep"]
     gates = fresh.execute("SELECT gate, status FROM gate_results").fetchall()
     assert gates == [("G1", "pass")]
+    ev = fresh.execute("SELECT callee_key, payload_json FROM runtime_evidence").fetchall()
+    assert ev == [("test", '{"exit_code": 0}')]
     fresh.close()
 
 
@@ -63,4 +71,11 @@ def test_snapshot_tolerates_old_schema(tmp_path):
 
 
 def test_owned_tables_constant():
-    assert set(etl.OWNED_TABLES) == {"annotations", "transactions", "gate_results", "dossier_views", "baseline"}
+    assert set(etl.OWNED_TABLES) == {
+        "annotations",
+        "transactions",
+        "gate_results",
+        "dossier_views",
+        "baseline",
+        "runtime_evidence",
+    }
