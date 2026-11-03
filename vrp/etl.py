@@ -185,9 +185,9 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
 
         stats: dict[str, int] = {}
         try:
-            fid_by_id, file_by_id = _etl_symbols(dst, src, hasher, cbm_name, repo)
+            fid_by_id, file_by_id, replaced = _etl_symbols(dst, src, hasher, cbm_name, repo)
             stats["symbols"] = len(fid_by_id)
-            stats.update(_etl_edges(dst, src, cbm_name, fid_by_id, file_by_id))
+            stats.update(_etl_edges(dst, src, cbm_name, fid_by_id, file_by_id, replaced))
             stats.update(_etl_coverage(dst, src, cbm_name))
             _write_meta(dst, cbm_name, store_meta, repo, stats)
             dst.commit()
@@ -213,6 +213,11 @@ def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _Cont
     symbol_rows = []
     fid_by_id: dict[int, str] = {}
     file_by_id: dict[int, str] = {}
+    # M1: rows sharing (project, qualified_name) collide with the symbols
+    # UNIQUE constraint; INSERT OR REPLACE drops the earlier fid's row, so
+    # track those replaced fids to cascade-delete their edges below.
+    replaced: set[str] = set()
+    surviving: dict[tuple[str, str], str] = {}
     for r in rows:
         node_id, label, name, qn, file_path, start_line, end_line, props = r
         rel = _norm(file_path)
@@ -220,6 +225,11 @@ def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _Cont
         fid = cast_fid(project, qn or name, content_hash)
         fid_by_id[node_id] = fid
         file_by_id[node_id] = rel
+        key = (project, qn or name)
+        prev = surviving.get(key)
+        if prev is not None and prev != fid:
+            replaced.add(prev)
+        surviving[key] = fid
         symbol_rows.append(
             (
                 fid,
@@ -239,10 +249,17 @@ def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _Cont
         " start_line, end_line, content_hash, properties_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
         symbol_rows,
     )
-    return fid_by_id, file_by_id
+    return fid_by_id, file_by_id, replaced
 
 
-def _etl_edges(dst: sqlite3.Connection, src: sqlite3.Connection, project: str, fid_by_id: dict[int, str], file_by_id: dict[int, str]) -> dict:
+def _etl_edges(
+    dst: sqlite3.Connection,
+    src: sqlite3.Connection,
+    project: str,
+    fid_by_id: dict[int, str],
+    file_by_id: dict[int, str],
+    replaced: set[str],
+) -> dict:
     stats: dict[str, int] = {
         "edges": 0,
         "usage_hints": 0,
@@ -268,6 +285,9 @@ def _etl_edges(dst: sqlite3.Connection, src: sqlite3.Connection, project: str, f
         dst_fid = fid_by_id.get(dst_id)
         if not src_fid or not dst_fid:
             stats["dangling_edges"] += 1
+            continue
+        if src_fid in replaced or dst_fid in replaced:
+            # M1 cascade: an edge of a replaced (re-indexed) symbol dies with it.
             continue
         props = _decode_props(props_raw)
         table, level = ev.route_edge(etype, props.get("strategy"), props.get("confidence"))
@@ -306,6 +326,10 @@ def _etl_edges(dst: sqlite3.Connection, src: sqlite3.Connection, project: str, f
                     seen_js_ts.add(key)
                     tests_rows.append((src_fid, dst_fid, "etl-js-ts", props_raw))
 
+    # M1: delete any edge touching a replaced symbol before re-inserting, in
+    # the same transaction as the symbol REPLACE above.
+    for fid in replaced:
+        dst.execute("DELETE FROM edges WHERE src_fid = ? OR dst_fid = ?", (fid, fid))
     dst.executemany(
         "INSERT INTO edges (src_fid, dst_fid, type, evidence, strategy, confidence, line, properties_json)"
         " VALUES (?,?,?,?,?,?,?,?)",
@@ -327,6 +351,16 @@ def _etl_edges(dst: sqlite3.Connection, src: sqlite3.Connection, project: str, f
     stats["test_linkage_js_ts"] = sum(1 for r in tests_rows if r[2] == "etl-js-ts")
     stats["findings_p2"] = len(findings_rows)
     return stats
+
+
+def orphan_edge_count(con: sqlite3.Connection) -> int:
+    """Read-only integrity check (M1): edges whose src/dst no longer resolve
+    to a symbol. With the file-level cascade this must be 0."""
+    return con.execute(
+        "SELECT COUNT(*) FROM edges e"
+        " WHERE NOT EXISTS (SELECT 1 FROM symbols s WHERE s.fid = e.src_fid)"
+        "    OR NOT EXISTS (SELECT 1 FROM symbols s WHERE s.fid = e.dst_fid)"
+    ).fetchone()[0]
 
 
 def _etl_coverage(dst: sqlite3.Connection, src: sqlite3.Connection, project: str) -> dict:
