@@ -220,7 +220,7 @@ def test_run_full_flow(facts_db, tmp_path, monkeypatch):
     assert len(plan) == 2
 
 
-def test_run_filters_non_python_targets(facts_db, tmp_path):
+def test_run_filters_non_python_targets(facts_db, tmp_path, monkeypatch):
     for fid, qn, path in (("f1", "m.clamp", "src/clamp.ts"), ("f2", "m.safe_div", "src/safe_div.py")):
         facts_db.execute(
             "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
@@ -240,15 +240,22 @@ def test_run_filters_non_python_targets(facts_db, tmp_path):
         _make_cache(cache)
         return {"ok": True, "returncode": 0, "stderr_tail": ""}
 
-    import vrp.s2_mutate_run as m
-
-    orig = m.find_mutmut
-    m.find_mutmut = lambda: "fake-mutmut"
-    m.run_mutmut = fake_run_mutmut
-    try:
-        result = run(tmp_path, facts_db, 5, 60)
-    finally:
-        m.find_mutmut = orig
-        del m.run_mutmut
+    monkeypatch.setattr("vrp.s2_mutate_run.find_mutmut", lambda: "fake-mutmut")
+    monkeypatch.setattr("vrp.s2_mutate_run.run_mutmut", fake_run_mutmut)
+    result = run(tmp_path, facts_db, 5, 60)
     assert result["status"] == "ok"
     assert seen["files"] == ["src/safe_div.py"]
+
+
+def test_run_mutmut_failed_cleans_cache(facts_db, tmp_path, monkeypatch):
+    _seed_targets(facts_db)
+
+    def failing_run_mutmut(bin_path, repo, files, timeout):
+        (repo / ".mutmut-cache").write_text("leaked", encoding="utf-8")
+        return {"ok": False, "returncode": 1, "stderr_tail": "baseline dirty"}
+
+    monkeypatch.setattr("vrp.s2_mutate_run.find_mutmut", lambda: "fake-mutmut")
+    monkeypatch.setattr("vrp.s2_mutate_run.run_mutmut", failing_run_mutmut)
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "mutmut-failed"
+    assert not (tmp_path / ".mutmut-cache").exists()

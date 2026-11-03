@@ -214,6 +214,9 @@ def run(repo: Path, con: sqlite3.Connection, budget: int, timeout: int) -> dict:
     s2_mutate.write_plan(repo, targets)
     rr = run_mutmut(bin_path, repo, files, timeout)
     if not rr["ok"]:
+        # mutmut creates .mutmut-cache before its baseline run - remove it on
+        # failure too, the target repo's tree must stay clean on every path
+        (repo / ".mutmut-cache").unlink(missing_ok=True)
         return {
             "status": "mutmut-failed",
             "returncode": rr["returncode"],
