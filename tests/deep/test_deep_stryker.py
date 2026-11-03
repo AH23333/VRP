@@ -134,6 +134,7 @@ def test_stryker_e2e(stryker_repo):
     assert out["stryker_raw"].get("Killed", 0) >= 1
     assert not (repo / ".vrp" / "stryker.conf.json").exists()
     assert not (repo / ".vrp" / "stryker-report.json").exists()
+    assert not (repo / ".vrp" / "stryker-tmp").exists()
     report = json.loads((repo / ".vrp" / "mutation-report.json").read_text(encoding="utf-8"))
     assert len(report["per_target"]) == 2
     for target in report["per_target"]:

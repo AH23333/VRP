@@ -7,7 +7,10 @@ facts (work/stryker-probe, 2026-11-03):
   BOM-free (PS 5.1 Set-Content utf8 writes a BOM - pitfall family #11)
 - json report path knob is top-level `jsonReporter.fileName` (NOT nested
   reporterOptions - silently ignored there)
-- `tempDirName` accepts a .vrp-relative path and Stryker cleans it up itself
+- `tempDirName` accepts a .vrp-relative path; Stryker removes it on success,
+  but a FAILED run (e.g. ConfigError on broken baseline) leaks the full
+  sandbox copy of the repo - cleanup() must rmtree it (readonly .git objects
+  on Windows need chmod-on-retry)
 - rc == 0 on success (survivors included); non-zero on any failure (missing
   test runner, broken baseline)
 - report schemaVersion 1.0: files{relpath: {language, mutants: [{status,
@@ -28,6 +31,9 @@ findings, evidence) stays in s2_mutate_run.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import stat
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -133,3 +139,13 @@ def parse_report(report: Path) -> tuple:
 def cleanup(repo: Path) -> None:
     (repo / CONF_NAME).unlink(missing_ok=True)
     (repo / REPORT_NAME).unlink(missing_ok=True)
+    tmp = repo / TMP_DIR_NAME
+    if tmp.exists():
+        # Stryker cleans tempDirName itself on success, but a failed run
+        # (e.g. ConfigError on a broken baseline) leaks the full sandbox copy
+        # of the repo; its .git objects carry the readonly bit on Windows
+        def _clear_readonly(func, target, _exc):
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+
+        shutil.rmtree(tmp, onexc=_clear_readonly)

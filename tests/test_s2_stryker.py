@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 import subprocess
 
 from vrp import s2_stryker
@@ -110,9 +112,17 @@ def test_parse_report_maps_statuses_and_counts(tmp_path):
 def test_cleanup_removes_scratch_tolerant(tmp_path):
     conf = tmp_path / CONF_NAME
     report = tmp_path / REPORT_NAME
+    tmp = tmp_path / TMP_DIR_NAME / "sandbox-x" / ".git" / "objects"
+    tmp.mkdir(parents=True)
+    obj = tmp / "abc"
+    obj.write_text("", encoding="utf-8")
+    os.chmod(obj, stat.S_IREAD)
     conf.parent.mkdir(exist_ok=True)
     conf.write_text("{}", encoding="utf-8")
     report.write_text("{}", encoding="utf-8")
     cleanup(tmp_path)
     assert not conf.exists() and not report.exists()
+    # failed Stryker runs leak the full sandbox copy (success cleans it up
+    # itself) - cleanup must take the readonly-marked .git objects with it
+    assert not (tmp_path / TMP_DIR_NAME).exists()
     cleanup(tmp_path)
