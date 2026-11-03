@@ -495,6 +495,7 @@ def transact(
         _record(con, tx, "committed", gates)
     finally:
         con.close()
+    commit = git_commit_all(repo, f"vrp {tx['id']}: {tx['summary']} [{tx['type']}]")
     etl.run_etl(repo, name, out_db=facts_db)
     verdict = {
         "tid": tx["id"],
@@ -505,9 +506,8 @@ def transact(
         "failed_gate": None,
         "gates": gates,
         "confidence": confidence,
+        "commit": commit,
     }
-    verdict_path.write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
-    verdict["commit"] = git_commit_all(repo, f"vrp {tx['id']}: {tx['summary']} [{tx['type']}]")
     verdict_path.write_text(json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
     return verdict
 
