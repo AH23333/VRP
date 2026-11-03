@@ -121,7 +121,7 @@ def discover_commands(repo: Path) -> dict:
     pkg = repo / "package.json"
     if pkg.exists():
         try:
-            scripts = json.loads(pkg.read_text(encoding="utf-8")).get("scripts", {})
+            scripts = json.loads(pkg.read_text(encoding="utf-8", errors="replace")).get("scripts", {})
         except (json.JSONDecodeError, OSError):
             scripts = {}
         for key, value in scripts.items():
