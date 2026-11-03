@@ -75,6 +75,11 @@ def run_mutmut(bin_path: str, repo: Path, files: list[str], timeout: int) -> dic
                 runner,
                 "--tests-dir",
                 ".",
+                # mutmut default 2.0 relabels killed-but-slow runs as
+                # 'suspicious' under batch load (rc==1 yet >2x baseline);
+                # 10.0 keeps reconcile deterministic in loaded pipelines
+                "--test-time-multiplier",
+                "10.0",
                 "--no-progress",
             ],
             cwd=repo,
