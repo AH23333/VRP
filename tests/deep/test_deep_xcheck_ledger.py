@@ -16,6 +16,10 @@ XCHECK_CATEGORIES = (
 
 P4_CATEGORIES = ("p4-cross-check-vulture", "p4-cross-check-knip")
 
+P2_CATEGORIES = ("p2-cross-check-jscpd",)
+
+ENGINE_CATEGORIES = P4_CATEGORIES + P2_CATEGORIES
+
 LEDGER_BUSINESS_COLUMNS = "category, src_key, dst_key, cbm_edge_type, ca_confidence, ca_provenance, detail_json"
 
 
@@ -42,11 +46,12 @@ def _ledger_total(repo):
         con.close()
 
 
-def _ledger_p4_count(repo):
+def _ledger_engine_count(repo):
     con = sqlite3.connect(f"file:{_db(repo)}?mode=ro", uri=True)
     try:
         return con.execute(
-            "SELECT COUNT(*) FROM discrepancy_ledger WHERE category IN (?,?)", P4_CATEGORIES
+            f"SELECT COUNT(*) FROM discrepancy_ledger WHERE category IN ({','.join('?' * len(ENGINE_CATEGORIES))})",
+            ENGINE_CATEGORIES,
         ).fetchone()[0]
     finally:
         con.close()
@@ -98,12 +103,12 @@ def test_status_ledger_count_not_inflated_by_rerun(xcheck_state):
     state = xcheck_state
     repo = state["repo"]
     assert state["status1"] == state["status2"]
-    assert state["status2"] - _ledger_p4_count(repo) == state["s2"]["ledger_rows"]
+    assert state["status2"] - _ledger_engine_count(repo) == state["s2"]["ledger_rows"]
 
 
-def test_ledger_categories_are_xcheck_or_p4(xcheck_state):
+def test_ledger_categories_are_xcheck_p4_or_p2(xcheck_state):
     categories = {row[0] for row in xcheck_state["rows2"]}
-    assert categories <= set(XCHECK_CATEGORIES) | set(P4_CATEGORIES)
+    assert categories <= set(XCHECK_CATEGORIES) | set(ENGINE_CATEGORIES)
     assert categories & set(XCHECK_CATEGORIES)
 
 

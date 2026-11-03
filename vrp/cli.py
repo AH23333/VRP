@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
-from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_mutate, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, xcheck
 
 
 def _repo_arg(value: str) -> Path:
@@ -85,10 +85,12 @@ def cmd_s2(args) -> int:
         result = s2_astgrep.scan(con, repo)
         dead = s2_deadcode.scan(con)
         p4 = s2_p4.scan(con, repo)
+        p2 = s2_jscpd.scan(con, repo)
     finally:
         con.close()
     result["dead_code_candidates"] = dead["total"]
     result["p4"] = p4
+    result["p2"] = p2
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
