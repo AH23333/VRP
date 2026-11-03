@@ -216,6 +216,14 @@ def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _Cont
     # M1: rows sharing (project, qualified_name) collide with the symbols
     # UNIQUE constraint; INSERT OR REPLACE drops the earlier fid's row, so
     # track those replaced fids to cascade-delete their edges below.
+    # Transaction boundary (ruled 2026-11-03): guaranteed by the whole build
+    # running on the exclusive temp db with a single commit at the end of
+    # run_etl - symbols and edges are already in one transaction; do NOT add
+    # an explicit BEGIN here (it would mean switching isolation levels for
+    # nominal compliance and new risk).
+    # Cascade scope (ruled 2026-11-03): edges plus the edge-family tables
+    # (usage_hints / test_linkage / history_coupling / findings_p2) - they
+    # reference symbols the same way; do NOT narrow it to the edges table.
     replaced: set[str] = set()
     surviving: dict[tuple[str, str], str] = {}
     for r in rows:
