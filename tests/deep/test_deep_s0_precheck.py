@@ -62,7 +62,7 @@ def test_discover_commands_pyproject_full(tmp_path):
     assert s0_precheck.discover_commands(tmp_path) == {
         "test": ["pytest"],
         "lint": ["ruff check ."],
-        "typecheck": ["mypy"],
+        "typecheck": ["mypy ."],
     }
 
 

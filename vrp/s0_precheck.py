@@ -137,7 +137,9 @@ def discover_commands(repo: Path) -> dict:
         if "ruff" in text:
             commands["lint"].append("ruff check .")
         if "mypy" in text:
-            commands["typecheck"].append("mypy")
+            # bare `mypy` is a usage error (no target); `mypy .` typechecks
+            # the repo tree and still honors [tool.mypy] in pyproject.toml
+            commands["typecheck"].append("mypy .")
 
     makefile = repo / "Makefile"
     if makefile.exists():
