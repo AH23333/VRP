@@ -9,6 +9,8 @@ in v1. CBM linkages per v6 s6:
 from __future__ import annotations
 
 import json
+import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -36,7 +38,12 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
     else:
-        proc.kill()
+        # child runs with start_new_session=True -> it is its own process
+        # group leader; kill the whole group so grandchildren die too.
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _run_one(repo: Path, command: str, timeout: int) -> dict:
