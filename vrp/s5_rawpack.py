@@ -34,26 +34,36 @@ def build_raw_pack(repo: Path, timeout: int = 600) -> dict:
         return {"status": "skipped", "reason": "repomix not found (set VRP_REPOMIX_BIN)"}
     out = repo / ".vrp" / OUTPUT_NAME
     out.parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
-        [
-            str(bin_path),
-            str(repo),
-            "--style",
-            "xml",
-            "-o",
-            str(out),
-            "--ignore",
-            IGNORE_PATTERNS,
-            "--quiet",
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
-    if proc.returncode != 0 or not out.is_file():
+    # L3: let repomix write to a same-directory temp file and swap it in
+    # atomically, so a failed/timed-out run never truncates the old artifact.
+    tmp = out.with_name(f"{out.name}.tmp-{os.getpid()}")
+    tmp.unlink(missing_ok=True)
+    try:
+        proc = subprocess.run(
+            [
+                str(bin_path),
+                str(repo),
+                "--style",
+                "xml",
+                "-o",
+                str(tmp),
+                "--ignore",
+                IGNORE_PATTERNS,
+                "--quiet",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        tmp.unlink(missing_ok=True)
+        raise
+    if proc.returncode != 0 or not tmp.is_file():
+        tmp.unlink(missing_ok=True)
         return {"status": "failed", "reason": (proc.stderr or proc.stdout)[-500:]}
+    os.replace(tmp, out)
     data = out.read_bytes()
     return {
         "status": "ok",

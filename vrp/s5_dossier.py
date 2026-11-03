@@ -10,6 +10,7 @@ summary (findings/annotations/counts), raw_pack (repomix artifact pointer).
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -294,6 +295,14 @@ def build_dossier(
         con.close()
     out = repo / ".vrp" / "dossier.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(dossier, ensure_ascii=False, indent=2), encoding="utf-8")
+    # L3: same-directory temp file + atomic swap, so a mid-write failure
+    # leaves the previous dossier.json intact (H2 pattern).
+    tmp = out.with_name(f"{out.name}.tmp-{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps(dossier, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, out)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     dossier["out"] = str(out)
     return dossier
