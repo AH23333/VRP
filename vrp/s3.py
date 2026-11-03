@@ -173,6 +173,27 @@ def gate_claims(con: sqlite3.Connection, repo: Path, claims: list[dict]) -> dict
     return detail
 
 
+def _repo_target(repo: Path, file_path: str) -> Path | None:
+    """Resolve a claim file path inside the repo, or None if it escapes.
+
+    Rejects absolute paths, drive letters, roots and '..' segments (same
+    rules as s6_transact._norm_rel), then verifies the resolved target is
+    still under the repo (catches symlink escapes too).
+    """
+    normalized = file_path.replace("\\", "/")
+    if normalized.startswith("/"):
+        return None
+    path = Path(normalized)
+    if path.drive or path.root or path.is_absolute() or ".." in path.parts:
+        return None
+    target = (repo / path).resolve()
+    try:
+        target.relative_to(repo.resolve())
+    except ValueError:
+        return None
+    return target
+
+
 def _gate_one(con: sqlite3.Connection, repo: Path, claim: dict) -> str | None:
     kind = claim.get("kind")
     if kind == "annotation":
@@ -190,8 +211,12 @@ def _gate_one(con: sqlite3.Connection, repo: Path, claim: dict) -> str | None:
         file_path = claim.get("file_path", "")
         line = int(claim.get("line", 0))
         quote = str(claim.get("quote", ""))
-        target = repo / file_path
-        if not file_path or not target.is_file():
+        if not file_path:
+            return "unknown-file"
+        target = _repo_target(repo, file_path)
+        if target is None:
+            return "path-outside-repo"
+        if not target.is_file():
             return "unknown-file"
         lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
         if line < 1 or line > len(lines):

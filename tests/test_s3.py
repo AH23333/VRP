@@ -113,6 +113,33 @@ def test_coverage(repo, con):
     assert detail["missing_sample"] == ["m.other"]
 
 
+def test_gate_claims_rejects_path_escape(repo, con, tmp_path):
+    """H4: finding claims with paths escaping the repo must be rejected,
+    never accepted and written into findings."""
+    secret = tmp_path.parent / "secret-outside-repo.txt"
+    secret.write_text("leak me\n", encoding="utf-8")
+    claims = [
+        {"kind": "finding", "pathology": "P1", "file_path": "../secret-outside-repo.txt", "line": 1, "quote": "leak me", "body": ""},
+        {"kind": "finding", "pathology": "P1", "file_path": str(secret), "line": 1, "quote": "leak me", "body": ""},
+        {"kind": "finding", "pathology": "P1", "file_path": "src/../src/m.py", "line": 2, "quote": "return x * 2", "body": ""},
+    ]
+    detail = s3.gate_claims(con, repo, claims)
+    assert detail["accepted"] == 0
+    assert [r["reason"] for r in detail["rejected"]] == ["path-outside-repo"] * 3
+    assert con.execute("SELECT COUNT(*) FROM findings WHERE source = 'ai-gate'").fetchone()[0] == 0
+    secret.unlink()
+
+
+def test_gate_claims_accepts_normal_relative_path(repo, con):
+    detail = s3.gate_claims(
+        con,
+        repo,
+        [{"kind": "finding", "pathology": "P1", "file_path": "src/m.py", "line": 2, "quote": "return x * 2", "body": ""}],
+    )
+    assert detail["accepted"] == 1
+    assert detail["rejected"] == []
+
+
 def test_gate_claims_annotation_and_finding(repo, con):
     claims = [
         {"kind": "annotation", "qualified_name": "m.go", "start_line": 1, "end_line": 2, "note_kind": "purpose", "body": "b"},
