@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -83,6 +84,43 @@ OWNED_TABLES = ("annotations", "transactions", "gate_results", "dossier_views", 
 def ensure_schema(con: sqlite3.Connection) -> None:
     con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     con.commit()
+
+
+def current_git_head(repo: Path) -> str:
+    """HEAD commit of repo, or '' when repo is not a git checkout."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def check_facts_freshness(con: sqlite3.Connection, repo: Path) -> None:
+    """Hard-fail (M4) when facts.db was built against a different HEAD.
+
+    Raises RuntimeError - the CLI boundary turns that into an error exit.
+    A db without a recorded git_head (pre-freshness build) counts as stale.
+    """
+    row = con.execute("SELECT value FROM meta WHERE key = 'git_head'").fetchone()
+    if row is None:
+        raise RuntimeError(
+            f"facts.db is stale: no git_head recorded (built before freshness tracking) "
+            f"- re-run 'vrp etl {repo}'"
+        )
+    current = current_git_head(repo)
+    if row[0] != current:
+        raise RuntimeError(
+            f"facts.db is stale: recorded git_head={row[0] or '(none)'} != "
+            f"current HEAD={current or '(none)'} - re-run 'vrp etl {repo}'"
+        )
 
 
 def snapshot_owned(db_path: Path) -> dict[str, list[tuple]]:
@@ -317,6 +355,7 @@ def _write_meta(dst: sqlite3.Connection, cbm_name: str, store_meta: dict, repo: 
         "cbm_project": cbm_name,
         "cbm_db_uid": store_meta.get("db_uid", ""),
         "cbm_mutation_gen": store_meta.get("mutation_gen", ""),
+        "git_head": current_git_head(repo),
         "facts_schema": "1",
     }
     for key, value in stats.items():

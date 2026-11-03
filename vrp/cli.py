@@ -114,6 +114,7 @@ def _open_facts_rw(repo: Path):
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
     con = sqlite3.connect(facts_path)
     etl_mod.ensure_schema(con)
+    etl_mod.check_facts_freshness(con, repo)
     return con, facts_path
 
 
