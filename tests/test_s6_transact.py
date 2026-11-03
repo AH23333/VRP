@@ -297,6 +297,44 @@ def test_transact_t4_needs_confirmation(tmp_path, monkeypatch):
     con.close()
 
 
+def test_transact_rescan_crash_aborts_and_rolls_back(tmp_path, monkeypatch):
+    """H1: an exception after apply_edits (G1 rescan) must not leave a dirty
+    tree, a 'running' transaction row, or a missing verdict file."""
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    before = (repo / "a.py").read_text(encoding="utf-8")
+    _patch_pipeline(monkeypatch, [("f2", "p.a.new")])
+    state = {}
+
+    def crash_index(repo_, name, reindex=False, timeout=3600):
+        state["dirty_after_apply"] = (repo_ / "a.py").read_text(encoding="utf-8") != before
+        raise RuntimeError("rescan exploded")
+
+    monkeypatch.setattr(s6_transact.s1_cbm, "index_repository", crash_index)
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-crash",
+            "type": "T1",
+            "summary": "rename then crash",
+            "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+            "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+        },
+    )
+    verdict = s6_transact.transact(repo, tx, "proj")
+    assert state["dirty_after_apply"], "crash must happen after edits were applied"
+    assert verdict["status"] == "aborted"
+    assert verdict["failed_gate"] == "G1"
+    assert (repo / "a.py").read_text(encoding="utf-8") == before
+    assert s6_transact.git_clean(repo)
+    assert not (repo / ".vrp" / "facts.db.post-tx-crash").exists()
+    verdict_file = repo / ".vrp" / "verdicts" / "tx-crash.json"
+    assert json.loads(verdict_file.read_text(encoding="utf-8"))["status"] == "aborted"
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    assert con.execute("SELECT status FROM transactions WHERE tid = 'tx-crash'").fetchone()[0] == "aborted"
+    con.close()
+
+
 def test_transact_dirty_tree_refused_by_cli(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / "a.py").write_text("dirty = True\n", encoding="utf-8")

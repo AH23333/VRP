@@ -401,78 +401,87 @@ def transact(
     edited_files = {edit["file"].as_posix() for edit in tx["edits"]}
     failed = None
 
-    s1_cbm.index_repository(repo, name, reindex=True)
-    etl.run_etl(repo, name, out_db=post_db)
-    post = sqlite3.connect(f"file:{post_db}?mode=ro", uri=True)
     try:
-        post_qns = _qn_set(post)
-        post_edges = _usage_edges(post)
-        parse_gaps = _parse_gaps(post, edited_files)
-    finally:
-        post.close()
-    if parse_gaps:
-        gates.append({"gate": "G1", "status": "fail", "detail": {"reason": "parse-errors", "gaps": parse_gaps[:20]}})
-        failed = failed or "G1"
-    else:
-        gates.append({"gate": "G1", "status": "pass", "detail": {"symbols_post": len(post_qns)}})
-
-    if failed is None:
-        commands = s0_precheck.discover_commands(repo)
-        static_commands = {slot: commands.get(slot, []) for slot in ("lint", "typecheck") if commands.get(slot)}
-        if any(static_commands.values()):
-            results = s4_freeze.run_commands(repo, static_commands, timeout=timeout)
-            bad = [r for runs in results.values() for r in runs if r["rc"] != 0]
-            if bad:
-                gates.append({"gate": "G2", "status": "fail", "detail": {"reason": "static-check", "failed": [{"command": r["command"], "rc": r["rc"]} for r in bad]}})
-                failed = failed or "G2"
-            else:
-                gates.append({"gate": "G2", "status": "pass", "detail": {"commands": [r["command"] for runs in results.values() for r in runs]}})
-        else:
-            gates.append({"gate": "G2", "status": "skipped", "detail": {"reason": "no lint/typecheck commands discovered"}})
-
-    confidence = "degraded"
-    if failed is None:
-        test_commands = {"test": commands.get("test", [])} if commands.get("test") else {}
-        if test_commands:
-            results = s4_freeze.run_commands(repo, test_commands, timeout=timeout)
-            bad = [r for r in results.get("test", []) if r["rc"] != 0]
-            if bad:
-                gates.append({"gate": "G3", "status": "fail", "detail": {"reason": "test", "failed": [{"command": r["command"], "rc": r["rc"], "stderr_tail": r["stderr_tail"][:500]} for r in bad]}})
-                failed = failed or "G3"
-            else:
-                gates.append({"gate": "G3", "status": "pass", "detail": {"commands": [r["command"] for r in results["test"]]}})
-                confidence = "high"
-        else:
-            gates.append({"gate": "G3", "status": "skipped", "detail": {"reason": "no test commands discovered"}})
-
-    if failed is None and tx["type"] in ("T1", "T2"):
-        ok, detail = _gate_g4(tx, pre_qns, post_qns, pre_edges, post_edges)
-        if ok:
-            verify = _verify_changes(repo)
-            if verify["status"] == "ok":
-                detail["verify_changes"] = {"broken": len(verify["broken"]), "checks": len(verify["checks"])}
-                if verify["broken"]:
-                    ok = False
-                    detail = {"reason": "verify-broken", "broken": verify["broken"][:20], "checks": verify["checks"][:20]}
-            else:
-                detail["verify_changes"] = verify
-        gates.append({"gate": "G4", "status": "pass" if ok else "fail", "detail": detail})
-        if not ok:
-            failed = failed or "G4"
-    elif failed is None:
-        gates.append({"gate": "G4", "status": "skipped", "detail": {"reason": f"no equivalence claim for {tx['type']}"}})
-
-    if failed is None and tx["type"] in ("T2", "T4"):
+        s1_cbm.index_repository(repo, name, reindex=True)
+        etl.run_etl(repo, name, out_db=post_db)
         post = sqlite3.connect(f"file:{post_db}?mode=ro", uri=True)
         try:
-            post_dead = len(s2_deadcode.dead_code_candidates(post))
+            post_qns = _qn_set(post)
+            post_edges = _usage_edges(post)
+            parse_gaps = _parse_gaps(post, edited_files)
         finally:
             post.close()
-        if post_dead > pre_dead:
-            gates.append({"gate": "G5", "status": "fail", "detail": {"reason": "dead-code-increase", "pre": pre_dead, "post": post_dead}})
-            failed = failed or "G5"
+        if parse_gaps:
+            gates.append({"gate": "G1", "status": "fail", "detail": {"reason": "parse-errors", "gaps": parse_gaps[:20]}})
+            failed = failed or "G1"
         else:
-            gates.append({"gate": "G5", "status": "pass", "detail": {"pre": pre_dead, "post": post_dead}})
+            gates.append({"gate": "G1", "status": "pass", "detail": {"symbols_post": len(post_qns)}})
+
+        if failed is None:
+            commands = s0_precheck.discover_commands(repo)
+            static_commands = {slot: commands.get(slot, []) for slot in ("lint", "typecheck") if commands.get(slot)}
+            if any(static_commands.values()):
+                results = s4_freeze.run_commands(repo, static_commands, timeout=timeout)
+                bad = [r for runs in results.values() for r in runs if r["rc"] != 0]
+                if bad:
+                    gates.append({"gate": "G2", "status": "fail", "detail": {"reason": "static-check", "failed": [{"command": r["command"], "rc": r["rc"]} for r in bad]}})
+                    failed = failed or "G2"
+                else:
+                    gates.append({"gate": "G2", "status": "pass", "detail": {"commands": [r["command"] for runs in results.values() for r in runs]}})
+            else:
+                gates.append({"gate": "G2", "status": "skipped", "detail": {"reason": "no lint/typecheck commands discovered"}})
+
+        confidence = "degraded"
+        if failed is None:
+            test_commands = {"test": commands.get("test", [])} if commands.get("test") else {}
+            if test_commands:
+                results = s4_freeze.run_commands(repo, test_commands, timeout=timeout)
+                bad = [r for r in results.get("test", []) if r["rc"] != 0]
+                if bad:
+                    gates.append({"gate": "G3", "status": "fail", "detail": {"reason": "test", "failed": [{"command": r["command"], "rc": r["rc"], "stderr_tail": r["stderr_tail"][:500]} for r in bad]}})
+                    failed = failed or "G3"
+                else:
+                    gates.append({"gate": "G3", "status": "pass", "detail": {"commands": [r["command"] for r in results["test"]]}})
+                    confidence = "high"
+            else:
+                gates.append({"gate": "G3", "status": "skipped", "detail": {"reason": "no test commands discovered"}})
+
+        if failed is None and tx["type"] in ("T1", "T2"):
+            ok, detail = _gate_g4(tx, pre_qns, post_qns, pre_edges, post_edges)
+            if ok:
+                verify = _verify_changes(repo)
+                if verify["status"] == "ok":
+                    detail["verify_changes"] = {"broken": len(verify["broken"]), "checks": len(verify["checks"])}
+                    if verify["broken"]:
+                        ok = False
+                        detail = {"reason": "verify-broken", "broken": verify["broken"][:20], "checks": verify["checks"][:20]}
+                else:
+                    detail["verify_changes"] = verify
+            gates.append({"gate": "G4", "status": "pass" if ok else "fail", "detail": detail})
+            if not ok:
+                failed = failed or "G4"
+        elif failed is None:
+            gates.append({"gate": "G4", "status": "skipped", "detail": {"reason": f"no equivalence claim for {tx['type']}"}})
+
+        if failed is None and tx["type"] in ("T2", "T4"):
+            post = sqlite3.connect(f"file:{post_db}?mode=ro", uri=True)
+            try:
+                post_dead = len(s2_deadcode.dead_code_candidates(post))
+            finally:
+                post.close()
+            if post_dead > pre_dead:
+                gates.append({"gate": "G5", "status": "fail", "detail": {"reason": "dead-code-increase", "pre": pre_dead, "post": post_dead}})
+                failed = failed or "G5"
+            else:
+                gates.append({"gate": "G5", "status": "pass", "detail": {"pre": pre_dead, "post": post_dead}})
+    except Exception as exc:
+        # Crash between apply_edits and commit: restore the tree, mark the
+        # transaction aborted, and still write a verdict (H1).
+        rollback = rollback_edits(repo, tx["edits"])
+        post_db.unlink(missing_ok=True)
+        crashed = f"G{len(gates) + 1}"
+        gates.append({"gate": crashed, "status": "fail", "detail": {"reason": "gate-crash", "error": str(exc)[:500]}})
+        return finish("aborted", gates, crashed, {"rollback": rollback})
 
     if failed is not None:
         rollback = rollback_edits(repo, tx["edits"])
