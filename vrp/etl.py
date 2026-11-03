@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -131,26 +132,35 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
     out_db = out_db or (repo / ".vrp" / "facts.db")
     out_db.parent.mkdir(parents=True, exist_ok=True)
     snap = snapshot_owned(out_db)
-    if out_db.exists():
-        out_db.unlink()
-    dst = sqlite3.connect(out_db)
-    dst.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-    restore_owned(dst, snap)
-
-    src = s1_cbm.connect_ro(db_path)
-    hasher = _ContentHasher(repo)
-
-    stats: dict[str, int] = {}
+    # Build the new database in a same-directory temp file and only swap it
+    # over the old one after a successful commit, so a mid-run failure leaves
+    # the previous facts.db intact (H2).
+    tmp_db = out_db.with_name(f"{out_db.name}.tmp-{os.getpid()}")
+    tmp_db.unlink(missing_ok=True)
+    dst = sqlite3.connect(tmp_db)
     try:
-        fid_by_id, file_by_id = _etl_symbols(dst, src, hasher, cbm_name, repo)
-        stats["symbols"] = len(fid_by_id)
-        stats.update(_etl_edges(dst, src, cbm_name, fid_by_id, file_by_id))
-        stats.update(_etl_coverage(dst, src, cbm_name))
-        _write_meta(dst, cbm_name, store_meta, repo, stats)
-        dst.commit()
-    finally:
-        src.close()
+        dst.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        restore_owned(dst, snap)
+
+        src = s1_cbm.connect_ro(db_path)
+        hasher = _ContentHasher(repo)
+
+        stats: dict[str, int] = {}
+        try:
+            fid_by_id, file_by_id = _etl_symbols(dst, src, hasher, cbm_name, repo)
+            stats["symbols"] = len(fid_by_id)
+            stats.update(_etl_edges(dst, src, cbm_name, fid_by_id, file_by_id))
+            stats.update(_etl_coverage(dst, src, cbm_name))
+            _write_meta(dst, cbm_name, store_meta, repo, stats)
+            dst.commit()
+        finally:
+            src.close()
         dst.close()
+        os.replace(tmp_db, out_db)
+    except Exception:
+        dst.close()
+        tmp_db.unlink(missing_ok=True)
+        raise
 
     stats["facts_db"] = str(out_db)
     return stats
