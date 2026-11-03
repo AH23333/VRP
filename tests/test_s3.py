@@ -165,3 +165,20 @@ def test_gate_claims_annotation_and_finding(repo, con):
         "SELECT kind, source, anchor_fid, file_path, start_line FROM findings WHERE source = 'ai-gate'"
     ).fetchone()
     assert finding == ("smell", "ai-gate", "f1", "src/m.py", 2)
+
+
+def test_gate_claims_isolates_malformed_claim(repo, con):
+    """L2: one malformed claim (non-numeric line/start_line) must be
+    rejected as claim-error, not crash the whole gate run."""
+    claims = [
+        {"kind": "finding", "pathology": "P1", "file_path": "src/m.py", "line": "abc", "quote": "return x * 2", "body": ""},
+        {"kind": "annotation", "qualified_name": "m.go", "start_line": "x1", "end_line": 2, "note_kind": "note", "body": "b"},
+        {"kind": "finding", "pathology": "P1", "file_path": "src/m.py", "line": 2, "quote": "return x * 2", "body": ""},
+    ]
+    detail = s3.gate_claims(con, repo, claims)
+    assert detail["accepted"] == 1
+    assert [(r["index"], r["reason"]) for r in detail["rejected"]] == [
+        (0, "claim-error"),
+        (1, "claim-error"),
+    ]
+    assert con.execute("SELECT COUNT(*) FROM findings WHERE source = 'ai-gate'").fetchone()[0] == 1

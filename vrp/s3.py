@@ -159,7 +159,11 @@ def gate_claims(con: sqlite3.Connection, repo: Path, claims: list[dict]) -> dict
     accepted = 0
     rejected: list[dict] = []
     for i, claim in enumerate(claims):
-        verdict = _gate_one(con, repo, claim)
+        try:
+            verdict = _gate_one(con, repo, claim)
+        except Exception:
+            con.rollback()  # drop any half-written claim before moving on
+            verdict = "claim-error"
         if verdict is None:
             accepted += 1
         else:
