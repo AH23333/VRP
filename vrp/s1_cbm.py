@@ -124,6 +124,40 @@ def index_repository(repo: Path, name: str, reindex: bool = False, timeout: int 
     return result
 
 
+CBM_SCHEMA_CONTRACT: dict[str, tuple[str, ...]] = {
+    "nodes": ("id", "project", "label", "name", "qualified_name", "file_path", "start_line", "end_line", "properties"),
+    "edges": ("project", "source_id", "target_id", "type", "properties"),
+    "index_coverage": ("project", "rel_path", "kind", "detail"),
+    "file_hashes": ("project", "rel_path", "sha256"),
+    "store_meta": (),
+}
+
+
+def verify_cbm_schema(db_path: Path) -> None:
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        problems: list[str] = []
+        for table, columns in CBM_SCHEMA_CONTRACT.items():
+            if table not in tables:
+                problems.append(f"missing table {table}")
+                continue
+            if not columns:
+                continue
+            present = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+            missing = [column for column in columns if column not in present]
+            if missing:
+                problems.append(f"table {table} missing columns {missing}")
+        if problems:
+            raise RuntimeError(
+                "CBM store schema drift (downgrade or foreign db): "
+                + "; ".join(problems)
+                + f" - re-index with 'vrp index <repo>' against the current CBM version: {db_path}"
+            )
+    finally:
+        con.close()
+
+
 def read_store_meta(db_path: Path) -> dict:
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:

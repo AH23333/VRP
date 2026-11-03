@@ -165,7 +165,7 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
     db_path = s1_cbm.cbm_db_path(cbm_name)
     if not db_path.exists():
         raise FileNotFoundError(f"CBM db not found for project '{cbm_name}': {db_path}")
-
+    s1_cbm.verify_cbm_schema(db_path)
     store_meta = s1_cbm.read_store_meta(db_path)
     out_db = out_db or (repo / ".vrp" / "facts.db")
     out_db.parent.mkdir(parents=True, exist_ok=True)
