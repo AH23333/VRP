@@ -105,10 +105,10 @@ def test_reconcile_empty_range_rate_none():
 
 def test_write_findings_only_survivors_idempotent(facts_db):
     per_target = [
-        {**_target(), "mutants": 2, "killed": 1, "survived": 1, "timeout": 0,
+        {**_target(), "engine": "mutmut", "mutants": 2, "killed": 1, "survived": 1, "timeout": 0,
          "suspicious": 0, "skipped": 0, "untested": 0, "survival_rate": 0.5},
-        {**_target(fid="f2", qn="m.safe_div", start=9, end=12), "mutants": 1, "killed": 1,
-         "survived": 0, "timeout": 0, "suspicious": 0, "skipped": 0, "untested": 0,
+        {**_target(fid="f2", qn="m.safe_div", start=9, end=12), "engine": "mutmut", "mutants": 1,
+         "killed": 1, "survived": 0, "timeout": 0, "suspicious": 0, "skipped": 0, "untested": 0,
          "survival_rate": 0.0},
     ]
     assert write_findings(facts_db, per_target) == 1
@@ -116,6 +116,10 @@ def test_write_findings_only_survivors_idempotent(facts_db):
         f"SELECT pathology, kind, source, anchor_fid FROM findings WHERE source='{SOURCE}'"
     ).fetchall()
     assert rows == [("P8", "mutation-survivors", SOURCE, "f1")]
+    payload = json.loads(facts_db.execute(
+        f"SELECT payload_json FROM findings WHERE source='{SOURCE}'"
+    ).fetchone()[0])
+    assert payload["engine"] == "mutmut"
     assert write_findings(facts_db, per_target) == 1
     count = facts_db.execute(f"SELECT COUNT(*) FROM findings WHERE source='{SOURCE}'").fetchone()[0]
     assert count == 1
@@ -127,16 +131,19 @@ def test_write_runtime_evidence_namespace(facts_db):
         " VALUES (NULL, 'test', '{\"exit_code\": 0}')"
     )
     write_runtime_evidence(facts_db, {"budget": 10, "targets": 2, "mutants_total": 6,
-                                      "survived": 3, "surviving_targets": 1, "survival_rate": 0.5})
+                                      "survived": 3, "surviving_targets": 1, "survival_rate": 0.5,
+                                      "engines": {"mutmut": "ok", "stryker": "ok"}})
     rows = facts_db.execute(
         "SELECT caller_key, callee_key, payload_json FROM runtime_evidence ORDER BY id"
     ).fetchall()
     assert rows[0] == (None, "test", '{"exit_code": 0}')
     assert rows[1][0] == SOURCE and rows[1][1] == SOURCE
     payload = json.loads(rows[1][2])
-    assert payload["runner"] == "mutmut" and payload["survival_rate"] == 0.5
+    assert payload["engines"] == {"mutmut": "ok", "stryker": "ok"}
+    assert payload["survival_rate"] == 0.5
     write_runtime_evidence(facts_db, {"budget": 10, "targets": 2, "mutants_total": 6,
-                                      "survived": 3, "surviving_targets": 1, "survival_rate": 0.5})
+                                      "survived": 3, "surviving_targets": 1, "survival_rate": 0.5,
+                                      "engines": {"mutmut": "ok"}})
     count = facts_db.execute(
         f"SELECT COUNT(*) FROM runtime_evidence WHERE caller_key='{SOURCE}'"
     ).fetchone()[0]
@@ -182,7 +189,8 @@ def test_run_mutmut_failed(facts_db, tmp_path, monkeypatch):
         lambda bin_path, repo, files, timeout: {"ok": False, "returncode": 1, "stderr_tail": "boom"},
     )
     result = run(tmp_path, facts_db, 5, 60)
-    assert result == {"status": "mutmut-failed", "returncode": 1, "stderr_tail": "boom"}
+    assert result == {"status": "mutmut-failed", "engines": {"mutmut": "failed"},
+                      "returncode": 1, "stderr_tail": "boom"}
 
 
 def test_run_full_flow(facts_db, tmp_path, monkeypatch):
@@ -220,7 +228,94 @@ def test_run_full_flow(facts_db, tmp_path, monkeypatch):
     assert len(plan) == 2
 
 
-def test_run_filters_non_python_targets(facts_db, tmp_path, monkeypatch):
+def _seed_ts_targets(facts_db):
+    for fid, qn, start, end in (("t1", "m.clamp", 1, 6), ("t2", "m.safeDiv", 9, 12)):
+        facts_db.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            " VALUES (?,'p',?,'Function',?,'src/mathfun.ts',?,?,'h')",
+            (fid, qn, qn.rsplit(".", 1)[-1], start, end),
+        )
+        facts_db.execute(
+            "INSERT INTO test_linkage (test_fid, target_fid, source) VALUES ('ut1', ?, 'cbm')",
+            (fid,),
+        )
+        facts_db.execute(
+            "INSERT INTO edges (src_fid, dst_fid, type, evidence, properties_json)"
+            " VALUES ('ut1', ?, 'CALLS', 'structural', '{}')",
+            (fid,),
+        )
+    facts_db.commit()
+
+
+def _stryker_report(repo, mutants):
+    report = repo / ".vrp" / "stryker-report.json"
+    report.parent.mkdir(exist_ok=True)
+    report.write_text(json.dumps({"schemaVersion": "1.0", "files": {"src/mathfun.ts": {
+        "language": "typescript", "mutants": mutants}}}), encoding="utf-8")
+    return report
+
+
+def _mutant_json(line, status):
+    return {"status": status, "location": {"start": {"line": line, "column": 8}},
+            "id": 1, "mutatorName": "x", "replacement": "y"}
+
+
+def test_run_ts_only_stryker_ok(facts_db, tmp_path, monkeypatch):
+    _seed_ts_targets(facts_db)
+    seen: dict = {}
+
+    def fake_run_stryker(bin_path, repo, files, timeout):
+        seen["files"] = list(files)
+        (repo / ".vrp").mkdir(exist_ok=True)
+        (repo / ".vrp" / "stryker.conf.json").write_text("{}", encoding="utf-8")
+        _stryker_report(repo, [_mutant_json(3, "Survived"), _mutant_json(5, "Killed")])
+        return {"ok": True, "returncode": 0, "stderr_tail": ""}
+
+    monkeypatch.setattr("vrp.s2_stryker.find_stryker", lambda: "fake-stryker")
+    monkeypatch.setattr("vrp.s2_stryker.run_stryker", fake_run_stryker)
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "ok"
+    assert seen["files"] == ["src/mathfun.ts"]
+    assert result["engines"] == {"stryker": "ok"}
+    assert result["mutants_total"] == 2
+    assert result["killed"] == 1 and result["survived"] == 1
+    assert result["surviving_targets"] == 1
+    assert result["findings"] == 1
+    assert not (tmp_path / ".vrp" / "stryker.conf.json").exists()
+    assert not (tmp_path / ".vrp" / "stryker-report.json").exists()
+    payload = json.loads(facts_db.execute(
+        f"SELECT payload_json FROM findings WHERE source='{SOURCE}'"
+    ).fetchone()[0])
+    assert payload["engine"] == "stryker"
+
+
+def test_run_stryker_not_found(facts_db, tmp_path, monkeypatch):
+    _seed_ts_targets(facts_db)
+    monkeypatch.setattr("vrp.s2_stryker.find_stryker", lambda: None)
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "stryker-not-found"
+    assert "hint" in result
+
+
+def test_run_stryker_failed_cleans_scratch(facts_db, tmp_path, monkeypatch):
+    _seed_ts_targets(facts_db)
+
+    def failing_run_stryker(bin_path, repo, files, timeout):
+        (repo / ".vrp").mkdir(exist_ok=True)
+        (repo / ".vrp" / "stryker.conf.json").write_text("{}", encoding="utf-8")
+        (repo / ".vrp" / "stryker-report.json").write_text("{}", encoding="utf-8")
+        return {"ok": False, "returncode": 1, "stderr_tail": "no test runner found"}
+
+    monkeypatch.setattr("vrp.s2_stryker.find_stryker", lambda: "fake-stryker")
+    monkeypatch.setattr("vrp.s2_stryker.run_stryker", failing_run_stryker)
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "stryker-failed"
+    assert result["returncode"] == 1 and result["stderr_tail"] == "no test runner found"
+    assert not (tmp_path / ".vrp" / "stryker.conf.json").exists()
+    assert not (tmp_path / ".vrp" / "stryker-report.json").exists()
+
+
+def test_run_dispatches_by_language(facts_db, tmp_path, monkeypatch):
     for fid, qn, path in (("f1", "m.clamp", "src/clamp.ts"), ("f2", "m.safe_div", "src/safe_div.py")):
         facts_db.execute(
             "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
@@ -235,16 +330,56 @@ def test_run_filters_non_python_targets(facts_db, tmp_path, monkeypatch):
     seen: dict = {}
 
     def fake_run_mutmut(bin_path, repo, files, timeout):
-        seen["files"] = list(files)
+        seen["mutmut"] = list(files)
         cache = repo / ".mutmut-cache"
         _make_cache(cache)
         return {"ok": True, "returncode": 0, "stderr_tail": ""}
 
+    def fake_run_stryker(bin_path, repo, files, timeout):
+        seen["stryker"] = list(files)
+        (repo / ".vrp").mkdir(exist_ok=True)
+        _stryker_report(repo, [_mutant_json(2, "Killed")])
+        return {"ok": True, "returncode": 0, "stderr_tail": ""}
+
     monkeypatch.setattr("vrp.s2_mutate_run.find_mutmut", lambda: "fake-mutmut")
     monkeypatch.setattr("vrp.s2_mutate_run.run_mutmut", fake_run_mutmut)
+    monkeypatch.setattr("vrp.s2_stryker.find_stryker", lambda: "fake-stryker")
+    monkeypatch.setattr("vrp.s2_stryker.run_stryker", fake_run_stryker)
     result = run(tmp_path, facts_db, 5, 60)
     assert result["status"] == "ok"
-    assert seen["files"] == ["src/safe_div.py"]
+    assert seen["mutmut"] == ["src/safe_div.py"]
+    assert seen["stryker"] == ["src/clamp.ts"]
+    assert result["engines"] == {"mutmut": "ok", "stryker": "ok"}
+    assert result["files"] == ["src/clamp.ts", "src/safe_div.py"]
+
+
+def test_run_partial_engine_failure_stays_ok(facts_db, tmp_path, monkeypatch):
+    _seed_targets(facts_db)
+    facts_db.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES ('f9','p','m.clampTs','Function','clampTs','src/clamp.ts',1,6,'h')"
+    )
+    facts_db.execute(
+        "INSERT INTO test_linkage (test_fid, target_fid, source) VALUES ('t9', 'f9', 'cbm')"
+    )
+    facts_db.commit()
+
+    def fake_run_mutmut(bin_path, repo, files, timeout):
+        cache = repo / ".mutmut-cache"
+        _make_cache(cache)
+        return {"ok": True, "returncode": 2, "stderr_tail": ""}
+
+    monkeypatch.setattr("vrp.s2_mutate_run.find_mutmut", lambda: "fake-mutmut")
+    monkeypatch.setattr("vrp.s2_mutate_run.run_mutmut", fake_run_mutmut)
+    monkeypatch.setattr("vrp.s2_stryker.find_stryker", lambda: "fake-stryker")
+    monkeypatch.setattr(
+        "vrp.s2_stryker.run_stryker",
+        lambda bin_path, repo, files, timeout: {"ok": False, "returncode": 1, "stderr_tail": "boom"},
+    )
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "ok"
+    assert result["engines"] == {"mutmut": "ok", "stryker": "failed"}
+    assert result["findings"] == 1
 
 
 def test_run_mutmut_failed_cleans_cache(facts_db, tmp_path, monkeypatch):

@@ -120,7 +120,7 @@ def test_mutate_run_findings_and_evidence_written(mutate_repo):
         assert 0.0 <= detail["survival_rate"] <= 1.0
     assert len(evidence) == 1
     summary = json.loads(evidence[0][0])
-    assert summary["runner"] == "mutmut"
+    assert summary["engines"] == {"mutmut": "ok"}
     assert summary["survival_rate"] is not None
 
 

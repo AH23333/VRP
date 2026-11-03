@@ -1,0 +1,135 @@
+"""S2 P8 execution: Stryker adapter for JS/TS mutation runs.
+
+Stryker 10 (core + vitest-runner, sandboxed at work/stryker; VRP_STRYKER_BIN
+overrides) executes mutants against the target repo's vitest suite. Probed
+facts (work/stryker-probe, 2026-11-03):
+- config file is a POSITIONAL argument (`stryker run <config>`), JSON must be
+  BOM-free (PS 5.1 Set-Content utf8 writes a BOM - pitfall family #11)
+- json report path knob is top-level `jsonReporter.fileName` (NOT nested
+  reporterOptions - silently ignored there)
+- `tempDirName` accepts a .vrp-relative path and Stryker cleans it up itself
+- rc == 0 on success (survivors included); non-zero on any failure (missing
+  test runner, broken baseline)
+- report schemaVersion 1.0: files{relpath: {language, mutants: [{status,
+  location: {start: {line, column}}, ...}]}}; 1-based lines; use start.line
+- vitest >= 2.0.0 peer range, probed working on vitest 4.1.x
+
+Status mapping onto the six-bucket reconcile contract (s2_mutate_run):
+- Killed -> killed, Survived -> survived, Timeout -> timeout
+- NoCoverage -> survived (the suite never executes the mutant - survivor by
+  pathology, recorded raw for honesty)
+- CompileError/RuntimeError -> suspicious (engine could not evaluate)
+- unknown -> untested
+
+The adapter only finds/runs/parses/cleans; orchestration (dispatch, reconcile,
+findings, evidence) stays in s2_mutate_run.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from collections import Counter
+from pathlib import Path
+
+CONF_NAME = ".vrp/stryker.conf.json"
+REPORT_NAME = ".vrp/stryker-report.json"
+TMP_DIR_NAME = ".vrp/stryker-tmp"
+
+STRYKER_STATUS_MAP = {
+    "Killed": "killed",
+    "Survived": "survived",
+    "NoCoverage": "survived",
+    "Timeout": "timeout",
+    "CompileError": "suspicious",
+    "RuntimeError": "suspicious",
+}
+
+
+def _shim() -> Path:
+    return Path(__file__).parent.parent / "work" / "stryker" / "node_modules" / ".bin" / "stryker.cmd"
+
+
+def find_stryker() -> str | None:
+    from os import environ
+    from shutil import which
+
+    env = environ.get("VRP_STRYKER_BIN")
+    if env and Path(env).is_file():
+        return env
+    shim = _shim()
+    if shim.is_file():
+        return str(shim)
+    return which("stryker")
+
+
+def write_config(repo: Path, files: list[str]) -> Path:
+    conf = repo / CONF_NAME
+    conf.parent.mkdir(exist_ok=True)
+    conf.write_text(
+        json.dumps(
+            {
+                "testRunner": "vitest",
+                "reporters": ["json"],
+                "mutate": sorted(files),
+                "coverageAnalysis": "perTest",
+                "tempDirName": TMP_DIR_NAME,
+                "jsonReporter": {"fileName": REPORT_NAME},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return conf
+
+
+def run_stryker(bin_path: str, repo: Path, files: list[str], timeout: int) -> dict:
+    conf = write_config(repo, files)
+    try:
+        proc = subprocess.run(
+            [bin_path, "run", CONF_NAME],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "returncode": None,
+            "stdout_tail": "",
+            "stderr_tail": f"stryker timed out after {timeout}s",
+        }
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        # Stryker logs the actual failure reason (e.g. which test broke the
+        # initial dry-run) to stdout; the ConfigError stack lands on stderr
+        "stdout_tail": (proc.stdout or "")[-500:],
+        "stderr_tail": (proc.stderr or "")[-500:],
+    }
+
+
+def parse_report(report: Path) -> tuple:
+    data = json.loads(report.read_text(encoding="utf-8"))
+    records: list[dict] = []
+    raw: Counter = Counter()
+    for file_rel, entry in data.get("files", {}).items():
+        for m in entry.get("mutants", []):
+            status = m.get("status")
+            raw[status] += 1
+            records.append(
+                {
+                    "file": file_rel.replace("\\", "/"),
+                    "line": m["location"]["start"]["line"],
+                    "status": STRYKER_STATUS_MAP.get(status, "untested"),
+                }
+            )
+    return records, dict(raw)
+
+
+def cleanup(repo: Path) -> None:
+    (repo / CONF_NAME).unlink(missing_ok=True)
+    (repo / REPORT_NAME).unlink(missing_ok=True)
