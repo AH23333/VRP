@@ -14,8 +14,50 @@ import sqlite3
 DAMPING = 0.85
 TOLERANCE = 1e-6
 MAX_ITERATIONS = 40
-DEFINITION_LABELS = ("Function", "Method", "Class", "Interface", "Struct", "Enum")
+DEFINITION_LABELS = (
+    "Function",
+    "Method",
+    "Class",
+    "Interface",
+    "Struct",
+    "Enum",
+    "Type",
+    "Trait",
+    "Protocol",
+    "Macro",
+    "Union",
+    "Record",
+    "Constant",
+)
+VARIABLE_CODE_EXTENSIONS = frozenset(
+    (
+        "ts", "tsx", "js", "jsx", "mjs", "cjs",
+        "py", "pyi",
+        "go", "rs", "java", "kt", "kts", "scala", "swift", "dart",
+        "rb", "php", "cs",
+        "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "m", "mm",
+        "lua", "ex", "exs", "erl", "hrl",
+        "hs", "ml", "mli", "fs", "fsi", "fsx",
+        "clj", "cljs", "cljc", "groovy",
+        "pl", "pm", "r", "jl", "zig", "nim",
+    )
+)
 MAX_SYMBOLS_PER_FILE = 10
+
+
+def _file_extension(file_path: str) -> str:
+    name = file_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if "." not in name:
+        return ""
+    return name.rsplit(".", 1)[-1].lower()
+
+
+def is_definition_label(label: str, file_path: str) -> bool:
+    if label in DEFINITION_LABELS:
+        return True
+    if label == "Variable":
+        return _file_extension(file_path) in VARIABLE_CODE_EXTENSIONS
+    return False
 
 
 def load_graph(con: sqlite3.Connection) -> tuple[dict[str, list[str]], dict[str, dict]]:
@@ -76,7 +118,7 @@ def _ranked_definitions(con: sqlite3.Connection) -> list[tuple[float, dict]]:
     rank = pagerank(adjacency)
     ranked = []
     for fid, meta in symbols.items():
-        if meta["label"] in DEFINITION_LABELS:
+        if is_definition_label(meta["label"], meta["file_path"]):
             ranked.append((rank.get(fid, 0.0), meta))
     ranked.sort(key=lambda item: (-item[0], item[1]["qualified_name"]))
     return ranked

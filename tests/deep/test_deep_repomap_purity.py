@@ -4,9 +4,9 @@ import pytest
 
 from vrp.etl import SCHEMA_PATH
 from vrp.s5_repomap import (
-    DEFINITION_LABELS,
     MAX_SYMBOLS_PER_FILE,
     _ranked_definitions,
+    is_definition_label,
     load_graph,
     render_repomap,
 )
@@ -108,7 +108,11 @@ def test_big_repo_top_ranked_definitions_all_real(big_repo):
     assert len(ranked) >= 1000
     top = ranked[:20]
     for score, meta in top:
-        assert meta["label"] in DEFINITION_LABELS
+        assert is_definition_label(meta["label"], meta["file_path"]), meta
+        if meta["label"] == "Variable":
+            assert meta["file_path"].rsplit(".", 1)[-1].lower() in (
+                "py", "ts", "tsx", "js", "mjs", "go", "rs", "rb", "c", "java"
+            ), meta
         assert not meta["file_path"].startswith("<"), meta
         assert not meta["file_path"].startswith(">"), meta
         assert meta["file_path"] != ""
@@ -126,3 +130,36 @@ def test_repomap_max_symbols_per_file_cap():
     body = [ln for ln in out["map"].splitlines() if not ln.endswith(":")]
     assert len(body) <= MAX_SYMBOLS_PER_FILE
     assert out["truncated"] is False
+
+
+CONFIG_EXTENSIONS = (".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".xml", ".lock", ".md")
+
+
+def test_big_repo_no_config_variables_in_ranked_definitions(big_repo):
+    con = _open_ro(big_repo)
+    try:
+        ranked = _ranked_definitions(con)
+    finally:
+        con.close()
+    config_vars = [
+        meta
+        for _, meta in ranked
+        if meta["label"] == "Variable"
+        and meta["file_path"].lower().endswith(CONFIG_EXTENSIONS)
+    ]
+    assert config_vars == []
+    code_vars = [meta for _, meta in ranked if meta["label"] == "Variable"]
+    assert len(code_vars) >= 100
+
+
+def test_big_repo_render_has_no_config_file_headers(big_repo):
+    con = _open_ro(big_repo)
+    try:
+        out = render_repomap(con, char_budget=200000)
+    finally:
+        con.close()
+    headers = [ln for ln in out["map"].splitlines() if ln.endswith(":") and ln]
+    assert headers, "expected at least one file header"
+    for header in headers:
+        assert not header.lower().endswith(CONFIG_EXTENSIONS), header
+    assert out["truncated"] is False or out["truncated"] is True
