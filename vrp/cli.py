@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -381,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (RuntimeError, FileNotFoundError) as exc:
+    except (RuntimeError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
