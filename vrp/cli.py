@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
-from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, xcheck
 
 
 def _repo_arg(value: str) -> Path:
@@ -107,6 +107,17 @@ def cmd_mutate_plan(args) -> int:
         con.close()
     out = s2_mutate.write_plan(repo, targets)
     print(json.dumps({"budget": args.budget, "selected": len(targets), "plan": str(out)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_mutate_run(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        result = s2_mutate_run.run(repo, con, args.budget, args.timeout)
+    finally:
+        con.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -313,6 +324,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--budget", type=int, default=50)
     p.set_defaults(func=cmd_mutate_plan)
+
+    p = sub.add_parser("mutate-run", help="S2 P8: execute mutations via mutmut, reconcile against plan (survivors -> P8 findings + runtime evidence)")
+    p.add_argument("repo")
+    p.add_argument("--budget", type=int, default=10)
+    p.add_argument("--timeout", type=int, default=3600, help="overall mutmut timeout (s)")
+    p.set_defaults(func=cmd_mutate_run)
 
     p = sub.add_parser("validate", help="S3: anchor revalidation (active/cosmetic/stale) + coverage -> gate_results")
     p.add_argument("repo")
