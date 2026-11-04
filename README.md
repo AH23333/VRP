@@ -52,6 +52,7 @@ vrp dossier <repo> --task T1            # 五视图装配（T1-T4 预算）
 vrp transact <repo> tx.json             # 重构事务（声明→闸门→原子提交或回滚）
 vrp transact <repo> tx.json --preview   # diff 预览（difflib+difftastic 工具组，无闸门不改树）
 vrp verdicts <repo>                     # verdict 历史（open 项自动回馈进 dossier evidence）
+vrp curate <repo>                       # AI 梳理工件验收入库（.vrp/ai/ slices/structure；--reject 用户否决留痕）
 ```
 
 ## CLI 命令
@@ -70,7 +71,8 @@ vrp verdicts <repo>                     # verdict 历史（open 项自动回馈�
 | `dossier` | 七节装配（架构/简报/repomap/五视图/证据/摘要/rawpack 指针） |
 | `transact` / `transact-batch` | 重构事务单发（`--preview` diff 预览）/ 目录批处理 |
 | `verdicts` | verdict 历史查询（`--tid` 单条详情；dossier evidence 自动内嵌 open 项） |
-| `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/tx_*/query_facts 九件） |
+| `curate` | AI 梳理工件验收（slices/structure 确定性验证全过才入库；`--reject` 否决留痕 decisions 表；复验失效标 stale） |
+| `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/curate_*/tx_*/query_facts 十七件） |
 
 ## 重构事务与闸门
 
@@ -90,9 +92,9 @@ vrp verdicts <repo>                     # verdict 历史（open 项自动回馈�
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 282 例 ~35-40s（默认排除 deep）
+python -m pytest -q                        # 快速层 320 例 ~55s（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1402 例 ~10min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 1684 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 1822 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。

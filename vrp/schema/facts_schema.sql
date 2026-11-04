@@ -153,6 +153,34 @@ CREATE TABLE IF NOT EXISTS dossier_views (
 );
 CREATE INDEX IF NOT EXISTS idx_dossier_views_view ON dossier_views(view);
 
+CREATE TABLE IF NOT EXISTS slices (
+    id INTEGER PRIMARY KEY,
+    slice_id TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_slices_status ON slices(status);
+
+CREATE TABLE IF NOT EXISTS structure (
+    id INTEGER PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_target ON decisions(kind, target_id);
+
 CREATE TABLE IF NOT EXISTS baseline (
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,

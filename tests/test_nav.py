@@ -130,7 +130,7 @@ def test_nav_symbol_full_chain(tmp_path):
     assert out["callers"][0]["type"] == "CALLS"
     assert out["callees"] == []
     assert out["findings"][0]["pathology"] == "P1"
-    assert out["slices"] is None
+    assert out["slices"] == []  # 无入库业务线（curate 前默认空）
     drill = nav.nav_symbol(repo, out["callers"][0]["fid"])
     assert drill["symbol"]["qualified_name"] == "pkg.a.x"
     try:
@@ -138,6 +138,93 @@ def test_nav_symbol_full_chain(tmp_path):
         raise AssertionError("unknown fid must raise")
     except SystemExit:
         pass
+
+
+def test_nav_callers_callees_paging(tmp_path):
+    repo = _mk_repo(tmp_path)
+    target = _add_symbol(repo, "t", "pkg.t.go", "go", "pkg/t.py", 1)
+    for i in range(5):
+        _add_symbol(repo, f"c{i}", f"pkg.c.f{i}", f"f{i}", "pkg/c.py", i + 1)
+        _add_edge(repo, f"c{i}", "t", "CALLS")
+    one = nav.nav_callers(repo, target, limit=3)
+    assert one["count"] == 3
+    assert one["truncated"] is True
+    assert [n["fid"] for n in one["neighbors"]] == ["c0", "c1", "c2"]
+    full = nav.nav_callers(repo, target, limit=50)
+    assert full["truncated"] is False
+    assert full["count"] == 5
+    assert full["neighbors"][0]["qualified_name"] == "pkg.c.f0"
+    assert full["neighbors"][0]["type"] == "CALLS"
+    # callees：t 无出边
+    none = nav.nav_callees(repo, target)
+    assert none["neighbors"] == []
+    assert none["truncated"] is False
+    try:
+        nav.nav_callers(repo, " ")
+        raise AssertionError("empty fid must raise")
+    except SystemExit:
+        pass
+
+
+def test_nav_slice_lookup(tmp_path):
+    repo = _mk_repo(tmp_path)
+    f1 = _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
+    f2 = _add_symbol(repo, "f2", "pkg.b.z", "z", "pkg/b.py", 1)
+    _add_edge(repo, "f1", "f2")
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, payload_json, status) VALUES (?, ?, ?, ?, 'active')",
+        ("flow-1", "业务线", "摘要", json.dumps({
+            "steps": [{"fid": "f1", "role": "entry"}, {"fid": "f2", "role": "persist"}],
+            "acts": [{"name": "全程", "from_step": 0, "to_step": 1}],
+        })),
+    )
+    con.commit()
+    con.close()
+    out = nav.nav_slice(repo, "flow-1")
+    assert out["level"] == "slice"
+    assert out["status"] == "active"
+    assert [s["fid"] for s in out["steps"]] == ["f1", "f2"]
+    assert out["steps"][0]["role"] == "entry"
+    assert out["steps"][1]["qualified_name"] == "pkg.b.z"
+    assert out["acts"] == [{"name": "全程", "from_step": 0, "to_step": 1}]
+    try:
+        nav.nav_slice(repo, "ghost")
+        raise AssertionError("unknown slice must raise")
+    except SystemExit:
+        pass
+
+
+def test_nav_architecture_structure_branch(tmp_path):
+    repo = _mk_repo(tmp_path)
+    f1 = _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
+    f2 = _add_symbol(repo, "f2", "pkg.b.z", "z", "pkg/b.py", 1)
+    f3 = _add_symbol(repo, "f3", "pkg.b.w", "w", "pkg/b.py", 5)
+    _add_edge(repo, "f1", "f2")
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO structure (payload_json, status) VALUES (?, 'active')",
+        (json.dumps({
+            "modules": [
+                {"module_id": "m1", "name": "甲", "responsibility": "r1", "symbol_fids": ["f1"], "layer": "domain"},
+                {"module_id": "m2", "name": "乙", "responsibility": "r2", "symbol_fids": ["f2", "f3"], "layer": "service"},
+            ],
+            "layers": [
+                {"name": "domain", "may_depend_on": []},
+                {"name": "service", "may_depend_on": ["domain"]},
+            ],
+        }),),
+    )
+    con.commit()
+    con.close()
+    out = nav.nav_architecture(repo)
+    assert out["source"] == "structure"
+    assert [m["module_id"] for m in out["modules"]] == ["m1", "m2"]
+    assert out["modules"][0]["symbols"] == 1
+    assert out["modules"][0]["sample_fids"] == ["f1"]
+    assert out["module_edges"] == [{"from": "m1", "to": "m2", "count": 1}]
+    assert out["unassigned_symbols"] == 0
+    assert out["layers"][1]["may_depend_on"] == ["domain"]
 
 
 def test_query_facts_select_only_guard(tmp_path):

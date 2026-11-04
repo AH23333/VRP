@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import functools
 import json
+import sqlite3
 import tempfile
 from pathlib import Path
 
 from . import nav, s6_transact
+from . import curate as curate_mod
+from . import etl as etl_mod
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -28,7 +31,8 @@ _INSTRUCTIONS = (
     "vrp 重构循环：nav_search 定位 -> nav_module/nav_symbol 下钻核实 -> "
     "tx_preview 自查 diff -> tx_run 执行 -> tx_verdicts 读回执；"
     "失败读 failed_codes 修正后重试（每事务 <=3 次）。"
-    "生产规则见 docs/契约/事务契约.md。"
+    "梳理环节：curate_submit 提交 slices/structure（确定性验证，拒绝读收据修正重提），"
+    "nav_slice 按业务线下钻。生产规则见 docs/契约/事务契约.md 与 docs/契约/梳理工件契约.md。"
 )
 
 
@@ -37,17 +41,18 @@ def _dumps(payload) -> str:
 
 
 def _guard(fn):
-    """nav/s6 层 SystemExit/ValueError -> {"error": ...}，不炸 server。
+    """nav/s6/curate 层 SystemExit/ValueError/RuntimeError -> {"error": ...}，不炸 server。
 
     functools.wraps 保住原函数签名（inspect.signature 跟 __wrapped__），
     否则 schema 提取器看到 (*args, **kwargs) 会生成 args/kwargs 两个参数。
+    RuntimeError 含 M4 freshness 硬拒（etl.check_facts_freshness）。
     """
 
     @functools.wraps(fn)
     def wrapped(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except (SystemExit, ValueError) as exc:
+        except (SystemExit, ValueError, RuntimeError) as exc:
             return _dumps({"error": str(exc) or exc.__class__.__name__})
 
     return wrapped
@@ -59,6 +64,17 @@ def _write_temp(tx_json: str) -> Path:
     with open(fd, "w", encoding="utf-8") as f:
         f.write(tx_json)
     return tmp
+
+
+def _open_facts_rw(repo: Path) -> sqlite3.Connection:
+    """curate 族写 facts.db：ensure_schema 自动迁移新表 + M4 freshness 硬拒。"""
+    facts = repo / ".vrp" / "facts.db"
+    if not facts.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts}")
+    con = sqlite3.connect(facts)
+    etl_mod.ensure_schema(con)
+    etl_mod.check_facts_freshness(con, repo)
+    return con
 
 
 def build_server(repo: Path) -> "MCPServer":
@@ -82,6 +98,46 @@ def build_server(repo: Path) -> "MCPServer":
 
     def query_facts(sql: str, params: str = "", max_rows: int = 100) -> str:
         return _dumps(nav.query_facts(repo, sql, params, max_rows))
+
+    def nav_callers(fid: str, limit: int = 50) -> str:
+        return _dumps(nav.nav_callers(repo, fid, limit))
+
+    def nav_callees(fid: str, limit: int = 50) -> str:
+        return _dumps(nav.nav_callees(repo, fid, limit))
+
+    def nav_slice(slice_id: str) -> str:
+        return _dumps(nav.nav_slice(repo, slice_id))
+
+    def curate_submit(kind: str, payload_json: str) -> str:
+        con = _open_facts_rw(repo)
+        try:
+            return _dumps(curate_mod.curate_payload(con, kind, payload_json))
+        finally:
+            con.close()
+
+    def curate_slices() -> str:
+        con = _open_facts_rw(repo)
+        try:
+            return _dumps({"slices": curate_mod.list_slices(con)})
+        finally:
+            con.close()
+
+    def curate_structure() -> str:
+        con = _open_facts_rw(repo)
+        try:
+            return _dumps(curate_mod.get_structure(con) or {"structure": None})
+        finally:
+            con.close()
+
+    def curate_reject(kind: str, target_id: str, note: str = "") -> str:
+        con = _open_facts_rw(repo)
+        try:
+            return _dumps(curate_mod.reject(con, kind, target_id, note))
+        finally:
+            con.close()
+
+    def curate_receipt() -> str:
+        return _dumps(curate_mod.read_receipt(repo) or {"receipt": None})
 
     def tx_preview(tx_json: str) -> str:
         tmp = _write_temp(tx_json)
@@ -158,6 +214,55 @@ def build_server(repo: Path) -> "MCPServer":
         name="query_facts",
         description="轻量 SQL 直查 facts.db（只读 SELECT/WITH，单语句）；params 为 JSON 数组字符串做位置绑定；"
         "schema 见 vrp/schema/facts_schema.sql（五视图 v_hotspots/v_cycles/v_dead_code/v_dup_clusters/v_coupling）",
+    )
+    server.add_tool(
+        _guard(nav_callers),
+        name="nav_callers",
+        description="完整调用者列表（分页 limit，nav_symbol 内置 cap 20 的补充）；"
+        "truncated=true 时调大 limit；fid 句柄供 nav_symbol 下钻",
+    )
+    server.add_tool(
+        _guard(nav_callees),
+        name="nav_callees",
+        description="完整被调用者列表（分页 limit，nav_symbol 内置 cap 20 的补充）；"
+        "truncated=true 时调大 limit；fid 句柄供 nav_symbol 下钻",
+    )
+    server.add_tool(
+        _guard(nav_slice),
+        name="nav_slice",
+        description="业务线视角：steps（附符号摘要+fid 句柄）+ acts（分幕）；"
+        "slices 由 curate_submit 验收入库；status=stale 表示符号/边已漂移",
+    )
+    server.add_tool(
+        _guard(curate_submit),
+        name="curate_submit",
+        description="提交 AI 梳理工件验收入库：kind=slices（JSON 数组）|structure（JSON 对象），"
+        "payload_json 为工件原文；确定性验证全过才入库，拒绝出收据（errors 逐条含稳定码）；"
+        "schema 见 docs/契约/梳理工件契约.md",
+    )
+    server.add_tool(
+        _guard(curate_slices),
+        name="curate_slices",
+        description="列已入库业务线（slice_id/name/status/steps 计数）；"
+        "status=active 可用，stale=符号漂移待复梳理，rejected=用户否决",
+    )
+    server.add_tool(
+        _guard(curate_structure),
+        name="curate_structure",
+        description="读已入库整体结构（modules/layers/rules 原文+status）；"
+        "structure 是 S7 架构执法（远期）与 L0 地图的原料",
+    )
+    server.add_tool(
+        _guard(curate_reject),
+        name="curate_reject",
+        description="用户否决已入库工件（kind=slice|structure，target_id=slice_id 或 'structure'）："
+        "status→rejected + decisions 留痕；否决是保守方向，agent 可代转达用户决定",
+    )
+    server.add_tool(
+        _guard(curate_receipt),
+        name="curate_receipt",
+        description="读最近一次 curate 收据（.vrp/curate-receipt.json）："
+        "被拒时按 errors 码逐条修正工件后重提",
     )
     server.add_tool(
         _guard(tx_preview),

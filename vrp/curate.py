@@ -1,0 +1,415 @@
+"""S2.5 curate - AI 梳理工件验收入库（构想v7 §2/§3.2）。
+
+点线面三层中的线（slices）与面（structure）：AI 产出 JSON 文件落
+`.vrp/ai/`，本模块确定性验证（全过才入库 / 任一不过整文件拒绝出收据），
+`--reject` 用户否决留痕（decisions 表）。
+
+纯标准库；写 facts.db 受 M4 freshness 硬拒（调用方用 _open_facts_rw）。
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
+# 相邻 steps 之间视为"真实边"的边类型（v7 §2.2：CALLS/CALL_REFERENCE/HTTP_CALLS 任一方向）
+SLICE_EDGE_TYPES = ("CALLS", "CALL_REFERENCE", "HTTP_CALLS")
+
+SLICE_ROLES = frozenset({"entry", "process", "branch", "persist", "respond"})
+
+AI_DIR_NAME = ".vrp/ai"
+RECEIPT_NAME = ".vrp/curate-receipt.json"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _err(code: str, detail: str, **loc) -> dict:
+    item = {"code": code, "detail": detail}
+    item.update({k: v for k, v in loc.items() if v is not None})
+    return item
+
+
+# ---------------------------------------------------------------- validation
+
+
+def _validate_one_slice(con: sqlite3.Connection, raw: object) -> list[dict]:
+    errors: list[dict] = []
+    if not isinstance(raw, dict):
+        return [_err("SLICE_SCHEMA", "slice 必须是 JSON 对象")]
+    slice_id = raw.get("slice_id")
+    if not isinstance(slice_id, str) or not slice_id.strip():
+        return [_err("SLICE_SCHEMA", "slice_id 必须是非空字符串")]
+    for field, code in (("name", "SLICE_EMPTY_NAME"), ("summary", "SLICE_EMPTY_SUMMARY")):
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(_err(code, f"{field} 必须是非空字符串", slice_id=slice_id))
+    steps = raw.get("steps")
+    if not isinstance(steps, list) or not steps:
+        errors.append(_err("SLICE_SCHEMA", "steps 必须是非空数组", slice_id=slice_id))
+        return errors
+    fids: list[str] = []
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict) or not isinstance(step.get("fid"), str) or not step["fid"]:
+            errors.append(_err("SLICE_SCHEMA", f"steps[{i}] 必须是含非空 fid 的对象", slice_id=slice_id, step=i))
+            fids.append("")
+            continue
+        fid = step["fid"]
+        fids.append(fid)
+        role = step.get("role", "process")
+        if role not in SLICE_ROLES:
+            errors.append(_err("SLICE_SCHEMA", f"steps[{i}].role 非法: {role!r}", slice_id=slice_id, step=i))
+        if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is None:
+            errors.append(_err("SLICE_UNKNOWN_FID", f"steps[{i}].fid 不在 facts.db symbols", slice_id=slice_id, step=i))
+    for i in range(len(fids) - 1):
+        a, b = fids[i], fids[i + 1]
+        if not a or not b:
+            continue
+        row = con.execute(
+            "SELECT 1 FROM edges WHERE ((src_fid = ? AND dst_fid = ?) OR (src_fid = ? AND dst_fid = ?))"
+            f" AND type IN ({','.join('?' * len(SLICE_EDGE_TYPES))})",
+            (a, b, b, a, *SLICE_EDGE_TYPES),
+        ).fetchone()
+        if row is None:
+            errors.append(
+                _err("SLICE_MISSING_EDGE", f"steps[{i}]→steps[{i + 1}] 之间无边（{'+'.join(SLICE_EDGE_TYPES)} 任一方向）",
+                     slice_id=slice_id, step=i)
+            )
+    acts = raw.get("acts")
+    if acts is not None:
+        if not isinstance(acts, list) or not acts:
+            errors.append(_err("SLICE_ACT_BOUNDS", "acts 存在时必须是非空数组", slice_id=slice_id))
+        else:
+            prev_to = -1
+            for i, act in enumerate(acts):
+                if not isinstance(act, dict) or not isinstance(act.get("name"), str) or not act["name"].strip():
+                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] 必须是含非空 name 的对象", slice_id=slice_id))
+                    continue
+                lo, hi = act.get("from_step"), act.get("to_step")
+                if not isinstance(lo, int) or not isinstance(hi, int) or not (0 <= lo <= hi < len(steps)):
+                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] 边界非法: [{lo}, {hi}]", slice_id=slice_id))
+                    continue
+                if lo != prev_to + 1:
+                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] 必须无缝衔接前一幕（期望 from_step={prev_to + 1}）",
+                                       slice_id=slice_id))
+                prev_to = hi
+            if prev_to != len(steps) - 1:
+                errors.append(_err("SLICE_ACT_BOUNDS", f"acts 必须覆盖全部 steps（末幕 to_step 应为 {len(steps) - 1}）",
+                                   slice_id=slice_id))
+    return errors
+
+
+def _validate_structure(con: sqlite3.Connection, raw: object) -> list[dict]:
+    errors: list[dict] = []
+    if not isinstance(raw, dict):
+        return [_err("STRUCT_SCHEMA", "structure 必须是 JSON 对象")]
+    modules = raw.get("modules")
+    if not isinstance(modules, list) or not modules:
+        return [_err("STRUCT_SCHEMA", "modules 必须是非空数组")]
+    layers = raw.get("layers")
+    if not isinstance(layers, list) or not layers:
+        return errors + [_err("STRUCT_SCHEMA", "layers 必须是非空数组")]
+    layer_names: list[str] = []
+    deps: dict[str, list[str]] = {}
+    for i, layer in enumerate(layers):
+        if not isinstance(layer, dict) or not isinstance(layer.get("name"), str) or not layer["name"].strip():
+            errors.append(_err("STRUCT_SCHEMA", f"layers[{i}] 必须是含非空 name 的对象"))
+            continue
+        name = layer["name"]
+        if name in deps:
+            errors.append(_err("STRUCT_SCHEMA", f"层名重复: {name}", layer=name))
+            continue
+        layer_names.append(name)
+        may = layer.get("may_depend_on", [])
+        if not isinstance(may, list) or any(not isinstance(x, str) for x in may):
+            errors.append(_err("STRUCT_SCHEMA", f"layers[{name}].may_depend_on 必须是字符串数组", layer=name))
+            continue
+        deps[name] = may
+    for name, may in deps.items():
+        for target in may:
+            if target not in deps:
+                errors.append(_err("STRUCT_UNKNOWN_LAYER", f"层 {name} 依赖不存在的层: {target}", layer=name))
+    # 层依赖 DAG 检查（白灰黑 DFS）
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {name: WHITE for name in deps}
+
+    def has_cycle(node: str) -> str | None:
+        color[node] = GRAY
+        for nxt in deps.get(node, []):
+            if nxt not in deps:
+                continue
+            if color[nxt] == GRAY:
+                return f"{node} -> {nxt}"
+            if color[nxt] == WHITE:
+                found = has_cycle(nxt)
+                if found:
+                    return found
+        color[node] = BLACK
+        return None
+
+    for name in deps:
+        if color[name] == WHITE:
+            cycle = has_cycle(name)
+            if cycle:
+                errors.append(_err("STRUCT_LAYER_CYCLE", f"may_depend_on 有环: {cycle}"))
+                break
+    seen_fid: dict[str, str] = {}
+    for i, mod in enumerate(modules):
+        if not isinstance(mod, dict):
+            errors.append(_err("STRUCT_SCHEMA", f"modules[{i}] 必须是 JSON 对象"))
+            continue
+        mid = mod.get("module_id") if isinstance(mod.get("module_id"), str) else f"modules[{i}]"
+        for field, code in (("name", "STRUCT_EMPTY_NAME"), ("responsibility", "STRUCT_EMPTY_RESPONSIBILITY"),
+                            ("module_id", "STRUCT_SCHEMA")):
+            value = mod.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(_err(code, f"{field} 必须是非空字符串", module=mid))
+        layer = mod.get("layer")
+        if not isinstance(layer, str) or not layer.strip():
+            errors.append(_err("STRUCT_SCHEMA", "layer 必须是非空字符串", module=mid))
+        elif layer not in deps:
+            errors.append(_err("STRUCT_UNKNOWN_LAYER", f"module.layer 不在 layers: {layer}", module=mid))
+        fids = mod.get("symbol_fids")
+        if not isinstance(fids, list) or not fids or any(not isinstance(x, str) or not x for x in fids):
+            errors.append(_err("STRUCT_SCHEMA", "symbol_fids 必须是非空字符串数组", module=mid))
+            continue
+        for fid in fids:
+            if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is None:
+                errors.append(_err("STRUCT_UNKNOWN_FID", f"fid 不在 facts.db symbols", module=mid, fid=fid))
+            if fid in seen_fid:
+                errors.append(_err("STRUCT_FID_OVERLAP", f"fid 同属 {seen_fid[fid]} 与 {mid}", module=mid, fid=fid))
+            else:
+                seen_fid[fid] = mid
+    rules = raw.get("rules")
+    if rules is not None:
+        if not isinstance(rules, list) or any(not isinstance(r, dict) for r in rules):
+            errors.append(_err("STRUCT_SCHEMA", "rules 存在时必须是对象数组"))
+        else:
+            for i, rule in enumerate(rules):
+                if not isinstance(rule.get("rule"), str) or not rule["rule"].strip():
+                    errors.append(_err("STRUCT_SCHEMA", f"rules[{i}].rule 必须是非空字符串"))
+                for field in ("from_layer", "to_layer"):
+                    value = rule.get(field)
+                    if value is not None and (not isinstance(value, str) or value not in deps):
+                        errors.append(_err("STRUCT_RULE_LAYER", f"rules[{i}].{field} 不在 layers: {value!r}"))
+    return errors
+
+
+# ------------------------------------------------------------------- ingest
+
+
+def _ingest_slices(con: sqlite3.Connection, items: list[dict]) -> int:
+    for raw in items:
+        con.execute("DELETE FROM slices WHERE slice_id = ?", (raw["slice_id"],))
+        con.execute(
+            "INSERT INTO slices (slice_id, name, summary, payload_json, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)",
+            (raw["slice_id"], raw["name"], raw["summary"], json.dumps(raw, ensure_ascii=False), _now()),
+        )
+    con.commit()
+    return len(items)
+
+
+def _ingest_structure(con: sqlite3.Connection, raw: dict) -> None:
+    con.execute("DELETE FROM structure")
+    con.execute(
+        "INSERT INTO structure (payload_json, status, created_at) VALUES (?, 'active', ?)",
+        (json.dumps(raw, ensure_ascii=False), _now()),
+    )
+    con.commit()
+
+
+# ----------------------------------------------------------- stale revalidate
+
+
+def _revalidate_ingested(con: sqlite3.Connection) -> dict:
+    """复验已入库 active 工件：fid/边失效者标 stale（防漂移，v7 §2.2）。"""
+    stale_slices: list[str] = []
+    for slice_id, payload_json in con.execute(
+        "SELECT slice_id, payload_json FROM slices WHERE status = 'active'"
+    ).fetchall():
+        try:
+            raw = json.loads(payload_json)
+        except json.JSONDecodeError:
+            stale_slices.append(slice_id)
+            continue
+        ok = True
+        for step in raw.get("steps", []):
+            if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (step.get("fid", ""),)).fetchone() is None:
+                ok = False
+                break
+        if ok:
+            fids = [s.get("fid", "") for s in raw.get("steps", [])]
+            for i in range(len(fids) - 1):
+                a, b = fids[i], fids[i + 1]
+                row = con.execute(
+                    "SELECT 1 FROM edges WHERE ((src_fid = ? AND dst_fid = ?) OR (src_fid = ? AND dst_fid = ?))"
+                    f" AND type IN ({','.join('?' * len(SLICE_EDGE_TYPES))})",
+                    (a, b, b, a, *SLICE_EDGE_TYPES),
+                ).fetchone()
+                if row is None:
+                    ok = False
+                    break
+        if not ok:
+            con.execute("UPDATE slices SET status = 'stale' WHERE slice_id = ?", (slice_id,))
+            stale_slices.append(slice_id)
+    structure_stale = False
+    row = con.execute("SELECT id, payload_json FROM structure WHERE status = 'active'").fetchone()
+    if row is not None:
+        try:
+            raw = json.loads(row[1])
+        except json.JSONDecodeError:
+            raw = None
+        ok = raw is not None
+        if ok:
+            for mod in raw.get("modules", []):
+                for fid in mod.get("symbol_fids", []):
+                    if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is None:
+                        ok = False
+                        break
+                if not ok:
+                    break
+        if not ok:
+            con.execute("UPDATE structure SET status = 'stale' WHERE id = ?", (row[0],))
+            structure_stale = True
+    con.commit()
+    return {"slices": stale_slices, "structure": structure_stale}
+
+
+# ------------------------------------------------------------------ curate
+
+
+def curate(repo: Path, con: sqlite3.Connection) -> dict:
+    """扫描 .vrp/ai/ → 验证 → 入库/拒收；返回收据并落盘 .vrp/curate-receipt.json。"""
+    ai_dir = repo / ".vrp" / "ai"
+    receipt: dict = {"curated_at": _now(), "files": []}
+    if ai_dir.is_dir():
+        for filename, kind in (("slices.json", "slices"), ("structure.json", "structure")):
+            path = ai_dir / filename
+            if not path.is_file():
+                continue
+            entry = _curate_file(con, path, kind)
+            receipt["files"].append(entry)
+    receipt["stale"] = _revalidate_ingested(con)
+    receipt_path = repo / RECEIPT_NAME
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
+    return receipt
+
+
+def _curate_file(con: sqlite3.Connection, path: Path, kind: str) -> dict:
+    entry: dict = {"file": f".vrp/ai/{path.name}", "kind": kind, "status": "rejected",
+                   "accepted": 0, "rejected": 0, "errors": []}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        entry["errors"].append(_err("FILE_NOT_JSON", f"无法读取/解析: {exc}"))
+        return entry
+    if kind == "slices":
+        if not isinstance(raw, list):
+            entry["errors"].append(_err("FILE_WRONG_SHAPE", "slices.json 必须是 JSON 数组"))
+            return entry
+        for item in raw:
+            errors = _validate_one_slice(con, item)
+            if errors:
+                entry["rejected"] += 1
+                entry["errors"].extend(errors)
+        if entry["rejected"] == 0:
+            _ingest_slices(con, raw)
+            entry["status"], entry["accepted"] = "accepted", len(raw)
+        else:
+            entry["rejected"] = len(raw)
+    else:
+        errors = _validate_structure(con, raw)
+        if errors:
+            entry["errors"].extend(errors)
+            return entry
+        _ingest_structure(con, raw)
+        entry["status"], entry["accepted"] = "accepted", 1
+    return entry
+
+
+def curate_payload(con: sqlite3.Connection, kind: str, payload_json: str) -> dict:
+    """MCP curate_submit 用：内存验证+入库，返回单文件收据（不入 .vrp/ai/）。"""
+    try:
+        raw = json.loads(payload_json)
+    except json.JSONDecodeError as exc:
+        return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": 1,
+                "errors": [_err("FILE_NOT_JSON", f"payload 不是合法 JSON: {exc}")]}
+    if kind == "slices":
+        if not isinstance(raw, list):
+            return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": 1,
+                    "errors": [_err("FILE_WRONG_SHAPE", "slices payload 必须是 JSON 数组")]}
+        errors: list[dict] = []
+        for item in raw:
+            errors.extend(_validate_one_slice(con, item))
+        if errors:
+            return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": len(raw), "errors": errors}
+        _ingest_slices(con, raw)
+        return {"kind": kind, "status": "accepted", "accepted": len(raw), "rejected": 0, "errors": []}
+    if kind == "structure":
+        errors = _validate_structure(con, raw)
+        if errors:
+            return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": 1, "errors": errors}
+        _ingest_structure(con, raw)
+        return {"kind": kind, "status": "accepted", "accepted": 1, "rejected": 0, "errors": []}
+    raise SystemExit(f"kind 必须是 slices 或 structure: {kind}")
+
+
+def list_slices(con: sqlite3.Connection) -> list[dict]:
+    rows = con.execute(
+        "SELECT slice_id, name, summary, status, created_at, payload_json FROM slices ORDER BY slice_id"
+    ).fetchall()
+    out: list[dict] = []
+    for slice_id, name, summary, status, created_at, payload_json in rows:
+        try:
+            steps = len(json.loads(payload_json).get("steps", []))
+        except json.JSONDecodeError:
+            steps = 0
+        out.append({"slice_id": slice_id, "name": name, "summary": summary, "status": status,
+                    "steps": steps, "created_at": created_at})
+    return out
+
+
+def get_structure(con: sqlite3.Connection) -> dict | None:
+    row = con.execute(
+        "SELECT payload_json, status, created_at FROM structure ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row[0])
+    except json.JSONDecodeError:
+        payload = None
+    return {"payload": payload, "status": row[1], "created_at": row[2]}
+
+
+def read_receipt(repo: Path) -> dict | None:
+    path = repo / RECEIPT_NAME
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def reject(con: sqlite3.Connection, kind: str, target_id: str, note: str = "") -> dict:
+    """用户否决已入库工件：status→rejected + decisions 留痕（v7 §3.2）。"""
+    if kind == "slice":
+        cur = con.execute("UPDATE slices SET status = 'rejected' WHERE slice_id = ?", (target_id,))
+    elif kind == "structure":
+        cur = con.execute("UPDATE structure SET status = 'rejected' WHERE id = (SELECT MAX(id) FROM structure)")
+    else:
+        raise SystemExit(f"kind 必须是 slice 或 structure: {kind}")
+    if cur.rowcount == 0:
+        raise SystemExit(f"未找到可否决的工件: {kind} {target_id}")
+    con.execute(
+        "INSERT INTO decisions (kind, target_id, decision, note, created_at) VALUES (?, ?, 'reject', ?, ?)",
+        (kind, target_id, note, _now()),
+    )
+    con.commit()
+    return {"kind": kind, "target_id": target_id, "status": "rejected", "note": note}

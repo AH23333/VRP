@@ -78,4 +78,7 @@ def test_owned_tables_constant():
         "dossier_views",
         "baseline",
         "runtime_evidence",
+        "slices",
+        "structure",
+        "decisions",
     }

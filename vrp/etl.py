@@ -80,6 +80,9 @@ OWNED_TABLES = (
     "dossier_views",
     "baseline",
     "runtime_evidence",
+    "slices",
+    "structure",
+    "decisions",
 )
 
 

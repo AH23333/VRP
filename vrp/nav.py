@@ -4,7 +4,9 @@
 - nav_search       符号搜索（AI 入口），返回 fid 句柄
 - nav_architecture L0 全局地图（structure 表优先；缺失时目录聚合兜底）
 - nav_module       L1 文件级：符号清单 + 病理摘要，返回 fid 句柄
-- nav_symbol       L2 符号级：签名/行号/调用关系/病理，返回 edge 句柄
+- nav_symbol       L2 符号级：签名/行号/调用关系/病理/所属业务线，返回 edge 句柄
+- nav_callers/callees L2 调用关系完整列表（分页，nav_symbol 内 cap 20 的补充）
+- nav_slice        业务线视角（slices 表，curate 验收入库后可用）
 - query_facts      轻量直查（mode=ro + SELECT 白名单校验）
 
 句柄语义：fid = sha256(project|qualified_name|content_hash)——同一 facts.db 快照内稳定，
@@ -24,7 +26,12 @@ SYMBOL_NEIGHBOR_CAP = 20
 SEARCH_DEFAULT_LIMIT = 20
 SEARCH_MAX_LIMIT = 100
 ARCH_MODULES_CAP = 50
+ARCH_MOD_EDGES_CAP = 100
 QUERY_MAX_ROWS = 100
+NEIGHBOR_LIST_MAX_LIMIT = 200
+NEIGHBOR_LIST_DEFAULT_LIMIT = 50
+SYMBOL_SLICES_CAP = 10
+FID_CHUNK = 500
 
 _SELECT_HEADS = ("select", "with")
 
@@ -128,18 +135,68 @@ def _architecture_dir_fallback(con: sqlite3.Connection) -> dict:
         "total_symbols": sum(sym_by_file.values()),
         "total_findings": sum(find_by_file.values()),
         "modules": modules,
-        "note": "structure 表缺失（R2' curate 后填充），目录聚合兜底；"
+        "note": "structure 无 active 行（curate 验收入库后填充），目录聚合兜底；"
         "module 下钻句柄 = file_path（nav_module）",
     }
 
 
 def _architecture_from_structure(con: sqlite3.Connection) -> dict:
-    rows = [dict(r) for r in con.execute("SELECT * FROM structure ORDER BY path")]
+    """structure 存在且 active：组件=modules、分层=layers、依赖=实测模块间边（v7 §5.3 L0）。"""
+    row = con.execute(
+        "SELECT payload_json FROM structure WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return _architecture_dir_fallback(con)
+    try:
+        payload = json.loads(row[0])
+    except json.JSONDecodeError:
+        return _architecture_dir_fallback(con)
+    modules_raw = payload.get("modules", [])
+    layers = payload.get("layers", [])
+    fid_to_mod: dict[str, str] = {}
+    modules: list[dict] = []
+    for mod in modules_raw:
+        mid = mod.get("module_id", "")
+        fids = mod.get("symbol_fids", [])
+        for fid in fids:
+            fid_to_mod[fid] = mid
+        modules.append({
+            "module_id": mid,
+            "name": mod.get("name", ""),
+            "responsibility": mod.get("responsibility", ""),
+            "layer": mod.get("layer", ""),
+            "symbols": len(fids),
+            "sample_fids": fids[:5],
+        })
+    modules = sorted(modules, key=lambda m: m["module_id"])[:ARCH_MODULES_CAP]
+    mod_edges: dict[tuple[str, str], int] = {}
+    fids = list(fid_to_mod)
+    for i in range(0, len(fids), FID_CHUNK):
+        chunk = fids[i:i + FID_CHUNK]
+        marks = ",".join("?" * len(chunk))
+        for src, dst in con.execute(
+            f"SELECT src_fid, dst_fid FROM edges WHERE src_fid IN ({marks}) AND dst_fid IN ({marks})",
+            (*chunk, *chunk),
+        ):
+            a = fid_to_mod.get(src)
+            b = fid_to_mod.get(dst)
+            if a and b and a != b:
+                mod_edges[(a, b)] = mod_edges.get((a, b), 0) + 1
+    edges = [
+        {"from": a, "to": b, "count": n}
+        for (a, b), n in sorted(mod_edges.items(), key=lambda kv: (-kv[1], kv[0]))[:ARCH_MOD_EDGES_CAP]
+    ]
     return {
         "level": "L0",
-        "fallback": None,
-        "structures": rows,
-        "note": "structure 表为 AI 梳理固化产物（R2' curate 验收入库）",
+        "source": "structure",
+        "layers": layers,
+        "modules": modules,
+        "module_edges": edges,
+        "unassigned_symbols": con.execute(
+            "SELECT COUNT(*) FROM symbols WHERE file_path != '' AND file_path NOT GLOB '<*' AND file_path NOT GLOB '>*'"
+        ).fetchone()[0] - len(fid_to_mod),
+        "note": "structure 为 AI 梳理固化产物（curate 验收入库）；module_edges 为实测模块间边（fid 归属聚合）；"
+        "sample_fids/nav_search 供 nav_symbol 下钻",
     }
 
 
@@ -240,6 +297,7 @@ def nav_symbol(repo: Path, fid: str) -> dict:
                 (fid, MODULE_FINDINGS_CAP),
             )
         ]
+        slices = _slices_of(con, fid)
     finally:
         con.close()
     return {
@@ -248,9 +306,120 @@ def nav_symbol(repo: Path, fid: str) -> dict:
         "callers": callers,
         "callees": callees,
         "findings": findings,
-        "slices": None,
+        "slices": slices,
         "note": "callers/callees 的 fid 句柄可继续 nav_symbol 下钻（全链可查）；"
-        "slices 待 R2' curate 入库后填充",
+        "slices = 含此符号的业务线（nav_slice 下钻）",
+    }
+
+
+def _slices_of(con: sqlite3.Connection, fid: str) -> list[dict]:
+    """含指定符号的 active 业务线（LIKE 粗筛 + python 精确核对）。"""
+    out: list[dict] = []
+    like = f'%{fid}%'
+    for slice_id, name, payload_json in con.execute(
+        "SELECT slice_id, name, payload_json FROM slices WHERE status = 'active' AND payload_json LIKE ?",
+        (like,),
+    ).fetchall():
+        try:
+            steps = json.loads(payload_json).get("steps", [])
+        except json.JSONDecodeError:
+            continue
+        for i, step in enumerate(steps):
+            if isinstance(step, dict) and step.get("fid") == fid:
+                out.append({"slice_id": slice_id, "name": name, "step": i})
+                break
+        if len(out) >= SYMBOL_SLICES_CAP:
+            break
+    return out
+
+
+def nav_callers(repo: Path, fid: str, limit: int = NEIGHBOR_LIST_DEFAULT_LIMIT) -> dict:
+    """完整调用者列表（nav_symbol 内 cap 20，本件带 limit 分页）。"""
+    return _neighbors(repo, fid, limit, direction="callers")
+
+
+def nav_callees(repo: Path, fid: str, limit: int = NEIGHBOR_LIST_DEFAULT_LIMIT) -> dict:
+    """完整被调用者列表（nav_symbol 内 cap 20，本件带 limit 分页）。"""
+    return _neighbors(repo, fid, limit, direction="callees")
+
+
+def _neighbors(repo: Path, fid: str, limit: int, direction: str) -> dict:
+    fid = fid.strip()
+    if not fid:
+        raise SystemExit(f"nav_{direction}: fid must be non-empty")
+    limit = max(1, min(int(limit), NEIGHBOR_LIST_MAX_LIMIT))
+    con = _connect_ro(repo)
+    try:
+        if direction == "callers":
+            join_on, where = "s.fid = e.src_fid", "e.dst_fid = ?"
+        else:
+            join_on, where = "s.fid = e.dst_fid", "e.src_fid = ?"
+        rows = con.execute(
+            f"""
+            SELECT s.fid, s.qualified_name, s.name, s.file_path, s.start_line,
+                   e.type, e.evidence, e.confidence, e.line
+            FROM edges e JOIN symbols s ON {join_on}
+            WHERE {where} ORDER BY e.type, s.qualified_name LIMIT ?
+            """,
+            (fid, limit + 1),
+        ).fetchall()
+    finally:
+        con.close()
+    truncated = len(rows) > limit
+    return {
+        "level": "L2",
+        "fid": fid,
+        "direction": direction,
+        "neighbors": [dict(r) for r in rows[:limit]],
+        "count": min(len(rows), limit),
+        "truncated": truncated,
+        "note": "超 limit 截断（truncated=true 时调大 limit）；fid 句柄供 nav_symbol 下钻",
+    }
+
+
+def nav_slice(repo: Path, slice_id: str) -> dict:
+    """业务线视角：steps（附符号摘要句柄）+ acts（分幕）。"""
+    slice_id = slice_id.strip()
+    if not slice_id:
+        raise SystemExit("nav_slice: slice_id must be non-empty")
+    con = _connect_ro(repo)
+    try:
+        row = con.execute(
+            "SELECT name, summary, status, payload_json, created_at FROM slices WHERE slice_id = ?",
+            (slice_id,),
+        ).fetchone()
+        if row is None:
+            raise SystemExit(f"nav_slice: unknown slice_id: {slice_id}")
+        name, summary, status, payload_json, created_at = row
+        payload = json.loads(payload_json)
+        steps: list[dict] = []
+        for i, step in enumerate(payload.get("steps", [])):
+            fid = step.get("fid", "")
+            sym = con.execute(
+                "SELECT qualified_name, name, file_path, start_line FROM symbols WHERE fid = ?",
+                (fid,),
+            ).fetchone()
+            entry = {"step": i, "fid": fid, "role": step.get("role", "process"), "note": step.get("note", "")}
+            if sym is not None:
+                entry["qualified_name"] = sym["qualified_name"]
+                entry["file_path"] = sym["file_path"]
+                entry["start_line"] = sym["start_line"]
+            else:
+                entry["missing"] = True
+            steps.append(entry)
+        acts = payload.get("acts", [])
+    finally:
+        con.close()
+    return {
+        "level": "slice",
+        "slice_id": slice_id,
+        "name": name,
+        "summary": summary,
+        "status": status,
+        "created_at": created_at,
+        "steps": steps,
+        "acts": acts,
+        "note": "status=stale 表示符号/边已漂移（复验失效）；step.fid 句柄供 nav_symbol 下钻",
     }
 
 

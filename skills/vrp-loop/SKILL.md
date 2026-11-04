@@ -49,3 +49,8 @@ description: 用 vrp MCP 工具执行 AI 重构循环：导航定位→下钻核
 - **不放行 T4**（needs_confirmation 即停，转人工）
 - **重试 ≤3 次**/事务
 - **不虚构 fid/qualified_name**（接口查不到就是不存在的处理路径）
+
+## 关联
+
+- ②环梳理（业务线/结构沉淀）走 `skills/vrp-curation/`（curate_submit 验收入库 → nav_slice 下钻）
+- 事务 schema 权威：`docs/契约/事务契约.md`；梳理工件 schema 权威：`docs/契约/梳理工件契约.md`

@@ -16,7 +16,15 @@ TOOL_NAMES = {
     "nav_architecture",
     "nav_module",
     "nav_symbol",
+    "nav_callers",
+    "nav_callees",
+    "nav_slice",
     "query_facts",
+    "curate_submit",
+    "curate_slices",
+    "curate_structure",
+    "curate_reject",
+    "curate_receipt",
     "tx_preview",
     "tx_submit",
     "tx_run",
@@ -33,6 +41,12 @@ def _mk_repo(tmp_path: Path) -> Path:
         "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
         " VALUES ('f1', 'p', 'pkg.calc.total', 'Function', 'total', 'pkg/calc.py', 1, 3, 'h')"
     )
+    con.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES ('f2', 'p', 'pkg.calc.double', 'Function', 'double', 'pkg/calc.py', 5, 7, 'h')"
+    )
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES ('f1', 'f2', 'CALLS', 'structural')")
+    con.execute("INSERT INTO meta (key, value) VALUES ('git_head', '')")  # M4: 非 git 仓 = ''
     con.commit()
     con.close()
     (repo / "pkg").mkdir()
@@ -126,7 +140,7 @@ def test_nav_chain_over_mcp(tmp_path):
     assert out["search"]["results"][0]["qualified_name"] == "pkg.calc.total"
     assert out["mod"]["symbols"][0]["fid"] == "f1"
     assert out["sym"]["symbol"]["qualified_name"] == "pkg.calc.total"
-    assert out["facts"]["rows"] == [{"n": 1}]
+    assert out["facts"]["rows"] == [{"n": 2}]
     assert out["arch"]["fallback"] == "dir-aggregation"
 
 
@@ -216,6 +230,64 @@ def test_tx_run_stages_transaction_then_calls_transact(tmp_path, monkeypatch):
     out = _run(_drive(repo, {"plan": plan}))["plan"]
     assert out["status"] == "committed"
     assert staged and staged[0].parent == repo / ".vrp" / "transactions"
+
+
+def test_curate_flow_over_mcp(tmp_path):
+    """curate 五件 + nav 三件 over MCP：submit 验收入库 -> 读回 -> reject 留痕 -> receipt。"""
+
+    slices_ok = json.dumps([{
+        "slice_id": "calc-flow",
+        "name": "计算线",
+        "summary": "total 调 double",
+        "steps": [{"fid": "f1", "role": "entry"}, {"fid": "f2", "role": "process"}],
+    }], ensure_ascii=False)
+    slices_bad = json.dumps([{
+        "slice_id": "bad-flow", "name": "n", "summary": "s",
+        "steps": [{"fid": "ghost", "role": "entry"}],
+    }])
+    structure_ok = json.dumps({
+        "modules": [{"module_id": "m1", "name": "计算", "responsibility": "算", "symbol_fids": ["f1", "f2"], "layer": "domain"}],
+        "layers": [{"name": "domain", "may_depend_on": []}],
+    }, ensure_ascii=False)
+
+    async def plan(session: ClientSession):
+        accept = await _call(session, "curate_submit", {"kind": "slices", "payload_json": slices_ok})
+        reject = await _call(session, "curate_submit", {"kind": "slices", "payload_json": slices_bad})
+        st = await _call(session, "curate_submit", {"kind": "structure", "payload_json": structure_ok})
+        listing = await _call(session, "curate_slices", {})
+        struct = await _call(session, "curate_structure", {})
+        arch = await _call(session, "nav_architecture", {})
+        sl = await _call(session, "nav_slice", {"slice_id": "calc-flow"})
+        callers = await _call(session, "nav_callers", {"fid": "f2"})
+        veto = await _call(session, "curate_reject", {"kind": "slice", "target_id": "calc-flow", "note": "n"})
+        after = await _call(session, "curate_slices", {})
+        return {"accept": accept, "reject": reject, "st": st, "listing": listing, "struct": struct,
+                "arch": arch, "sl": sl, "callers": callers, "veto": veto, "after": after}
+
+    repo = _mk_repo(tmp_path)
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert out["accept"]["status"] == "accepted"
+    assert out["accept"]["accepted"] == 1
+    assert out["reject"]["status"] == "rejected"
+    assert out["reject"]["errors"][0]["code"] == "SLICE_UNKNOWN_FID"
+    assert out["st"]["status"] == "accepted"  # structure submit 收据（读回看 struct.status=active）
+    assert out["listing"]["slices"][0]["slice_id"] == "calc-flow"
+    assert out["listing"]["slices"][0]["steps"] == 2
+    assert out["struct"]["status"] == "active"
+    assert out["struct"]["payload"]["modules"][0]["module_id"] == "m1"
+    assert out["arch"]["source"] == "structure"
+    assert out["arch"]["module_edges"] == []  # f1->f2 同属 m1，模块间边不计自身
+    assert out["sl"]["status"] == "active"
+    assert out["sl"]["steps"][1]["qualified_name"] == "pkg.calc.double"
+    assert out["callers"]["neighbors"][0]["fid"] == "f1"
+    assert out["veto"]["status"] == "rejected"
+    assert out["after"]["slices"][0]["status"] == "rejected"
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        assert con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 1
+        assert con.execute("SELECT note FROM decisions").fetchone()[0] == "n"
+    finally:
+        con.close()
 
 
 def test_cli_mcp_wiring(tmp_path, monkeypatch):

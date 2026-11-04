@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import __version__
 from . import etl as etl_mod
+from . import curate as curate_mod
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, xcheck
 
 
@@ -290,6 +291,26 @@ def cmd_transact_batch(args) -> int:
     return 0 if all_committed else 1
 
 
+def cmd_curate(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        if args.reject:
+            target = args.reject
+            if target == "structure":
+                result = curate_mod.reject(con, "structure", "structure", args.note or "")
+            else:
+                result = curate_mod.reject(con, "slice", target, args.note or "")
+        else:
+            result = curate_mod.curate(repo, con)
+    finally:
+        con.close()
+    _print_step("S2.5 curate", result)
+    if args.reject:
+        return 0
+    return 1 if any(f.get("status") == "rejected" for f in result.get("files", [])) else 0
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -436,6 +457,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--tid", help="show the full verdict JSON for one transaction id")
     p.set_defaults(func=cmd_verdicts)
+
+    p = sub.add_parser(
+        "curate",
+        help="S2.5: curate AI combing artifacts (.vrp/ai/slices.json + structure.json -> validate -> ingest; --reject to veto)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--reject", help="veto an ingested artifact: a slice_id or the literal 'structure'")
+    p.add_argument("--note", help="optional decision note recorded with --reject")
+    p.set_defaults(func=cmd_curate)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")
