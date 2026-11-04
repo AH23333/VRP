@@ -4,8 +4,10 @@ Seven sections assembled under a task-typed budget profile (T1 equivalent
 refactor / T2 cleanup / T3 fix-up / T4 improvement, v2 gate-matrix taxonomy):
 architecture (CBM get_architecture), repo_map_brief (code-atlas MCP),
 repomap (aider-algorithm port on facts.db), sql_views (five facts.db views),
-evidence (discrepancy_ledger + runtime_evidence, the AI consumption surface),
-summary (findings/annotations/counts), raw_pack (repomix artifact pointer).
+evidence (discrepancy_ledger + runtime_evidence + last_verdicts, the AI
+consumption surface - R1' embeds open verdicts so the next round must see
+the last failures), summary (findings/annotations/counts), raw_pack
+(repomix artifact pointer).
 """
 
 from __future__ import annotations
@@ -16,13 +18,14 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import s1_cbm, s2_deadcode, s5_cabrief, s5_rawpack, s5_repomap
+from . import s1_cbm, s2_deadcode, s5_cabrief, s5_rawpack, s5_repomap, s6_transact
 
 DEFAULT_BUDGET = 32000
 SCC_REPORT_CAP = 20
 SCC_MEMBER_CAP = 30
 DUP_MEMBERS_CHARS = 300
 DEFAULT_TASK = "T4"
+LAST_VERDICTS_CAP = 5
 TASK_PROFILES: dict[str, dict[str, float]] = {
     "T1": {
         "repomap": 0.25,
@@ -231,6 +234,43 @@ def _runtime_evidence_summary(con: sqlite3.Connection) -> dict:
     return {"total": total, "samples": samples}
 
 
+def _last_verdicts_summary(repo: Path) -> dict:
+    """R1' verdict feedback loop: open (non-committed) verdicts embedded in
+    the evidence section so the next AI round must see the last failures.
+
+    needs_confirmation / rolled_back / aborted all count as open; recent is
+    newest-first, capped at LAST_VERDICTS_CAP summaries.
+    """
+    verdicts = s6_transact.load_verdicts(repo)
+    open_verdicts = [v for v in verdicts if v.get("status") != "committed"]
+    recent = list(reversed(open_verdicts))[:LAST_VERDICTS_CAP]
+    summaries = []
+    for verdict in recent:
+        gates = verdict.get("gates") or []
+        failed_codes = sorted(
+            {
+                gate["detail"]["code"]
+                for gate in gates
+                if isinstance(gate, dict)
+                and gate.get("status") == "fail"
+                and isinstance(gate.get("detail"), dict)
+                and gate["detail"].get("code")
+            }
+        )
+        summaries.append(
+            {
+                "tid": verdict.get("tid"),
+                "type": verdict.get("type"),
+                "status": verdict.get("status"),
+                "failed_gate": verdict.get("failed_gate"),
+                "failed_codes": failed_codes,
+                "confidence": verdict.get("confidence"),
+                "verdict_at": verdict.get("verdict_at"),
+            }
+        )
+    return {"open_count": len(open_verdicts), "recent": summaries}
+
+
 def _findings_summary(con: sqlite3.Connection) -> dict:
     by_source = {source: count for source, count in con.execute("SELECT source, COUNT(*) FROM findings GROUP BY source")}
     by_pathology = {
@@ -299,6 +339,7 @@ def build_dossier(
         evidence_payload = {
             "discrepancies": _discrepancy_summary(con),
             "runtime": _runtime_evidence_summary(con),
+            "last_verdicts": _last_verdicts_summary(repo),
         }
         repomap_payload = s5_repomap.render_repomap(con, char_budget=caps["repomap"])
     finally:

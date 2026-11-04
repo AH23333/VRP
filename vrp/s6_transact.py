@@ -20,14 +20,24 @@ facts.db. T4 requires --confirm. Every run writes .vrp/verdicts/<tid>.json
 with stable rule codes (RULE_CODES) on every failing gate. transact_batch
 consumes a directory of transaction files in sorted order, stopping at the
 first non-committed verdict.
+
+R1' additions: load_verdicts (verdict files -> sorted list; the dossier
+evidence section embeds the open ones so the next AI round must see them,
+and `vrp verdicts` exposes them on the CLI) and preview_transaction
+(--preview: per-edit unified diff via difflib plus the difftastic
+structural signal as a tool group - difflib always, difftastic when the
+binary exists, structural per-file degrade never blocks; no gates, no
+tree mutation, no git).
 """
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 import sqlite3
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -551,4 +561,101 @@ def transact_batch(
         "statuses": [v["status"] for v in verdicts],
         "stopped_at": stopped_at,
         "verdicts": verdicts,
+    }
+
+
+def load_verdicts(repo: Path) -> list[dict]:
+    """Read .vrp/verdicts/*.json sorted oldest-first by verdict_at.
+
+    Unreadable files become an honest placeholder entry (status
+    "unreadable") instead of being silently dropped.
+    """
+    vdir = repo / ".vrp" / "verdicts"
+    out: list[dict] = []
+    if not vdir.is_dir():
+        return out
+    for path in sorted(vdir.glob("*.json")):
+        try:
+            verdict = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            out.append({"tid": path.stem, "status": "unreadable", "verdict_at": "", "gates": []})
+            continue
+        if isinstance(verdict, dict):
+            out.append(verdict)
+    out.sort(key=lambda v: (v.get("verdict_at") or "", v.get("tid") or ""))
+    return out
+
+
+STRUCTURAL_PREVIEW_CAP = 10
+STRUCTURAL_PREVIEW_TIMEOUT = 20
+
+
+def _unified(old: str | None, new: str | None, fromfile: str, tofile: str) -> str:
+    a = [] if old is None else old.splitlines(keepends=True)
+    b = [] if new is None else new.splitlines(keepends=True)
+    return "".join(difflib.unified_diff(a, b, fromfile=fromfile, tofile=tofile))
+
+
+def preview_transaction(repo: Path, tx_path: Path) -> dict:
+    """R1' --preview: per-edit unified diff, no gates, no tree mutation.
+
+    Tool group (v7 r4 1.6): difflib always produces the diff; difftastic,
+    when the binary exists, adds a per-modify-file structural signal
+    ("unchanged" = whitespace/comment-only churn) capped at
+    STRUCTURAL_PREVIEW_CAP files; any per-file degrade never blocks.
+    """
+    tx = load_transaction(tx_path)
+    binary = s6_difftastic.find_difftastic()
+    structural_runs = 0
+    edits_report: list[dict] = []
+    for edit in tx["edits"]:
+        rel = edit["file"]
+        target = repo / rel
+        entry: dict = {"file": rel.as_posix(), "op": edit["op"]}
+        if edit["op"] == "create":
+            if target.exists():
+                entry["ok"] = False
+                entry["error"] = "create target already exists"
+            else:
+                entry["ok"] = True
+                entry["diff"] = _unified(None, edit["content"], "/dev/null", f"b/{rel.as_posix()}")
+        elif edit["op"] == "modify":
+            if not target.is_file():
+                entry["ok"] = False
+                entry["error"] = "modify target missing"
+            else:
+                entry["ok"] = True
+                old = target.read_text(encoding="utf-8", errors="replace")
+                entry["diff"] = _unified(old, edit["content"], f"a/{rel.as_posix()}", f"b/{rel.as_posix()}")
+                if not binary:
+                    entry["structural"] = "unavailable"
+                elif structural_runs >= STRUCTURAL_PREVIEW_CAP:
+                    entry["structural"] = "skipped-cap"
+                else:
+                    structural_runs += 1
+                    with tempfile.TemporaryDirectory(prefix="vrp-preview-") as tmp:
+                        new_path = Path(tmp) / rel.name
+                        new_path.write_text(edit["content"], encoding="utf-8", newline="\n")
+                        run = s6_difftastic.run_difftastic(binary, target, new_path, timeout=STRUCTURAL_PREVIEW_TIMEOUT)
+                    if run.get("ok"):
+                        entry["structural"] = run["parsed"].get("status", "degraded")
+                    else:
+                        entry["structural"] = "degraded"
+        else:
+            if not target.is_file():
+                entry["ok"] = False
+                entry["error"] = "delete target missing"
+            else:
+                entry["ok"] = True
+                old = target.read_text(encoding="utf-8", errors="replace")
+                entry["diff"] = _unified(old, None, f"a/{rel.as_posix()}", "/dev/null")
+        edits_report.append(entry)
+    return {
+        "tid": tx["id"],
+        "type": tx["type"],
+        "summary": tx["summary"],
+        "declared_moves": tx["declared_moves"],
+        "edits": edits_report,
+        "structural_engine": "difftastic" if binary else "difflib-only",
+        "ok": all(entry.get("ok") for entry in edits_report),
     }

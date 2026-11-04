@@ -50,6 +50,8 @@ vrp s2 <repo>                           # 病理检测（findings + 差异登记
 vrp mutate-run <repo> --budget N        # 变异执行（Python/TS/Rust 三引擎）
 vrp dossier <repo> --task T1            # 五视图装配（T1-T4 预算）
 vrp transact <repo> tx.json             # 重构事务（声明→闸门→原子提交或回滚）
+vrp transact <repo> tx.json --preview   # diff 预览（difflib+difftastic 工具组，无闸门不改树）
+vrp verdicts <repo>                     # verdict 历史（open 项自动回馈进 dossier evidence）
 ```
 
 ## CLI 命令
@@ -66,7 +68,8 @@ vrp transact <repo> tx.json             # 重构事务（声明→闸门→原�
 | `validate` / `gate` | 锚定+覆盖率校验 / AI claim 证据闸门 |
 | `freeze` | 基线命令执行 + graph 快照 + 变更预筛 |
 | `dossier` | 七节装配（架构/简报/repomap/五视图/证据/摘要/rawpack 指针） |
-| `transact` / `transact-batch` | 重构事务单发 / 目录批处理 |
+| `transact` / `transact-batch` | 重构事务单发（`--preview` diff 预览）/ 目录批处理 |
+| `verdicts` | verdict 历史查询（`--tid` 单条详情；dossier evidence 自动内嵌 open 项） |
 
 ## 重构事务与闸门
 
@@ -86,9 +89,9 @@ vrp transact <repo> tx.json             # 重构事务（声明→闸门→原�
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 260 例 ~35-40s（默认排除 deep）
+python -m pytest -q                        # 快速层 268 例 ~35-40s（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1402 例 ~10min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 1662 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 1670 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -97,7 +100,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 1662 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 260 例全绿才放行（~35-40s）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 268 例全绿才放行（~35-40s）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）
 
 ## 外部工具（可选，缺失则降级）
@@ -106,11 +109,13 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 
 ## 文档（docs/）
 
-- 《产品目标.md》——定位与成功判据
-- 《构想v6-核验后S1-S5定稿.md》——**权威技术方案**（§12-13 为实测/实施记录，含各批次 E2E）
+- 《产品目标.md》——定位与成功判据（主流程四环）
+- 《构想v6-核验后S1-S5定稿.md》——S1-S5 权威技术方案（§12-13 为实测/实施记录）
+- 《构想v7-AI梳理层与S7-S8定稿.md》——**当前权威**：主流程四环/MCP 接口层/curate/S7-S8/批次 R1'-R4'
+- 《契约/事务契约.md》——事务 schema/G 码对照/生产指南（AI 生产方必读）
 - 《交接文档.md》——接手即读（环境/E2E 基准数字/代码地图/下一步）
-- 《踩坑历史.md》——80 条实测坑与纪律
-- 构想 v0-v5——历史方案，只读
+- 《踩坑历史.md》——实测坑与纪律
+- 构想 v0-v6——历史方案，只读
 
 ## 平台
 

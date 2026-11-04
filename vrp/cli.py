@@ -208,6 +208,10 @@ def cmd_dossier(args) -> int:
 
 def cmd_transact(args) -> int:
     repo = _repo_arg(args.repo)
+    if args.preview:
+        preview = s6_transact.preview_transaction(repo, Path(args.transaction))
+        _print_step(f"S6 transact preview {preview['type']}", preview)
+        return 0 if preview["ok"] else 1
     name = args.name or repo.name
     facts_db = repo / ".vrp" / "facts.db"
     if not facts_db.exists():
@@ -232,6 +236,23 @@ def cmd_transact(args) -> int:
     }
     _print_step(f"S6 transact {verdict['type']}", summary)
     return 0 if verdict["status"] == "committed" else 1
+
+
+def cmd_verdicts(args) -> int:
+    repo = _repo_arg(args.repo)
+    verdicts = s6_transact.load_verdicts(repo)
+    if args.tid:
+        match = [v for v in verdicts if v.get("tid") == args.tid]
+        if not match:
+            raise SystemExit(f"no verdict found for tid: {args.tid}")
+        print(json.dumps(match, ensure_ascii=False, indent=2, default=str))
+        return 0
+    summary = [
+        {k: v.get(k) for k in ("tid", "type", "status", "failed_gate", "confidence", "verdict_at")}
+        for v in verdicts
+    ]
+    _print_step("S6 verdicts", {"count": len(summary), "verdicts": summary})
+    return 0
 
 
 def cmd_transact_batch(args) -> int:
@@ -377,6 +398,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="CBM project name override")
     p.add_argument("--confirm", action="store_true", help="confirm a T4 transaction")
     p.add_argument("--timeout", type=int, default=900, help="per-command timeout for gate commands")
+    p.add_argument(
+        "--preview",
+        action="store_true",
+        help="preview only: per-edit unified diff + difftastic structural signal (no gates, no tree mutation)",
+    )
     p.set_defaults(func=cmd_transact)
 
     p = sub.add_parser(
@@ -390,6 +416,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=900, help="per-command timeout for gate commands")
     p.add_argument("--continue-on-fail", action="store_true", help="keep running after a non-committed transaction")
     p.set_defaults(func=cmd_transact_batch)
+
+    p = sub.add_parser("verdicts", help="S6: list transaction verdicts from .vrp/verdicts (open ones feed back into dossier evidence)")
+    p.add_argument("repo")
+    p.add_argument("--tid", help="show the full verdict JSON for one transaction id")
+    p.set_defaults(func=cmd_verdicts)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")
