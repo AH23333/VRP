@@ -53,4 +53,5 @@ description: 用 vrp MCP 工具执行 AI 重构循环：导航定位→下钻核
 ## 关联
 
 - ②环梳理（业务线/结构沉淀）走 `skills/vrp-curation/`（curate_submit 验收入库 → nav_slice 下钻）
+- ④环汇报（静态报告/决策点材料）走 render 三件：`render_verdicts()`（T4 清单）/`render_slice(slice_id)`（业务线 Mermaid 源）/`render_report()`（全量报告落 `.vrp/report/`）
 - 事务 schema 权威：`docs/契约/事务契约.md`；梳理工件 schema 权威：`docs/契约/梳理工件契约.md`

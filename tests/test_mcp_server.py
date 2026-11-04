@@ -29,6 +29,9 @@ TOOL_NAMES = {
     "tx_submit",
     "tx_run",
     "tx_verdicts",
+    "render_verdicts",
+    "render_slice",
+    "render_report",
 }
 
 
@@ -288,6 +291,42 @@ def test_curate_flow_over_mcp(tmp_path):
         assert con.execute("SELECT note FROM decisions").fetchone()[0] == "n"
     finally:
         con.close()
+
+
+def test_render_tools_over_mcp(tmp_path, monkeypatch):
+    """render 三件 over MCP：verdicts 快材料 + slice 快材料 + 全量报告（降级不炸）。"""
+    from vrp import render as render_mod
+
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render_mod, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, payload_json, status) VALUES ('calc-flow', 'n', 's', ?, 'active')",
+        (json.dumps({"steps": [{"fid": "f1", "role": "entry"}, {"fid": "f2", "role": "process"}]}),),
+    )
+    con.commit()
+    con.close()
+    (repo / ".vrp" / "verdicts").mkdir(parents=True)
+    (repo / ".vrp" / "verdicts" / "tx-1.json").write_text(json.dumps({
+        "tid": "tx-1", "type": "T2", "status": "needs_confirmation",
+        "verdict_at": "2026-11-04T10:00:00+00:00",
+    }), encoding="utf-8")
+
+    async def plan(session: ClientSession):
+        verdicts = await _call(session, "render_verdicts", {})
+        sl = await _call(session, "render_slice", {"slice_id": "calc-flow"})
+        report = await _call(session, "render_report", {})
+        return {"verdicts": verdicts, "sl": sl, "report": report}
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert out["verdicts"]["count"] == 1
+    assert out["verdicts"]["t4_pending"][0]["tid"] == "tx-1"
+    assert out["sl"]["slice_id"] == "calc-flow"
+    assert out["sl"]["mermaid"].startswith("sequenceDiagram")
+    assert out["report"]["archify"] is False
+    assert any("archify not found" in d for d in out["report"]["degraded"])
+    assert (repo / ".vrp" / "report" / "report.html").is_file()
 
 
 def test_cli_mcp_wiring(tmp_path, monkeypatch):

@@ -67,6 +67,10 @@ CARGO_MUTANTS_VERSION = "27.1.0"
 CBM_URL = "https://github.com/DeusData/codebase-memory-mcp/releases"
 CBM_VERSION = "0.12.1"
 
+ARCHIFY_URL = "https://github.com/tt-a1i/archify.git"
+ARCHIFY_COMMIT = "25cf3708"  # v3.2.0 (pinned)
+ARCHIFY_MJS = WORK / "archify" / "archify" / "bin" / "archify.mjs"
+
 
 def _run(cmd: list[str], **kwargs) -> int:
     print(f"  $ {' '.join(str(c) for c in cmd)}")
@@ -133,6 +137,30 @@ def install_cargo_mutants() -> None:
         raise SystemExit(f"cargo install cargo-mutants failed (rc={rc})")
 
 
+def install_archify() -> None:
+    """S8 渲染工具：git clone archify 到 work/ 沙箱并 checkout 钉死 commit。"""
+    git = shutil.which("git")
+    if not git:
+        print("[archify] git not found - install git first")
+        return
+    target = WORK / "archify"
+    if ARCHIFY_MJS.is_file():
+        print(f"[archify] {ARCHIFY_MJS} already present - skip")
+        return
+    if target.exists():
+        shutil.rmtree(target)
+    print(f"[archify] cloning {ARCHIFY_URL} @ {ARCHIFY_COMMIT}")
+    rc = _run([git, "clone", ARCHIFY_URL, str(target)])
+    if rc != 0:
+        raise SystemExit(f"git clone archify failed (rc={rc})")
+    rc = _run([git, "-C", str(target), "checkout", ARCHIFY_COMMIT])
+    if rc != 0:
+        raise SystemExit(f"archify checkout {ARCHIFY_COMMIT} failed (rc={rc})")
+    if not ARCHIFY_MJS.is_file():
+        raise SystemExit(f"archify.mjs not found after checkout: {ARCHIFY_MJS}")
+    print(f"[archify] installed {ARCHIFY_MJS}")
+
+
 def _exists(rel: str) -> bool:
     return (ROOT / rel).exists()
 
@@ -147,6 +175,7 @@ def report() -> int:
         ("repomix (S5 rawpack)", "work/repomix/node_modules/.bin/repomix*", _glob_exists("work/repomix/node_modules/.bin/repomix*")),
         ("code-atlas (xcheck)", "work/code-atlas-npx/node_modules/@lusiem/code-atlas/dist/index.js", _exists("work/code-atlas-npx/node_modules/@lusiem/code-atlas/dist/index.js")),
         ("difftastic (G4 结构 diff)", "work/difftastic/difft.exe", DIFFT_EXE.is_file()),
+        ("archify (S8 渲染)", "work/archify/archify/bin/archify.mjs", ARCHIFY_MJS.is_file()),
         ("mutmut (S2 变异)", "mutmut on PATH", shutil.which("mutmut") is not None),
         ("vulture (S2 P4)", "vulture on PATH", shutil.which("vulture") is not None),
         ("cargo-mutants (S2 变异)", "cargo-mutants on PATH", shutil.which("cargo-mutants") is not None),
@@ -171,6 +200,7 @@ def main() -> None:
     parser.add_argument("--skip-pip", action="store_true", help="跳过 pip 依赖")
     parser.add_argument("--skip-difft", action="store_true", help="跳过 difftastic 下载")
     parser.add_argument("--with-cargo-mutants", action="store_true", help="额外安装 cargo-mutants（需 Rust 工具链）")
+    parser.add_argument("--with-archify", action="store_true", help="额外安装 archify 到 work/ 沙箱（S8 渲染，git clone 钉 commit）")
     args = parser.parse_args()
 
     if sys.version_info < (3, 11):
@@ -185,6 +215,8 @@ def main() -> None:
         install_difftastic()
     if args.with_cargo_mutants:
         install_cargo_mutants()
+    if args.with_archify:
+        install_archify()
     report()
 
 

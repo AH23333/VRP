@@ -53,6 +53,7 @@ vrp transact <repo> tx.json             # 重构事务（声明→闸门→原�
 vrp transact <repo> tx.json --preview   # diff 预览（difflib+difftastic 工具组，无闸门不改树）
 vrp verdicts <repo>                     # verdict 历史（open 项自动回馈进 dossier evidence）
 vrp curate <repo>                       # AI 梳理工件验收入库（.vrp/ai/ slices/structure；--reject 用户否决留痕）
+vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SARIF+Mermaid+archify html；archify 缺失降级不阻塞）
 ```
 
 ## CLI 命令
@@ -72,7 +73,8 @@ vrp curate <repo>                       # AI 梳理工件验收入库（.vrp/ai/
 | `transact` / `transact-batch` | 重构事务单发（`--preview` diff 预览）/ 目录批处理 |
 | `verdicts` | verdict 历史查询（`--tid` 单条详情；dossier evidence 自动内嵌 open 项） |
 | `curate` | AI 梳理工件验收（slices/structure 确定性验证全过才入库；`--reject` 否决留痕 decisions 表；复验失效标 stale） |
-| `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/curate_*/tx_*/query_facts 十七件） |
+| `report` | S8 静态报告：三 IR（architecture/sequence/timeline）→ archify validate+render（缺失降级 Mermaid-only）→ `.vrp/report/`（report.html 无时间戳字节级复现+SARIF 2.1.0） |
+| `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/curate_*/tx_*/render_*/query_facts 二十件） |
 
 ## 重构事务与闸门
 
@@ -92,9 +94,9 @@ vrp curate <repo>                       # AI 梳理工件验收入库（.vrp/ai/
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 320 例 ~55s（默认排除 deep）
+python -m pytest -q                        # 快速层 337 例 ~60-75s（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1402 例 ~10min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 1822 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 1739 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -108,7 +110,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 1822 例（阶段性完工�
 
 ## 外部工具（可选，缺失则降级）
 
-CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / Stryker 10.1.1 / cargo-mutants（变异）、difftastic 0.72.0（结构 diff）、knip / vulture / jscpd、repomix（rawpack）。二进制沙箱化于 `work/`，路径可用环境变量覆盖（`VRP_*_BIN` / `VRP_DIFFTASTIC_BIN` 等）。
+CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / Stryker 10.1.1 / cargo-mutants（变异）、difftastic 0.72.0（结构 diff）、knip / vulture / jscpd、repomix（rawpack）、[archify](https://github.com/tt-a1i/archify) v3.2.0（S8 渲染，`bootstrap.py --with-archify` 装，`VRP_ARCHIFY_MJS` 覆盖）。二进制沙箱化于 `work/`，路径可用环境变量覆盖（`VRP_*_BIN` / `VRP_DIFFTASTIC_BIN` 等）。
 
 ## 文档（docs/）
 

@@ -20,6 +20,7 @@ from pathlib import Path
 from . import nav, s6_transact
 from . import curate as curate_mod
 from . import etl as etl_mod
+from . import render as render_mod
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -32,7 +33,9 @@ _INSTRUCTIONS = (
     "tx_preview 自查 diff -> tx_run 执行 -> tx_verdicts 读回执；"
     "失败读 failed_codes 修正后重试（每事务 <=3 次）。"
     "梳理环节：curate_submit 提交 slices/structure（确定性验证，拒绝读收据修正重提），"
-    "nav_slice 按业务线下钻。生产规则见 docs/契约/事务契约.md 与 docs/契约/梳理工件契约.md。"
+    "nav_slice 按业务线下钻。"
+    "汇报环节：render_verdicts/render_slice 出决策点快材料，render_report 出全量静态报告。"
+    "生产规则见 docs/契约/事务契约.md 与 docs/契约/梳理工件契约.md。"
 )
 
 
@@ -186,6 +189,15 @@ def build_server(repo: Path) -> "MCPServer":
             return _dumps(match)
         return _dumps({"count": len(verdicts), "verdicts": verdicts})
 
+    def render_verdicts() -> str:
+        return _dumps(render_mod.render_verdicts(repo))
+
+    def render_slice(slice_id: str) -> str:
+        return _dumps(render_mod.render_slice(repo, slice_id))
+
+    def render_report() -> str:
+        return _dumps(render_mod.render_report(repo))
+
     server.add_tool(
         _guard(nav_search),
         name="nav_search",
@@ -288,6 +300,24 @@ def build_server(repo: Path) -> "MCPServer":
         name="tx_verdicts",
         description="读事务回执（repair receipt）：tid 给单条全文，不给列全部；"
         "open（非 committed）项自动回馈进 dossier evidence 节",
+    )
+    server.add_tool(
+        _guard(render_verdicts),
+        name="render_verdicts",
+        description="T4 决策点快材料：verdict 时间线 + open/T4 清单；"
+        "T4 放行只能人工 CLI vrp transact --confirm",
+    )
+    server.add_tool(
+        _guard(render_slice),
+        name="render_slice",
+        description="单业务线快材料：Mermaid 时序源（steps/acts），可贴 mermaid.live 渲染；"
+        "slice_id 从 curate_slices 拿",
+    )
+    server.add_tool(
+        _guard(render_report),
+        name="render_report",
+        description="S8 全量静态报告 -> .vrp/report/（report.html + IR + SARIF + Mermaid；"
+        "archify 缺失自动降级 Mermaid-only）；报告无时间戳，带 facts.git_head 可溯源",
     )
     return server
 

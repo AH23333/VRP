@@ -311,6 +311,16 @@ def cmd_curate(args) -> int:
     return 1 if any(f.get("status") == "rejected" for f in result.get("files", [])) else 0
 
 
+def cmd_report(args) -> int:
+    from . import render as render_mod
+
+    repo = _repo_arg(args.repo)
+    out = Path(args.out) if args.out else None
+    result = render_mod.render_report(repo, out)
+    _print_step("S8 report", result)
+    return 0
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -470,6 +480,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser(
+        "report",
+        help="S8: static report -> .vrp/report/ (report.html + IR + SARIF + Mermaid; archify optional)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--out", help="output directory (default: <repo>/.vrp/report)")
+    p.set_defaults(func=cmd_report)
     return parser
 
 
