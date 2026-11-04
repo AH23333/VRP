@@ -365,7 +365,7 @@ decisions(
 | **R2'** | `vrp/curate.py`（slices/structure schema+验证器+表迁移）+ `vrp curate` CLI + `--reject` + decisions 留痕表 + curate MCP 族五件 + nav_slice/callers/callees + `skills/vrp-curation/` v1 | **AI 梳理闭环**；验证器全拒绝路径参数化；手工 AI 工件→curate 入库 E2E；幂等/stale/留痕测试 |
 | **R3'** | `vrp/render.py`（render_* MCP 工具 + `vrp report` CLI 双入口）+ S8 可视化（archify 沙箱 bootstrap `--with-archify` 钉 25cf3708、SARIF——sarif-om 与手写 JSON 二选一实施时定、Mermaid、T4 清单、降级链）——**已完成（2026-11-04）**：SARIF 手写 JSON 定案；踩坑 #83（archify validate 四坑） | **AI 可出拍板材料**；深测 E2E 两仓出 report.html（`archify validate --json` rc=0）；降级测试；dogfood 自报告——**已验收**（vrp 仓 8 件 + unwind 仓 5 件，archify=true degraded=[]；降级 rc=0） |
 | **R3.5'** | `vrp/session.py`（session_begin/end/report，sqlite 文件快照）+ session MCP 族三件 + trust 模式进 skill（§3.3）——**已完成（2026-11-04）**：快照走 sqlite backup API；CLI `vrp session <repo> begin/end/report` 双入口 | **全信任模式**；初末快照/计数 diff/双图并排 E2E——**已验收**（vrp 仓+unwind 仓，archify=true degraded=[]；diff 全零（facts 未动）；快测 +16，352 绿） |
-| **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺） | 规则固化；远期设计随 R2' 经验再定稿 |
+| **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺）——**进行中（2026-11-05 暂停收尾，详见 §8）**：nav_path 已落（c4b086d）；S7 Python 垂直切片已落（2b353a2，import-linter，TS 执法器后续批次）；mutmut 补位评估定案（§8.3：保持 2.4.5）；剩低负载全量复跑收口 | 规则固化；远期设计随 R2' 经验再定稿 |
 
 每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）、dogfood 反哺分析深化（§0.4-4）。
 
@@ -375,3 +375,40 @@ decisions(
 - 《构想v4》：S6-S8 设计的原始出处（编号映射见 §0.1-1）
 - 《产品目标.md》：R1' 实施时修订——主流程四环明示、"不做渲染引擎与服务"红线保留、阶段表补 S7/S8 行
 - 《交接文档》：每批次收口时同步（下一步节 + 代码地图）
+
+## 8. R4' 批次增补（2026-11-05，进行中——暂停收尾）
+
+### 8.1 nav_path 耦合路径查找（R4' 第一件，c4b086d）
+
+rp/nav.py nav_path(from_fid, to_fid, max_hops=5)：WITH RECURSIVE BFS 最短路径。**实现关键**：sqlite 递归 CTE 的 UNION 按整行 (fid,depth) 去重——同 fid 多深度合法共存，归一须 `SELECT fid, MIN(depth) FROM walk GROUP BY fid`（直接 INSERT 撞 PRIMARY KEY，实测 IntegrityError）；同长路径 fid 字典序确定性选一；hops_detail 透传 type/evidence/strategy/confidence/line；不可达 found=false 诚实返回；max_hops 上限 10。MCP nav_path 第二十四件；快测 +5。
+
+### 8.2 S7 架构规则固化（R4' 第二件，2b353a2）——"AI 理解，工具执法"垂直切片
+
+rp/s7_enforce.py（纯标准库 + import-linter 2.15 子进程，VRP_IMPORT_LINTER_BIN 覆盖）：
+
+- **契约生成**：层 DAG 每对不允许 (A,B) 生成一条 forbidden 契约（覆盖线性栈与任意 DAG；may_depend_on 只豁免直连——传递违例同抓，线性栈 top 直 import bottom 违规实测在案）；rules[] "X 不许 import Y"（from_layer/to_layer 字段优先，"不许/不能/禁止/must not import" 文本模式兜底）映射为同型契约，映射不出进 unenforced_rules 诚实清单
+- **容器推导**：module.symbol_fids → symbols.file_path → 点分模块名（`__init__.py`→父包；非 .py 仓 language-unsupported——TS 执法器 dependency-cruiser 等为后续批次，Python 引擎垂直切片先行）
+- **违例 = P9 findings**（P 码序列顺延；kind='layer-violation'，source='s7-enforce'，幂等 replace-all；锚定覆盖符号优先/文件首符号兜底；payload 带 contract/层/双方/行/structure_status）
+- **配置生命周期**：`.vrp/importlinter.ini` 生成→执行（--config= --no-cache --no-logo，cwd=repo）→finally 清理（同 stryker.conf.json 模式）
+- **状态诚实六态**：ok / skipped（无 structure、非 active）/ language-unsupported / enforcer-not-found / enforcer-failed（rc 非 0/1 或 rc=1 无 "Broken contracts" 块=配置/环境错误，不误删既有 findings）/ not-enforceable
+- **接线**：CLI `vrp enforce <repo> [--timeout]` + MCP enforce 第二十五件
+- **测试**：quick 21 例（单元+mocked E2E 六态全覆盖+CLI+MCP over-the-wire）、deep 4 例（真 lint-imports E2E：违例落库含函数内 import 锚定/幂等/修复清库/合规仓）
+- **dogfood**：vrp 仓自身 active structure（pipeline/transact/ai-layer 三模块、core/interface 两层）执法——1 契约（core 不许 import interface）kept、0 违例、0 findings；事实刷新走 `vrp run`（OWNED_TABLES 保 structure 跨 etl 存续）
+- **取证探针**（work/，保留参考）：probe_r4_importlinter.py / probe_r4_forbidden.py（输出格式+rc 语义+中文契约名+文件级容器实测）、probe_r4_structure.py（structure 实际形态）
+
+### 8.3 变异测试组 mutmut(Python) 补位评估（R4' 第三件，评估定案零代码变更）
+
+§1.6 工具组表 mutmut(Python，待评估补位)——三引擎（mutmut/Stryker/cargo-mutants，构想v6 §13.9.21/§13.9.22/§13.9.26）已全接线，本件收口版本线评估。实测取证（work/probe_r4_mutmut_eval.py，2026-11-05，隔离 venv 双版本）：
+
+- **mutmut 3.8.1（最新）**：原生 Windows 硬拒实证——"To run mutmut on Windows, please use the WSL. Native windows support is tracked in issue boxed/mutmut#397"；3.x 架构重写（无 .mutmut-cache、libcst 生成 mutants/ 目录、[tool.mutmut] 配置、rc 语义变更）——迁移 = WSL 依赖层（新外部依赖，破坏子进程零摩擦模式）+ 契约三件（CLI 参数组/rc 位图/pony cache schema）全换，**否决**
+- **mutmut 2.5.1（2.x 线末位）**：三契约全兼容实测——2.4.5 集成用的 CLI 参数组（--paths-to-mutate/--runner/--tests-dir/--test-time-multiplier/--no-progress）原样接受、rc=2 位图（survived）、.mutmut-cache pony 库同构（Mutant/Line/SourceFile JOIN 6 行 bad_survived/ok_killed）——**记为验证过的 2.x 线内升级上限**（未来 2.4.5 出问题可无代码改动直升）
+- **裁决：保持 mutmut==2.4.5**：无已知影响管道的缺陷；升 2.5.1 收益（小修）< 全量深测重跑成本
+- **替代引擎（cosmic-ray 等）不评估**：三语言三引擎闭环无缺口驱动；cosmic-ray 重型（work queue/DB）不合子进程轻量适配器模式
+- **上游观察点**：boxed/mutmut#397（Windows 原生支持）——落地则重开 3.x 迁移评估
+- Python 侧 P8 无引擎缺口；剩余缺口为语言侧（JS/TS TESTS=0 预筛，构想v6 §12.4 已规划 ETL 自建），非 mutmut 补位范畴
+
+### 8.4 R4' 剩余（恢复后收口清单）
+
+1. 低负载窗口全量复跑（口径 1784：快速 378 + 深度 1406；上轮 R3.5' 诚实记录 1752+1F+1E 定性环境性 #84 内存悬崖——收口前须确认全绿）
+2. （可选）unwind 仓 curate 入库 structure 后 `vrp enforce` 补第二仓 dogfood 数据点
+3. 队列清空后停下汇报；push 等用户指令（提交链 …→c4b086d（nav_path）→2b353a2（S7）本地，最后推送 d46757c）
