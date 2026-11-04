@@ -5,6 +5,10 @@ build/
 dist/
 .pytest_cache/
 verify/
-work/
+work/*
+!work/e2e_s6.py
+!work/rust-calc-probe/
+work/rust-calc-probe/.git/
+work/rust-calc-probe/.vrp/
 **/.vrp/
 **/.code-atlas/

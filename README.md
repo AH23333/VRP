@@ -27,6 +27,21 @@ pip install -e .                       # 纯标准库，无第三方依赖
 $env:CBM_CACHE_DIR = "D:\cbm-cache"    # CBM 缓存目录（必须显式设置）
 ```
 
+### 环境自举（work/ 工具沙箱重建）
+
+外部工具全部钉版本收录在 `bootstrap.py`（纯标准库）：六个 npm 沙箱
+（ast-grep/knip/jscpd/Stryker/repomix/code-atlas）+ difftastic 0.72.0 下载解压 +
+pytest/mutmut/vulture 及深度测试依赖。`work/` 不入 git（~600MB），删掉后一条命令重建：
+
+```powershell
+python bootstrap.py                    # 幂等：已装则跳过
+python bootstrap.py --skip-npm --skip-pip --skip-difft   # 只看就绪状态报告
+```
+
+前置：Python ≥ 3.11、Node.js + npm、git。系统级手动安装项：
+[CBM](https://github.com/DeusData/codebase-memory-mcp/releases)（S1 索引核心，0.12.1）、
+Node.js。`cargo-mutants` 可选（`--with-cargo-mutants` 开关，需 Rust 工具链）。
+
 ## 快速开始
 
 ```powershell
@@ -78,6 +93,13 @@ python -m pytest -m "deep or not deep" -q  # 全量 1659 例（阶段性完工�
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
 
+## 发布
+
+开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
+
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 257 例全绿才放行（~40s）；跳过用 `git push --no-verify`
+- **发布**：GitHub release API 打 tag 发版（v0.1.0 起）
+
 ## 外部工具（可选，缺失则降级）
 
 CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / Stryker 10.1.1 / cargo-mutants（变异）、difftastic 0.72.0（结构 diff）、knip / vulture / jscpd、repomix（rawpack）。二进制沙箱化于 `work/`，路径可用环境变量覆盖（`VRP_*_BIN` / `VRP_DIFFTASTIC_BIN` 等）。
@@ -87,7 +109,7 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《产品目标.md》——定位与成功判据
 - 《构想v6-核验后S1-S5定稿.md》——**权威技术方案**（§12-13 为实测/实施记录，含各批次 E2E）
 - 《交接文档.md》——接手即读（环境/E2E 基准数字/代码地图/下一步）
-- 《踩坑历史.md》——79 条实测坑与纪律
+- 《踩坑历史.md》——80 条实测坑与纪律
 - 构想 v0-v5——历史方案，只读
 
 ## 平台
