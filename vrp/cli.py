@@ -12,7 +12,7 @@ from pathlib import Path
 from . import __version__
 from . import etl as etl_mod
 from . import curate as curate_mod
-from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, xcheck
+from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
 from . import session as session_mod
 
 
@@ -131,6 +131,17 @@ def _open_facts_rw(repo: Path):
     etl_mod.ensure_schema(con)
     etl_mod.check_facts_freshness(con, repo)
     return con, facts_path
+
+
+def cmd_enforce(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        result = s7_enforce.run(repo, con, args.timeout)
+    finally:
+        con.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
 
 
 def cmd_validate(args) -> int:
@@ -407,6 +418,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", type=int, default=10)
     p.add_argument("--timeout", type=int, default=3600, help="overall mutmut timeout (s)")
     p.set_defaults(func=cmd_mutate_run)
+
+    p = sub.add_parser(
+        "enforce",
+        help="S7: enforce curate-ingested structure via import-linter (violations -> P9 findings)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--timeout", type=int, default=600, help="lint-imports timeout (s)")
+    p.set_defaults(func=cmd_enforce)
 
     p = sub.add_parser("validate", help="S3: anchor revalidation (active/cosmetic/stale) + coverage -> gate_results")
     p.add_argument("repo")

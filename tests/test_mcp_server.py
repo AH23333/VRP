@@ -36,6 +36,7 @@ TOOL_NAMES = {
     "session_begin",
     "session_end",
     "session_report",
+    "enforce",
 }
 
 
@@ -378,3 +379,50 @@ def test_session_flow_over_mcp(tmp_path, monkeypatch):
     sdir = repo / ".vrp" / "sessions" / out["begin"]["session_id"]
     assert (sdir / "report.html").is_file()
     assert (sdir / "begin.db").is_file() and (sdir / "end.db").is_file()
+
+
+def test_enforce_over_mcp(tmp_path, monkeypatch):
+    """S7 enforce over MCP：无 structure 诚实 skipped -> curate_submit -> 执法落 P9（mocked 执法器）。"""
+    from vrp import s7_enforce
+
+    structure_ok = json.dumps({
+        "modules": [
+            {"module_id": "m1", "name": "算", "responsibility": "算", "symbol_fids": ["f1"], "layer": "domain"},
+            {"module_id": "m2", "name": "面", "responsibility": "面", "symbol_fids": ["f2"], "layer": "service"},
+        ],
+        "layers": [
+            {"name": "domain", "may_depend_on": []},
+            {"name": "service", "may_depend_on": ["domain"]},
+        ],
+    }, ensure_ascii=False)
+    canned = (
+        "Contracts: 0 kept, 1 broken.\n\n"
+        "Broken contracts\n----------------\n\n"
+        "layer: domain 不许 import service\n--\n\n"
+        "domain is not allowed to import service:\n\n"
+        "-   pkg.calc -> pkg.calc (l.1)\n"
+    )
+    monkeypatch.setattr(s7_enforce, "find_import_linter", lambda: "fake-lint-imports")
+    monkeypatch.setattr(s7_enforce, "_execute", lambda *args: (1, canned))
+
+    async def plan(session: ClientSession):
+        skipped = await _call(session, "enforce", {})  # 尚无 structure
+        st = await _call(session, "curate_submit", {"kind": "structure", "payload_json": structure_ok})
+        out = await _call(session, "enforce", {})
+        return {"skipped": skipped, "st": st, "out": out}
+
+    repo = _mk_repo(tmp_path)
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert out["skipped"]["status"] == "skipped"
+    assert "no ingested structure" in out["skipped"]["reason"]
+    assert out["st"]["status"] == "accepted"
+    assert out["out"]["status"] == "ok"
+    assert out["out"]["findings_written"] == 1
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        row = con.execute(
+            "SELECT pathology, kind, source FROM findings WHERE source = 's7-enforce'"
+        ).fetchone()
+        assert row == ("P9", "layer-violation", "s7-enforce")
+    finally:
+        con.close()

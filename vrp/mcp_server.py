@@ -21,6 +21,7 @@ from . import nav, s6_transact
 from . import curate as curate_mod
 from . import etl as etl_mod
 from . import render as render_mod
+from . import s7_enforce
 from . import session as session_mod
 
 try:
@@ -34,7 +35,8 @@ _INSTRUCTIONS = (
     "tx_preview 自查 diff -> tx_run 执行 -> tx_verdicts 读回执；"
     "失败读 failed_codes 修正后重试（每事务 <=3 次）。"
     "梳理环节：curate_submit 提交 slices/structure（确定性验证，拒绝读收据修正重提），"
-    "nav_slice 按业务线下钻。"
+    "nav_slice 按业务线下钻；"
+    "执法环节：curate_structure 入库后 enforce 跑架构执法（P9 findings，幂等）。"
     "汇报环节：render_verdicts/render_slice 出决策点快材料，render_report 出全量静态报告；"
     "全信任模式（构想v7 §3.3）：session_begin 开场 -> 多轮循环 -> session_end -> "
     "session_report 交付初末对比（计数 diff + 双 L0 图并排 + verdict 时间线）。"
@@ -213,6 +215,13 @@ def build_server(repo: Path) -> "MCPServer":
     def session_report(session_id: str = "") -> str:
         return _dumps(session_mod.session_report(repo, session_id))
 
+    def enforce(timeout: int = 600) -> str:
+        con = _open_facts_rw(repo)
+        try:
+            return _dumps(s7_enforce.run(repo, con, timeout))
+        finally:
+            con.close()
+
     server.add_tool(
         _guard(nav_search),
         name="nav_search",
@@ -358,6 +367,13 @@ def build_server(repo: Path) -> "MCPServer":
         name="session_report",
         description="全信任模式交付：初末计数 diff + 双 L0 架构图并排（archify，缺失降级 Mermaid）"
         "+ 会话窗口内 verdict 时间线 -> 会话目录 report.html；session_id 缺省取最近已结束会话",
+    )
+    server.add_tool(
+        _guard(enforce),
+        name="enforce",
+        description="S7 架构执法（构想v7 §4）：curate 入库的 structure 经 import-linter 执行，"
+        "Broken contracts = P9 findings（source='s7-enforce'，幂等 replace-all）；"
+        "无 structure/非 active 诚实 skipped；违例经 dossier 进重构目标——AI 理解，工具执法",
     )
     return server
 
