@@ -89,6 +89,16 @@ def _patch_pipeline(monkeypatch, post_symbols, facts_symbols_after=None, post_ed
     monkeypatch.setattr(s6_transact.etl, "run_etl", fake_etl)
     monkeypatch.setattr(s6_transact.s0_precheck, "discover_commands", lambda repo: {})
     monkeypatch.setattr(s6_transact, "call_code_atlas", fake_call_code_atlas)
+    monkeypatch.setattr(
+        s6_transact.s6_difftastic,
+        "check_edits",
+        lambda repo, tx, pre_db, post_db, timeout=60: {
+            "status": "ok",
+            "files": {},
+            "checked": 0,
+            "unaccounted": [],
+        },
+    )
     return calls
 
 
@@ -466,6 +476,68 @@ def test_transact_t2_verify_ok_committed(tmp_path, monkeypatch):
     assert verdict["status"] == "committed"
     g4 = next(g for g in verdict["gates"] if g["gate"] == "G4")
     assert g4["detail"]["verify_changes"] == {"broken": 0, "checks": 0}
+
+
+def test_transact_t1_structural_change_rolled_back(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    before = (repo / "a.py").read_text(encoding="utf-8")
+    _patch_pipeline(monkeypatch, [("f2", "p.a.new")])
+    monkeypatch.setattr(
+        s6_transact.s6_difftastic,
+        "check_edits",
+        lambda repo, tx, pre_db, post_db, timeout=60: {
+            "status": "fail",
+            "files": {"a.py": "unaccounted"},
+            "checked": 1,
+            "unaccounted": [{"file": "a.py", "blocks": [{"rhs": {"line": 2, "tokens": ["+", "0"]}}]}],
+        },
+    )
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-sc",
+            "type": "T1",
+            "summary": "rename with sneaky body change",
+            "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+            "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1 + 0\n"}],
+        },
+    )
+    verdict = s6_transact.transact(repo, tx, "proj")
+    assert verdict["status"] == "rolled_back"
+    assert verdict["failed_gate"] == "G4"
+    g4 = next(g for g in verdict["gates"] if g["gate"] == "G4")
+    assert g4["detail"]["reason"] == "structural-change"
+    assert g4["detail"]["code"] == "gate/G4/structural-change"
+    assert g4["detail"]["checked"] == 1
+    assert g4["detail"]["unaccounted"][0]["file"] == "a.py"
+    assert (repo / "a.py").read_text(encoding="utf-8") == before
+    assert s6_transact.git_clean(repo)
+
+
+def test_transact_t1_difftastic_not_found_degrades(tmp_path, monkeypatch):
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    _patch_pipeline(monkeypatch, [("f2", "p.a.new")])
+    monkeypatch.setattr(
+        s6_transact.s6_difftastic,
+        "check_edits",
+        lambda repo, tx, pre_db, post_db, timeout=60: {"status": "not-found"},
+    )
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-nf",
+            "type": "T1",
+            "summary": "rename without difftastic installed",
+            "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+            "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+        },
+    )
+    verdict = s6_transact.transact(repo, tx, "proj")
+    assert verdict["status"] == "committed"
+    g4 = next(g for g in verdict["gates"] if g["gate"] == "G4")
+    assert g4["detail"]["difftastic"] == {"status": "not-found"}
 
 
 def test_transact_batch_all_committed(tmp_path, monkeypatch):

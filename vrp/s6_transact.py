@@ -11,12 +11,15 @@ Flow: clean-tree precheck -> register tx -> apply edits -> G1 rescan
 (CBM reindex + ETL to a side facts.db; same-name reindex prunes deleted
 symbols, verified empirically) -> G2 lint/typecheck -> G3 test -> G4
 declared_moves / usage-edge equivalence (T1) / dangling references (T2)
-cross-checked by code-atlas verify_changes (BROKEN findings fail) -> G5
-dead-code monotonic (T2/T4) -> first failure rolls the working tree back;
-all pass -> git commit + promote facts.db. T4 requires --confirm. Every run
-writes .vrp/verdicts/<tid>.json with stable rule codes (RULE_CODES) on every
-failing gate. transact_batch consumes a directory of transaction files in
-sorted order, stopping at the first non-committed verdict.
+cross-checked by code-atlas verify_changes (BROKEN findings fail) and the
+difftastic structural signal (content-level: undeclared structural changes
+in modified files fail as gate/G4/structural-change; both degrade
+non-blocking when unavailable) -> G5 dead-code monotonic (T2/T4); first
+failure rolls the working tree back; all pass -> git commit + promote
+facts.db. T4 requires --confirm. Every run writes .vrp/verdicts/<tid>.json
+with stable rule codes (RULE_CODES) on every failing gate. transact_batch
+consumes a directory of transaction files in sorted order, stopping at the
+first non-committed verdict.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import s0_precheck, s1_cbm, s2_deadcode, s4_freeze, etl
+from . import s0_precheck, s1_cbm, s2_deadcode, s4_freeze, s6_difftastic, etl
 from .s5_cabrief import call_code_atlas
 
 TX_TYPES = ("T1", "T2", "T3", "T4")
@@ -45,6 +48,7 @@ RULE_CODES = {
     ("G4", "dangling-reference"): "gate/G4/dangling-reference",
     ("G4", "edge-mismatch"): "gate/G4/edge-mismatch",
     ("G4", "verify-broken"): "gate/G4/verify-broken",
+    ("G4", "structural-change"): "gate/G4/structural-change",
     ("G5", "dead-code-increase"): "gate/G5/dead-code-increase",
 }
 
@@ -457,6 +461,17 @@ def transact(
                         detail = {"reason": "verify-broken", "broken": verify["broken"][:20], "checks": verify["checks"][:20]}
                 else:
                     detail["verify_changes"] = verify
+            if ok:
+                structural = s6_difftastic.check_edits(repo, tx, facts_db, post_db)
+                if structural["status"] == "fail":
+                    ok = False
+                    detail = {
+                        "reason": "structural-change",
+                        "unaccounted": structural["unaccounted"][:10],
+                        "checked": structural.get("checked", 0),
+                    }
+                else:
+                    detail["difftastic"] = structural
             gates.append({"gate": "G4", "status": "pass" if ok else "fail", "detail": detail})
             if not ok:
                 failed = failed or "G4"
