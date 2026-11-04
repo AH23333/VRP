@@ -32,6 +32,9 @@ TOOL_NAMES = {
     "render_verdicts",
     "render_slice",
     "render_report",
+    "session_begin",
+    "session_end",
+    "session_report",
 }
 
 
@@ -338,3 +341,31 @@ def test_cli_mcp_wiring(tmp_path, monkeypatch):
     rc = cli.main(["mcp", str(repo)])
     assert rc == 0
     assert got["repo"] == repo
+
+
+def test_session_flow_over_mcp(tmp_path, monkeypatch):
+    """R3.5' session 三件 over MCP：begin（快照+元数据）-> end（diff）-> report（交付）。"""
+    from vrp import render as render_mod
+
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render_mod, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        begin = await _call(session, "session_begin", {"note": "trust round"})
+        mid = await _call(session, "session_begin", {"note": "should fail"})  # 活动会话互斥
+        end = await _call(session, "session_end", {})
+        report = await _call(session, "session_report", {})
+        return {"begin": begin, "mid": mid, "end": end, "report": report}
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert out["begin"]["session_id"]
+    assert out["begin"]["begin"]["counts"]["symbols"] == 2
+    assert "already active" in out["mid"]["error"]
+    assert out["end"]["session_id"] == out["begin"]["session_id"]
+    assert out["end"]["diff"]["symbols"] == {"begin": 2, "end": 2, "delta": 0}
+    assert out["report"]["archify"] is False
+    assert out["report"]["verdicts_in_window"] == 0
+    sdir = repo / ".vrp" / "sessions" / out["begin"]["session_id"]
+    assert (sdir / "report.html").is_file()
+    assert (sdir / "begin.db").is_file() and (sdir / "end.db").is_file()

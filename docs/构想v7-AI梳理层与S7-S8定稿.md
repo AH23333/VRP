@@ -364,7 +364,7 @@ decisions(
 | **R1.5'** | `vrp mcp`（官方 SDK，`pip install vrp[mcp]` extra，pyproject 加 optional-dependencies）+ nav 基础四件（search/architecture/module/symbol，`vrp/nav.py` SQL 封装）+ tx 四件（preview/submit/run/verdicts）+ query_facts + `skills/vrp-loop/` v1 | **AI 可开始重构循环**；MCP 集成测试（官方 SDK client in-process 对打）；nav SQL 单测；T4 闸测试（tx_run 必返 needs_confirmation） |
 | **R2'** | `vrp/curate.py`（slices/structure schema+验证器+表迁移）+ `vrp curate` CLI + `--reject` + decisions 留痕表 + curate MCP 族五件 + nav_slice/callers/callees + `skills/vrp-curation/` v1 | **AI 梳理闭环**；验证器全拒绝路径参数化；手工 AI 工件→curate 入库 E2E；幂等/stale/留痕测试 |
 | **R3'** | `vrp/render.py`（render_* MCP 工具 + `vrp report` CLI 双入口）+ S8 可视化（archify 沙箱 bootstrap `--with-archify` 钉 25cf3708、SARIF——sarif-om 与手写 JSON 二选一实施时定、Mermaid、T4 清单、降级链）——**已完成（2026-11-04）**：SARIF 手写 JSON 定案；踩坑 #83（archify validate 四坑） | **AI 可出拍板材料**；深测 E2E 两仓出 report.html（`archify validate --json` rc=0）；降级测试；dogfood 自报告——**已验收**（vrp 仓 8 件 + unwind 仓 5 件，archify=true degraded=[]；降级 rc=0） |
-| **R3.5'** | `vrp/session.py`（session_begin/end/report，sqlite 文件快照）+ session MCP 族三件 + trust 模式进 skill（§3.3） | **全信任模式**；初末快照/计数 diff/双图并排 E2E |
+| **R3.5'** | `vrp/session.py`（session_begin/end/report，sqlite 文件快照）+ session MCP 族三件 + trust 模式进 skill（§3.3）——**已完成（2026-11-04）**：快照走 sqlite backup API；CLI `vrp session <repo> begin/end/report` 双入口 | **全信任模式**；初末快照/计数 diff/双图并排 E2E——**已验收**（vrp 仓+unwind 仓，archify=true degraded=[]；diff 全零（facts 未动）；快测 +16，352 绿） |
 | **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺） | 规则固化；远期设计随 R2' 经验再定稿 |
 
 每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）、dogfood 反哺分析深化（§0.4-4）。

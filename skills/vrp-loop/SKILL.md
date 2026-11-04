@@ -43,6 +43,17 @@ description: 用 vrp MCP 工具执行 AI 重构循环：导航定位→下钻核
 | `gate/G4/structural-change` | 未声明内容变化（difftastic） | 撤偷改或如实声明换档位 |
 | `gate/G5/deadcode-increase` | T2/T4 引入新死码 | 删除新增的死路径 |
 
+## 信任分级（§3.3：全监督 / 全信任）
+
+| 级别 | 模式 | 交付物 |
+|---|---|---|
+| 全监督（默认） | 每轮决策点拍板（curate reject / T4 confirm / render 材料） | 逐轮 verdict + 材料 |
+| 全信任 | 多轮重构期间零打扰 | 初末态可视化对比 |
+
+**全信任模式流程**：`session_begin(note)` 开场 → 正常跑循环 8 步（多轮零打扰）→ `session_end(note)` 收场 → `session_report()` 交付（初末计数 diff 四组 + 双 L0 架构图并排 + 会话窗口内 verdict 时间线，落会话目录 report.html）。
+- T4 安全闸不因全信任放开：`tx_run` 仍恒返 needs_confirmation——全信任期间避免产 T4，或把 T4 留到 session_end 后转人工
+- 初末对比是"并排+计数"诚实版，不做图 diff（fid 内容敏感，重构后必变）
+
 ## 红线
 
 - **不读裸代码**当认知来源（接口拿不到再用 query_facts）

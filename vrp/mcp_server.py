@@ -21,6 +21,7 @@ from . import nav, s6_transact
 from . import curate as curate_mod
 from . import etl as etl_mod
 from . import render as render_mod
+from . import session as session_mod
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -34,7 +35,9 @@ _INSTRUCTIONS = (
     "失败读 failed_codes 修正后重试（每事务 <=3 次）。"
     "梳理环节：curate_submit 提交 slices/structure（确定性验证，拒绝读收据修正重提），"
     "nav_slice 按业务线下钻。"
-    "汇报环节：render_verdicts/render_slice 出决策点快材料，render_report 出全量静态报告。"
+    "汇报环节：render_verdicts/render_slice 出决策点快材料，render_report 出全量静态报告；"
+    "全信任模式（构想v7 §3.3）：session_begin 开场 -> 多轮循环 -> session_end -> "
+    "session_report 交付初末对比（计数 diff + 双 L0 图并排 + verdict 时间线）。"
     "生产规则见 docs/契约/事务契约.md 与 docs/契约/梳理工件契约.md。"
 )
 
@@ -198,6 +201,15 @@ def build_server(repo: Path) -> "MCPServer":
     def render_report() -> str:
         return _dumps(render_mod.render_report(repo))
 
+    def session_begin(note: str = "") -> str:
+        return _dumps(session_mod.session_begin(repo, note))
+
+    def session_end(note: str = "") -> str:
+        return _dumps(session_mod.session_end(repo, note))
+
+    def session_report(session_id: str = "") -> str:
+        return _dumps(session_mod.session_report(repo, session_id))
+
     server.add_tool(
         _guard(nav_search),
         name="nav_search",
@@ -318,6 +330,24 @@ def build_server(repo: Path) -> "MCPServer":
         name="render_report",
         description="S8 全量静态报告 -> .vrp/report/（report.html + IR + SARIF + Mermaid；"
         "archify 缺失自动降级 Mermaid-only）；报告无时间戳，带 facts.git_head 可溯源",
+    )
+    server.add_tool(
+        _guard(session_begin),
+        name="session_begin",
+        description="全信任模式开场（构想v7 §3.3）：facts.db 快照 + 会话元数据；"
+        "同一 repo 同时只允许一个活动会话；之后多轮重构零打扰直至 session_end",
+    )
+    server.add_tool(
+        _guard(session_end),
+        name="session_end",
+        description="全信任模式收场：末态快照 + ended_at + 初末计数 diff"
+        "（节点/边/病理/xcheck 四组）；之后 session_report 出交付",
+    )
+    server.add_tool(
+        _guard(session_report),
+        name="session_report",
+        description="全信任模式交付：初末计数 diff + 双 L0 架构图并排（archify，缺失降级 Mermaid）"
+        "+ 会话窗口内 verdict 时间线 -> 会话目录 report.html；session_id 缺省取最近已结束会话",
     )
     return server
 

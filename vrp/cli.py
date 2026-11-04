@@ -13,6 +13,7 @@ from . import __version__
 from . import etl as etl_mod
 from . import curate as curate_mod
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, xcheck
+from . import session as session_mod
 
 
 def _repo_arg(value: str) -> Path:
@@ -321,6 +322,22 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_session(args) -> int:
+    repo = _repo_arg(args.repo)
+    if args.action == "begin":
+        result = session_mod.session_begin(repo, args.note or "")
+        title = "R3.5' session begin"
+    elif args.action == "end":
+        result = session_mod.session_end(repo, args.note or "")
+        title = "R3.5' session end"
+    else:
+        out = Path(args.out) if args.out else None
+        result = session_mod.session_report(repo, args.id or "", out)
+        title = "R3.5' session report"
+    _print_step(title, result)
+    return 0
+
+
 def cmd_status(args) -> int:
     repo = _repo_arg(args.repo)
     facts_db = repo / ".vrp" / "facts.db"
@@ -488,6 +505,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--out", help="output directory (default: <repo>/.vrp/report)")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser(
+        "session",
+        help="R3.5': trust-mode session (begin/end/report; initial vs final delivery, 构想v7 §3.3)",
+    )
+    p.add_argument("repo")
+    p.add_argument("action", choices=["begin", "end", "report"])
+    p.add_argument("--note", help="session note recorded in session.json")
+    p.add_argument("--id", dest="id", help="session id for report (default: latest ended)")
+    p.add_argument("--out", help="report output dir (default: the session dir)")
+    p.set_defaults(func=cmd_session)
     return parser
 
 

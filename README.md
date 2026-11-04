@@ -54,6 +54,7 @@ vrp transact <repo> tx.json --preview   # diff 预览（difflib+difftastic 工�
 vrp verdicts <repo>                     # verdict 历史（open 项自动回馈进 dossier evidence）
 vrp curate <repo>                       # AI 梳理工件验收入库（.vrp/ai/ slices/structure；--reject 用户否决留痕）
 vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SARIF+Mermaid+archify html；archify 缺失降级不阻塞）
+vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 facts.db 快照 → 计数 diff + 双 L0 图并排 + verdict 时间线
 ```
 
 ## CLI 命令
@@ -74,7 +75,8 @@ vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SA
 | `verdicts` | verdict 历史查询（`--tid` 单条详情；dossier evidence 自动内嵌 open 项） |
 | `curate` | AI 梳理工件验收（slices/structure 确定性验证全过才入库；`--reject` 否决留痕 decisions 表；复验失效标 stale） |
 | `report` | S8 静态报告：三 IR（architecture/sequence/timeline）→ archify validate+render（缺失降级 Mermaid-only）→ `.vrp/report/`（report.html 无时间戳字节级复现+SARIF 2.1.0） |
-| `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/curate_*/tx_*/render_*/query_facts 二十件） |
+| `session` | 全信任模式（构想v7 §3.3）：begin/end 出初末 facts.db 快照（sqlite backup 安全复制），report 出初末计数 diff（四组）+ 双 L0 架构图并排 + 会话窗口 verdict 时间线；不做图 diff（诚实版） |
+| `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/curate_*/tx_*/render_*/session_*/query_facts 二十三件） |
 
 ## 重构事务与闸门
 
@@ -94,9 +96,9 @@ vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SA
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 337 例 ~60-75s（默认排除 deep）
+python -m pytest -q                        # 快速层 352 例 ~60-75s（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1402 例 ~10min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 1739 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 1754 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
