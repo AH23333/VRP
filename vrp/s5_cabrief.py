@@ -16,6 +16,7 @@ import subprocess
 import threading
 from pathlib import Path
 
+from . import __version__
 from .xcheck import ca_js_path
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -76,7 +77,7 @@ def call_code_atlas(repo: Path, tool: str, arguments: dict, timeout: int = 120) 
                 "params": {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "vrp", "version": "0.1.0"},
+                    "clientInfo": {"name": "vrp", "version": __version__},
                 },
             },
         )
