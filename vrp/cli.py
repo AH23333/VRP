@@ -238,6 +238,14 @@ def cmd_transact(args) -> int:
     return 0 if verdict["status"] == "committed" else 1
 
 
+def cmd_mcp(args) -> int:
+    repo = _repo_arg(args.repo)
+    from .mcp_server import run_stdio
+
+    run_stdio(repo)
+    return 0
+
+
 def cmd_verdicts(args) -> int:
     repo = _repo_arg(args.repo)
     verdicts = s6_transact.load_verdicts(repo)
@@ -416,6 +424,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=900, help="per-command timeout for gate commands")
     p.add_argument("--continue-on-fail", action="store_true", help="keep running after a non-committed transaction")
     p.set_defaults(func=cmd_transact_batch)
+
+    p = sub.add_parser(
+        "mcp",
+        help="AI interface: MCP server over stdio (per-repo; requires pip install vrp[mcp])",
+    )
+    p.add_argument("repo")
+    p.set_defaults(func=cmd_mcp)
 
     p = sub.add_parser("verdicts", help="S6: list transaction verdicts from .vrp/verdicts (open ones feed back into dossier evidence)")
     p.add_argument("repo")
