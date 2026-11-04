@@ -63,9 +63,29 @@ def is_js_ts(path: str) -> bool:
     return path.lower().endswith(_JS_TS_EXTS)
 
 
+def is_rust(path: str) -> bool:
+    return path.lower().endswith(".rs")
+
+
 def should_self_build_tests(src_path: str, dst_path: str) -> bool:
     """JS/TS test-linkage rule: CALLS/USAGE from a test file to a non-test, non-synthetic target."""
     if not is_js_ts(src_path) or not is_js_ts(dst_path):
+        return False
+    if not is_test_path(src_path):
+        return False
+    if is_test_path(dst_path):
+        return False
+    if is_synthetic_path(dst_path):
+        return False
+    return True
+
+
+def should_self_build_tests_rust(src_path: str, dst_path: str) -> bool:
+    """Rust test-linkage rule (same shape as JS/TS, section 12.4 gap): CALLS/USAGE
+    from a .rs test file to a non-test .rs target - CBM emits TESTS=0 for Rust
+    (probed 2026-11-04, work/rust-calc-probe) but resolves test->lib CALLS edges,
+    so the ETL rebuilds the symbol->tests pre-filter the same way as for JS/TS."""
+    if not is_rust(src_path) or not is_rust(dst_path):
         return False
     if not is_test_path(src_path):
         return False

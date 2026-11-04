@@ -3,7 +3,8 @@
 Two engines behind one entry point (`vrp mutate-run`), dispatched by target
 language - Python targets go to mutmut (pinned 2.4.5; 3.x requires WSL on
 Windows, upstream issue #397), JS/TS targets go to Stryker 10 (core +
-vitest-runner sandbox, see vrp/s2_stryker.py for probed facts). Both engines
+vitest-runner sandbox, see vrp/s2_stryker.py for probed facts), Rust targets
+go to cargo-mutants 27.1.0 (see vrp/s2_cargo_mutants.py). All engines
 produce a common mutant record list ({file, line, status} on the six-bucket
 contract killed/survived/timeout/suspicious/skipped/untested) which the shared
 reconcile maps back onto plan targets by (file, line range):
@@ -15,8 +16,9 @@ reconcile maps back onto plan targets by (file, line range):
 - summary row lands in runtime_evidence under the 'mutate-run' key namespace
   (freeze owns RUNTIME_SLOTS separately; both survive etl via OWNED_TABLES)
 - full breakdown is persisted to .vrp/mutation-report.json; engine scratch
-  (.mutmut-cache, .vrp/stryker.conf.json, .vrp/stryker-report.json) is
-  read then deleted on every path so the working tree stays clean
+  (.mutmut-cache, .vrp/stryker.conf.json, .vrp/stryker-report.json,
+  .vrp/cargo-mutants-out) is read then deleted on every path so the working
+  tree stays clean
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import s2_mutate, s2_stryker
+from . import s2_cargo_mutants, s2_mutate, s2_stryker
 
 SOURCE = "mutate-run"
 PATHOLOGY = "P8"
@@ -47,6 +49,17 @@ _COUNT_KEYS = ("killed", "survived", "timeout", "suspicious", "skipped", "untest
 
 _PY_EXTS = (".py",)
 _TS_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_RS_EXTS = (".rs",)
+
+_ENGINE_PRIORITY = ("mutmut", "stryker", "cargo-mutants")
+
+
+def _engine_for(file_path: str) -> str:
+    if file_path.endswith(_PY_EXTS):
+        return "mutmut"
+    if file_path.endswith(_RS_EXTS):
+        return "cargo-mutants"
+    return "stryker"
 
 
 def find_mutmut() -> str | None:
@@ -136,7 +149,7 @@ def reconcile(targets: list[dict], mutants: list[dict]) -> tuple:
         per_target.append(
             {
                 **{k: t[k] for k in ("fid", "qualified_name", "file_path", "start_line", "end_line", "tests", "callers")},
-                "engine": "mutmut" if t["file_path"].endswith(_PY_EXTS) else "stryker",
+                "engine": _engine_for(t["file_path"]),
                 "mutants": len(in_range),
                 **{k: counts.get(k, 0) for k in _COUNT_KEYS},
                 "survival_rate": (counts["survived"] / tested) if tested else None,
@@ -264,11 +277,52 @@ def _engine_stryker(repo: Path, targets: list[dict], timeout: int) -> dict:
         s2_stryker.cleanup(repo)
 
 
+def _engine_cargo_mutants(repo: Path, targets: list[dict], timeout: int) -> dict:
+    bin_path = s2_cargo_mutants.find_cargo_mutants()
+    if not bin_path:
+        return {
+            "status": "not-found",
+            "mutants": [],
+            "detail": {
+                "hint": "cargo install cargo-mutants or set VRP_CARGO_MUTANTS_BIN"
+            },
+        }
+    files = sorted({t["file_path"] for t in targets})
+    rr = s2_cargo_mutants.run_cargo_mutants(bin_path, repo, files, timeout)
+    try:
+        if not rr["ok"]:
+            return {"status": "failed", "mutants": [], "detail": rr}
+        report = repo / s2_cargo_mutants.REPORT_NAME
+        if not report.is_file():
+            return {
+                "status": "failed",
+                "mutants": [],
+                "detail": {
+                    "returncode": rr["returncode"],
+                    "stderr_tail": "no cargo-mutants outcomes produced",
+                },
+            }
+        mutants, raw, baseline_ok = s2_cargo_mutants.parse_outcomes(report)
+        if not baseline_ok:
+            return {
+                "status": "failed",
+                "mutants": [],
+                "detail": {
+                    "returncode": rr["returncode"],
+                    "stderr_tail": "cargo-mutants baseline tests failed",
+                },
+            }
+        return {"status": "ok", "mutants": mutants, "raw": raw}
+    finally:
+        s2_cargo_mutants.cleanup(repo)
+
+
 def run(repo: Path, con: sqlite3.Connection, budget: int, timeout: int) -> dict:
     targets = s2_mutate.mutation_targets(con, budget)
     py = [t for t in targets if t["file_path"].endswith(_PY_EXTS)]
     ts = [t for t in targets if t["file_path"].endswith(_TS_EXTS)]
-    selected = py + ts
+    rs = [t for t in targets if t["file_path"].endswith(_RS_EXTS)]
+    selected = py + ts + rs
     if not selected:
         return {"status": "no-targets"}
     s2_mutate.write_plan(repo, selected)
@@ -277,8 +331,10 @@ def run(repo: Path, con: sqlite3.Connection, budget: int, timeout: int) -> dict:
         engines["mutmut"] = _engine_mutmut(repo, py, timeout)
     if ts:
         engines["stryker"] = _engine_stryker(repo, ts, timeout)
+    if rs:
+        engines["cargo-mutants"] = _engine_cargo_mutants(repo, rs, timeout)
     if not any(r["status"] == "ok" for r in engines.values()):
-        first = "mutmut" if "mutmut" in engines else "stryker"
+        first = next((n for n in _ENGINE_PRIORITY if n in engines), None)
         failed = engines[first]
         out: dict = {"status": f"{first}-{failed['status']}", "engines": {n: r["status"] for n, r in engines.items()}}
         if failed.get("detail"):
@@ -308,6 +364,9 @@ def run(repo: Path, con: sqlite3.Connection, budget: int, timeout: int) -> dict:
     stryker_raw = engines.get("stryker", {}).get("raw")
     if stryker_raw:
         summary["stryker_raw"] = stryker_raw
+    cargo_raw = engines.get("cargo-mutants", {}).get("raw")
+    if cargo_raw:
+        summary["cargo_mutants_raw"] = cargo_raw
     report = write_report(repo, {**summary, "per_target": per_target})
     summary["report"] = str(report)
     summary["findings"] = write_findings(con, per_target)

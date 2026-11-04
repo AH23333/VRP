@@ -1,4 +1,11 @@
-from vrp.testsig import is_test_path, is_js_ts, is_synthetic_path, should_self_build_tests
+from vrp.testsig import (
+    is_js_ts,
+    is_rust,
+    is_synthetic_path,
+    is_test_path,
+    should_self_build_tests,
+    should_self_build_tests_rust,
+)
 
 
 def test_prefix_python():
@@ -54,3 +61,21 @@ def test_self_build_rule():
     assert not should_self_build_tests("test/lsp.test.ts", "src/store.py")
     assert not should_self_build_tests("tests/test_x.py", "src/mod.py")
     assert not should_self_build_tests("test/lsp.test.ts", "<builtins>")
+
+
+def test_rust_ext():
+    assert is_rust("src/lib.rs")
+    assert is_rust("src/lib.RS")
+    assert not is_rust("src/lib.ts")
+    assert not is_rust("src/lib")
+    assert not is_rust("src/lib.rs.bak")
+
+
+def test_rust_self_build_rule():
+    # CBM emits TESTS=0 for Rust (probed 2026-11-04) but resolves test->lib
+    # CALLS edges, so the ETL rebuilds test linkage for .rs the same way
+    assert should_self_build_tests_rust("tests/calc.rs", "src/lib.rs")
+    assert not should_self_build_tests_rust("src/lib.rs", "src/main.rs")
+    assert not should_self_build_tests_rust("tests/calc.rs", "tests/other.rs")
+    assert not should_self_build_tests_rust("tests/calc.rs", "src/store.py")
+    assert not should_self_build_tests_rust("tests/calc.rs", "<builtins>")

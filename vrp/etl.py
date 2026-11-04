@@ -281,6 +281,7 @@ def _etl_edges(
         "history_coupling": 0,
         "test_linkage_cbm": 0,
         "test_linkage_js_ts": 0,
+        "test_linkage_rust": 0,
         "findings_p2": 0,
         "dangling_edges": 0,
     }
@@ -291,6 +292,7 @@ def _etl_edges(
     tests_rows = []
     findings_rows = []
     seen_js_ts: set[tuple[str, str]] = set()
+    seen_rust: set[tuple[str, str]] = set()
 
     for r in src.execute(
         "SELECT source_id, target_id, type, properties FROM edges WHERE project = ?", (project,)
@@ -340,6 +342,11 @@ def _etl_edges(
                 if key not in seen_js_ts:
                     seen_js_ts.add(key)
                     tests_rows.append((src_fid, dst_fid, "etl-js-ts", props_raw))
+            elif testsig.should_self_build_tests_rust(src_file, dst_file):
+                key = (src_fid, dst_fid)
+                if key not in seen_rust:
+                    seen_rust.add(key)
+                    tests_rows.append((src_fid, dst_fid, "etl-rust", props_raw))
 
     # M1: delete any edge touching a replaced symbol before re-inserting, in
     # the same transaction as the symbol REPLACE above.
@@ -364,6 +371,7 @@ def _etl_edges(
     stats["history_coupling"] = len(history_rows)
     stats["test_linkage_cbm"] = sum(1 for r in tests_rows if r[2] == "cbm")
     stats["test_linkage_js_ts"] = sum(1 for r in tests_rows if r[2] == "etl-js-ts")
+    stats["test_linkage_rust"] = sum(1 for r in tests_rows if r[2] == "etl-rust")
     stats["findings_p2"] = len(findings_rows)
     return stats
 

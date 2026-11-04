@@ -394,3 +394,148 @@ def test_run_mutmut_failed_cleans_cache(facts_db, tmp_path, monkeypatch):
     result = run(tmp_path, facts_db, 5, 60)
     assert result["status"] == "mutmut-failed"
     assert not (tmp_path / ".mutmut-cache").exists()
+
+
+def _seed_rs_targets(facts_db):
+    for fid, qn, start, end in (("r1", "p.lib.add", 1, 3), ("r2", "p.lib.mul", 10, 12)):
+        facts_db.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            " VALUES (?,'p',?,'Function',?,'src/lib.rs',?,?,'h')",
+            (fid, qn, qn.rsplit(".", 1)[-1], start, end),
+        )
+        facts_db.execute(
+            "INSERT INTO test_linkage (test_fid, target_fid, source) VALUES ('rt1', ?, 'etl-rust')",
+            (fid,),
+        )
+        facts_db.execute(
+            "INSERT INTO edges (src_fid, dst_fid, type, evidence, properties_json)"
+            " VALUES ('rt1', ?, 'CALLS', 'structural', '{}')",
+            (fid,),
+        )
+    facts_db.commit()
+
+
+def _cargo_outcomes(repo):
+    from vrp import s2_cargo_mutants
+
+    report = repo / s2_cargo_mutants.REPORT_NAME
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        json.dumps(
+            {
+                "outcomes": [
+                    {"scenario": "Baseline", "summary": "Success"},
+                    {"scenario": {"Mutant": {"file": "src\\lib.rs",
+                                             "span": {"start": {"line": 2, "column": 5}}}},
+                     "summary": "CaughtMutant"},
+                    {"scenario": {"Mutant": {"file": "src\\lib.rs",
+                                             "span": {"start": {"line": 11, "column": 7}}}},
+                     "summary": "MissedMutant"},
+                    # greet mutant: missed but OUTSIDE both plan targets -> side
+                    {"scenario": {"Mutant": {"file": "src\\lib.rs",
+                                             "span": {"start": {"line": 6, "column": 5}}}},
+                     "summary": "MissedMutant"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return report
+
+
+def test_run_rs_only_cargo_mutants_ok(facts_db, tmp_path, monkeypatch):
+    _seed_rs_targets(facts_db)
+    seen: dict = {}
+
+    def fake_run_cargo_mutants(bin_path, repo, files, timeout):
+        seen["files"] = list(files)
+        _cargo_outcomes(repo)
+        return {"ok": True, "returncode": 2, "stdout_tail": "", "stderr_tail": ""}
+
+    monkeypatch.setattr("vrp.s2_cargo_mutants.find_cargo_mutants", lambda: "fake-cargo-mutants")
+    monkeypatch.setattr("vrp.s2_cargo_mutants.run_cargo_mutants", fake_run_cargo_mutants)
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "ok"
+    assert seen["files"] == ["src/lib.rs"]
+    assert result["engines"] == {"cargo-mutants": "ok"}
+    assert result["mutants_total"] == 3
+    assert result["killed"] == 1 and result["survived"] == 2
+    assert result["side_mutants"] == 1
+    assert result["surviving_targets"] == 1
+    assert result["findings"] == 1
+    assert result["cargo_mutants_raw"] == {"CaughtMutant": 1, "MissedMutant": 2}
+    assert not (tmp_path / ".vrp" / "cargo-mutants-out").exists()
+    report = json.loads((tmp_path / ".vrp" / "mutation-report.json").read_text(encoding="utf-8"))
+    assert len(report["per_target"]) == 2
+    for target in report["per_target"]:
+        assert target["engine"] == "cargo-mutants"
+    payload = json.loads(facts_db.execute(
+        f"SELECT payload_json FROM findings WHERE source='{SOURCE}'"
+    ).fetchone()[0])
+    assert payload["engine"] == "cargo-mutants"
+    assert payload["qualified_name"] == "p.lib.mul"
+
+
+def test_run_cargo_mutants_not_found(facts_db, tmp_path, monkeypatch):
+    _seed_rs_targets(facts_db)
+    monkeypatch.setattr("vrp.s2_cargo_mutants.find_cargo_mutants", lambda: None)
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "cargo-mutants-not-found"
+    assert "hint" in result
+
+
+def test_run_cargo_mutants_failed_cleans_scratch(facts_db, tmp_path, monkeypatch):
+    _seed_rs_targets(facts_db)
+    from vrp import s2_cargo_mutants
+
+    def failing_run_cargo_mutants(bin_path, repo, files, timeout):
+        scratch = repo / s2_cargo_mutants.OUT_DIR_NAME / "mutants.out"
+        scratch.mkdir(parents=True, exist_ok=True)
+        (scratch / "outcomes.json").write_text("{}", encoding="utf-8")
+        return {"ok": False, "returncode": 1, "stdout_tail": "", "stderr_tail": "baseline tests failed"}
+
+    monkeypatch.setattr("vrp.s2_cargo_mutants.find_cargo_mutants", lambda: "fake-cargo-mutants")
+    monkeypatch.setattr("vrp.s2_cargo_mutants.run_cargo_mutants", failing_run_cargo_mutants)
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "cargo-mutants-failed"
+    assert result["returncode"] == 1 and result["stderr_tail"] == "baseline tests failed"
+    assert not (tmp_path / ".vrp" / "cargo-mutants-out").exists()
+
+
+def test_run_dispatches_rs_alongside_py(facts_db, tmp_path, monkeypatch):
+    _seed_targets(facts_db)
+    facts_db.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES ('r9','p','p.lib.mul','Function','mul','src/lib.rs',10,12,'h')"
+    )
+    facts_db.execute(
+        "INSERT INTO test_linkage (test_fid, target_fid, source) VALUES ('rt9', 'r9', 'etl-rust')"
+    )
+    facts_db.commit()
+    seen: dict = {}
+
+    def fake_run_mutmut(bin_path, repo, files, timeout):
+        seen["mutmut"] = list(files)
+        cache = repo / ".mutmut-cache"
+        _make_cache(cache)
+        return {"ok": True, "returncode": 0, "stderr_tail": ""}
+
+    def fake_run_cargo_mutants(bin_path, repo, files, timeout):
+        seen["cargo-mutants"] = list(files)
+        _cargo_outcomes(repo)
+        return {"ok": True, "returncode": 2, "stdout_tail": "", "stderr_tail": ""}
+
+    monkeypatch.setattr("vrp.s2_mutate_run.find_mutmut", lambda: "fake-mutmut")
+    monkeypatch.setattr("vrp.s2_mutate_run.run_mutmut", fake_run_mutmut)
+    monkeypatch.setattr("vrp.s2_cargo_mutants.find_cargo_mutants", lambda: "fake-cargo-mutants")
+    monkeypatch.setattr("vrp.s2_cargo_mutants.run_cargo_mutants", fake_run_cargo_mutants)
+    result = run(tmp_path, facts_db, 5, 60)
+    assert result["status"] == "ok"
+    assert seen["mutmut"] == ["calc/mathfun.py"]
+    assert seen["cargo-mutants"] == ["src/lib.rs"]
+    assert result["engines"] == {"mutmut": "ok", "cargo-mutants": "ok"}
+    assert result["files"] == ["calc/mathfun.py", "src/lib.rs"]
+    report = json.loads((tmp_path / ".vrp" / "mutation-report.json").read_text(encoding="utf-8"))
+    engines = {t["qualified_name"]: t["engine"] for t in report["per_target"]}
+    assert engines["m.clamp"] == "mutmut"
+    assert engines["p.lib.mul"] == "cargo-mutants"
