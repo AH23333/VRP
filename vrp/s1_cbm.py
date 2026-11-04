@@ -36,6 +36,29 @@ def cbm_db_path(name: str) -> Path:
     return cache_dir() / f"{name}.db"
 
 
+def find_cbm_db(name: str, repo_path: str) -> Path | None:
+    """Locate the CBM db for a repo.
+
+    Preferred form is the legacy ``{name}.db``. CBM may however rename the
+    project (observed: a workspace context under ``D:\\Visual Studio Code\\Something``
+    makes CBM derive the project from the full repo path, ignoring ``--name``),
+    so fall back to scanning the cache dir for a db whose recorded provenance
+    matches ``repo_path`` (dogfood batch 2026-11-04).
+    """
+    db = cbm_db_path(name)
+    if db.exists():
+        return db
+    cdir = cache_dir()
+    if cdir.is_dir():
+        for cand in sorted(cdir.glob("*.db")):
+            try:
+                if _recorded_repo_path(cand) == repo_path:
+                    return cand
+            except (RuntimeError, sqlite3.Error):
+                continue
+    return None
+
+
 REPO_PATH_META_KEY = "vrp_repo_path"
 
 
@@ -96,21 +119,24 @@ def _parse_json_stdout(stdout: str) -> dict:
 
 
 def index_repository(repo: Path, name: str, reindex: bool = False, timeout: int = 3600) -> dict:
-    db = cbm_db_path(name)
     repo_path = str(Path(repo).resolve())
     rebuild_reason = None
-    if db.exists() and not reindex:
+    db = find_cbm_db(name, repo_path)
+    if db is not None and not reindex:
         recorded = _recorded_repo_path(db)
         if recorded is None:
             rebuild_reason = "unknown-source"
         elif recorded != repo_path:
             rebuild_reason = "repo-path-mismatch"
         else:
-            return {"status": "reused", "project": name, "db": str(db)}
+            return {"status": "reused", "project": db.stem, "db": str(db)}
     result = run_cli(
         ["index_repository", "--repo-path", str(repo), "--name", name], timeout=timeout
     )
+    project = str(result.get("project") or name)
+    db = cache_dir() / f"{project}.db"
     result["status"] = "indexed"
+    result["project"] = project
     result["db"] = str(db)
     if not db.exists():
         raise RuntimeError(f"cbm reported success but db is missing: {db}")

@@ -87,3 +87,84 @@ def test_old_db_without_provenance_rebuilds(tmp_path, cache, monkeypatch):
     r = s1_cbm.index_repository(repo, "proj")
     assert r["status"] == "indexed", "legacy db without provenance must be treated as unknown"
     assert r["rebuild_reason"] == "unknown-source"
+
+
+def test_cbm_renamed_project_uses_returned_project(tmp_path, cache, monkeypatch):
+    """Dogfood 2026-11-04: CBM may ignore --name and derive the project from the
+    repo path (observed in a workspace context). index_repository must consume
+    the returned project and locate the db accordingly."""
+    slug_db = cache / "D-path-slug-proj.db"
+    calls: list = []
+
+    def fake(args, timeout=3600):
+        calls.append(args)
+        con = sqlite3.connect(slug_db)
+        con.execute("CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT)")
+        con.execute("INSERT INTO store_meta VALUES ('db_uid', 'uid-1')")
+        con.commit()
+        con.close()
+        return {"ok": True, "project": "D-path-slug-proj"}
+
+    monkeypatch.setattr(s1_cbm, "run_cli", fake)
+    repo = _mk_repo(tmp_path, "a")
+    r = s1_cbm.index_repository(repo, "proj")
+    assert r["status"] == "indexed"
+    assert r["project"] == "D-path-slug-proj"
+    assert r["db"] == str(slug_db)
+
+    r2 = s1_cbm.index_repository(repo, "proj")
+    assert r2["status"] == "reused", "provenance fallback must find the renamed db"
+    assert r2["project"] == "D-path-slug-proj"
+    assert len(calls) == 1
+
+
+def test_find_cbm_db_provenance_fallback(tmp_path, cache):
+    repo = _mk_repo(tmp_path, "a")
+    slug_db = cache / "D-path-slug-proj.db"
+    con = sqlite3.connect(slug_db)
+    con.execute("CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT)")
+    con.executemany(
+        "INSERT INTO store_meta VALUES (?,?)",
+        [("db_uid", "uid-1"), (s1_cbm.REPO_PATH_META_KEY, str(repo.resolve()))],
+    )
+    con.commit()
+    con.close()
+
+    assert s1_cbm.find_cbm_db("proj", str(repo.resolve())) == slug_db
+    assert s1_cbm.find_cbm_db("proj", str((_mk_repo(tmp_path, "b")).resolve())) is None
+
+
+def test_run_etl_resolves_renamed_project(tmp_path, cache):
+    """ETL must filter nodes by the actual CBM project (db stem), not the name hint."""
+    from vrp import etl
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("def old():\n    return 1\n", encoding="utf-8")
+    project = "D-path-slug-repo"
+    slug_db = cache / f"{project}.db"
+    con = sqlite3.connect(slug_db)
+    con.execute("CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT)")
+    con.executemany(
+        "INSERT INTO store_meta VALUES (?,?)",
+        [("db_uid", "uid-1"), (s1_cbm.REPO_PATH_META_KEY, str(repo.resolve()))],
+    )
+    con.execute(
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY, project TEXT, label TEXT, name TEXT,"
+        " qualified_name TEXT, file_path TEXT, start_line INT, end_line INT, properties TEXT)"
+    )
+    con.execute(
+        f"INSERT INTO nodes VALUES (1,'{project}','Function','old','p.a.old','a.py',1,2,'{{}}')"
+    )
+    con.execute("CREATE TABLE edges (source_id INT, target_id INT, type TEXT, properties TEXT, project TEXT)")
+    con.execute("CREATE TABLE index_coverage (project TEXT, rel_path TEXT, kind TEXT, detail TEXT)")
+    con.execute(f"INSERT INTO index_coverage VALUES ('{project}','a.py','ok','')")
+    con.execute("CREATE TABLE file_hashes (project TEXT, rel_path TEXT, sha256 TEXT)")
+    con.commit()
+    con.close()
+
+    stats = etl.run_etl(repo, "repo")
+    assert stats["symbols"] == 1, "ETL must resolve the renamed project via provenance"
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    assert con.execute("SELECT qualified_name FROM symbols").fetchall() == [("p.a.old",)]
+    con.close()

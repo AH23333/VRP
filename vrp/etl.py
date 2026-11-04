@@ -73,11 +73,6 @@ def _decode_props(raw: str | None) -> dict:
         return {}
 
 
-def _copy_table_simple(dst: sqlite3.Connection, rows, table: str, columns: int):
-    placeholders = ",".join("?" * columns)
-    dst.executemany(f"INSERT OR REPLACE INTO {table} VALUES ({placeholders})", rows)
-
-
 OWNED_TABLES = (
     "annotations",
     "transactions",
@@ -169,9 +164,13 @@ def restore_owned(dst: sqlite3.Connection, snap: dict[str, list[tuple]]) -> None
 
 def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
     repo = repo.resolve()
-    db_path = s1_cbm.cbm_db_path(cbm_name)
-    if not db_path.exists():
-        raise FileNotFoundError(f"CBM db not found for project '{cbm_name}': {db_path}")
+    db_path = s1_cbm.find_cbm_db(cbm_name, str(repo))
+    if db_path is None:
+        raise FileNotFoundError(
+            f"CBM db not found for project '{cbm_name}' (nor by repo provenance): "
+            f"{s1_cbm.cbm_db_path(cbm_name)}"
+        )
+    project = db_path.stem
     s1_cbm.verify_cbm_schema(db_path)
     store_meta = s1_cbm.read_store_meta(db_path)
     out_db = out_db or (repo / ".vrp" / "facts.db")
@@ -192,11 +191,11 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
 
         stats: dict[str, int] = {}
         try:
-            fid_by_id, file_by_id, replaced = _etl_symbols(dst, src, hasher, cbm_name, repo)
+            fid_by_id, file_by_id, replaced = _etl_symbols(dst, src, hasher, project, repo)
             stats["symbols"] = len(fid_by_id)
-            stats.update(_etl_edges(dst, src, cbm_name, fid_by_id, file_by_id, replaced))
-            stats.update(_etl_coverage(dst, src, cbm_name))
-            _write_meta(dst, cbm_name, store_meta, repo, stats)
+            stats.update(_etl_edges(dst, src, project, fid_by_id, file_by_id, replaced))
+            stats.update(_etl_coverage(dst, src, project))
+            _write_meta(dst, project, store_meta, repo, stats)
             dst.commit()
         finally:
             src.close()
