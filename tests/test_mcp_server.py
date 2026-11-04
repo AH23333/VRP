@@ -19,6 +19,7 @@ TOOL_NAMES = {
     "nav_callers",
     "nav_callees",
     "nav_slice",
+    "nav_path",
     "query_facts",
     "curate_submit",
     "curate_slices",
@@ -139,7 +140,10 @@ def test_nav_chain_over_mcp(tmp_path):
         sym = await _call(session, "nav_symbol", {"fid": fid})
         facts = await _call(session, "query_facts", {"sql": "SELECT COUNT(*) AS n FROM symbols"})
         arch = await _call(session, "nav_architecture", {})
-        return {"search": search, "mod": mod, "sym": sym, "facts": facts, "arch": arch}
+        path = await _call(session, "nav_path", {"from_fid": "f1", "to_fid": "f2"})
+        rev = await _call(session, "nav_path", {"from_fid": "f2", "to_fid": "f1"})
+        return {"search": search, "mod": mod, "sym": sym, "facts": facts, "arch": arch,
+                "path": path, "rev": rev}
 
     out = _run(_drive(repo, {"plan": plan}))["plan"]
     assert out["search"]["count"] == 1
@@ -148,6 +152,11 @@ def test_nav_chain_over_mcp(tmp_path):
     assert out["sym"]["symbol"]["qualified_name"] == "pkg.calc.total"
     assert out["facts"]["rows"] == [{"n": 2}]
     assert out["arch"]["fallback"] == "dir-aggregation"
+    assert out["path"]["found"] is True
+    assert out["path"]["hops"] == 1
+    assert [p["fid"] for p in out["path"]["path"]] == ["f1", "f2"]
+    assert out["path"]["hops_detail"][0]["type"] == "CALLS"
+    assert out["rev"]["found"] is False
 
 
 def test_error_json_not_crash(tmp_path):

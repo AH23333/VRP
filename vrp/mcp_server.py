@@ -114,6 +114,9 @@ def build_server(repo: Path) -> "MCPServer":
     def nav_slice(slice_id: str) -> str:
         return _dumps(nav.nav_slice(repo, slice_id))
 
+    def nav_path(from_fid: str, to_fid: str, max_hops: int = 5) -> str:
+        return _dumps(nav.nav_path(repo, from_fid, to_fid, max_hops))
+
     def curate_submit(kind: str, payload_json: str) -> str:
         con = _open_facts_rw(repo)
         try:
@@ -256,6 +259,13 @@ def build_server(repo: Path) -> "MCPServer":
         name="nav_slice",
         description="业务线视角：steps（附符号摘要+fid 句柄）+ acts（分幕）；"
         "slices 由 curate_submit 验收入库；status=stale 表示符号/边已漂移",
+    )
+    server.add_tool(
+        _guard(nav_path),
+        name="nav_path",
+        description="耦合路径查找：from→to 沿 edges（src→dst）最短路径（WITH RECURSIVE BFS）；"
+        "hops_detail 透传每跳 type/evidence/confidence——低置信边需下钻核实；"
+        "不可达时 found=false（可调大 max_hops 上限 10 或反向查询）",
     )
     server.add_tool(
         _guard(curate_submit),

@@ -7,6 +7,7 @@
 - nav_symbol       L2 符号级：签名/行号/调用关系/病理/所属业务线，返回 edge 句柄
 - nav_callers/callees L2 调用关系完整列表（分页，nav_symbol 内 cap 20 的补充）
 - nav_slice        业务线视角（slices 表，curate 验收入库后可用）
+- nav_path         耦合路径查找（WITH RECURSIVE BFS 最短路径，R4'）
 - query_facts      轻量直查（mode=ro + SELECT 白名单校验）
 
 句柄语义：fid = sha256(project|qualified_name|content_hash)——同一 facts.db 快照内稳定，
@@ -32,6 +33,8 @@ NEIGHBOR_LIST_MAX_LIMIT = 200
 NEIGHBOR_LIST_DEFAULT_LIMIT = 50
 SYMBOL_SLICES_CAP = 10
 FID_CHUNK = 500
+PATH_DEFAULT_MAX_HOPS = 5
+PATH_MAX_HOPS = 10
 
 _SELECT_HEADS = ("select", "with")
 
@@ -420,6 +423,120 @@ def nav_slice(repo: Path, slice_id: str) -> dict:
         "steps": steps,
         "acts": acts,
         "note": "status=stale 表示符号/边已漂移（复验失效）；step.fid 句柄供 nav_symbol 下钻",
+    }
+
+
+def nav_path(
+    repo: Path,
+    from_fid: str,
+    to_fid: str,
+    max_hops: int = PATH_DEFAULT_MAX_HOPS,
+) -> dict:
+    """耦合路径查找：from→to 沿 edges（src→dst）最短路径（WITH RECURSIVE BFS，R4'）。
+
+    BFS 层序保证首达即最短；同长最短路径可能不止一条，确定性选一（fid 字典序）。
+    hops_detail 透传 edge 的 type/evidence/confidence——地基质量透传（构想v7 §1.4.2）。
+    """
+    from_fid = from_fid.strip()
+    to_fid = to_fid.strip()
+    if not from_fid or not to_fid:
+        raise SystemExit("nav_path: from_fid/to_fid must be non-empty")
+    if from_fid == to_fid:
+        raise SystemExit("nav_path: from_fid and to_fid must differ")
+    max_hops = max(1, min(int(max_hops), PATH_MAX_HOPS))
+    con = _connect_ro(repo)
+    try:
+        for fid in (from_fid, to_fid):
+            if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is None:
+                raise SystemExit(f"nav_path: unknown fid: {fid[:16]}...")
+        con.execute("CREATE TEMP TABLE bfs_path_map (fid TEXT PRIMARY KEY, depth INTEGER NOT NULL)")
+        # 递归 CTE 的 UNION 按整行 (fid, depth) 去重——同 fid 可带多个深度；
+        # MIN(depth) 聚合归一为"每节点最短到达深度"，重建用 predecessor 性质成立
+        con.execute(
+            """
+            WITH RECURSIVE walk(fid, depth) AS (
+                SELECT ?, 0
+                UNION
+                SELECT e.dst_fid, walk.depth + 1
+                FROM edges e JOIN walk ON e.src_fid = walk.fid
+                WHERE walk.depth < ?
+            )
+            INSERT INTO bfs_path_map (fid, depth)
+            SELECT fid, MIN(depth) FROM walk GROUP BY fid
+            """,
+            (from_fid, max_hops),
+        )
+        target = con.execute(
+            "SELECT depth FROM bfs_path_map WHERE fid = ?", (to_fid,)
+        ).fetchone()
+        nodes_searched = con.execute("SELECT COUNT(*) FROM bfs_path_map").fetchone()[0]
+        if target is None:
+            return {
+                "level": "path",
+                "from_fid": from_fid,
+                "to_fid": to_fid,
+                "found": False,
+                "hops": None,
+                "max_hops": max_hops,
+                "nodes_searched": nodes_searched,
+                "note": f"max_hops={max_hops} 内不可达（方向 edges src→dst）；"
+                f"可调大 max_hops（上限 {PATH_MAX_HOPS}）或反向 nav_path(to, from) 查反向耦合",
+            }
+        depth = target["depth"]
+        chain = [to_fid]
+        hops_detail: list[dict] = []
+        current = to_fid
+        for d in range(depth, 0, -1):
+            pred = con.execute(
+                """
+                SELECT b.fid FROM bfs_path_map b JOIN edges e ON e.src_fid = b.fid
+                WHERE e.dst_fid = ? AND b.depth = ? ORDER BY b.fid LIMIT 1
+                """,
+                (current, d - 1),
+            ).fetchone()
+            edge = con.execute(
+                """
+                SELECT type, evidence, strategy, confidence, line FROM edges
+                WHERE src_fid = ? AND dst_fid = ?
+                ORDER BY type, evidence LIMIT 1
+                """,
+                (pred["fid"], current),
+            ).fetchone()
+            hops_detail.append({
+                "from_fid": pred["fid"],
+                "to_fid": current,
+                "type": edge["type"],
+                "evidence": edge["evidence"],
+                "strategy": edge["strategy"],
+                "confidence": edge["confidence"],
+                "line": edge["line"],
+            })
+            chain.append(pred["fid"])
+            current = pred["fid"]
+        chain.reverse()
+        hops_detail.reverse()
+        path: list[dict] = []
+        for fid in chain:
+            row = con.execute(
+                "SELECT fid, qualified_name, name, file_path, start_line FROM symbols WHERE fid = ?",
+                (fid,),
+            ).fetchone()
+            path.append(dict(row))
+    finally:
+        con.close()
+    return {
+        "level": "path",
+        "from_fid": from_fid,
+        "to_fid": to_fid,
+        "found": True,
+        "hops": depth,
+        "max_hops": max_hops,
+        "nodes_searched": nodes_searched,
+        "path": path,
+        "hops_detail": hops_detail,
+        "note": "最短耦合路径（edges src→dst 方向）；hops_detail 透传 confidence——"
+        "低置信边需 nav_symbol 下钻核实或读源码确认；同长最短路径可能不止一条，"
+        "本接口确定性选一（fid 字典序最小）",
     }
 
 

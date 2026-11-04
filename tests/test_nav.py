@@ -227,6 +227,84 @@ def test_nav_architecture_structure_branch(tmp_path):
     assert out["layers"][1]["may_depend_on"] == ["domain"]
 
 
+def test_nav_path_shortest_route(tmp_path):
+    repo = _mk_repo(tmp_path)
+    for fid, qn in (("a", "pkg.a.ent"), ("b", "pkg.b.mid"), ("c", "pkg.c.shortcut"), ("d", "pkg.d.exit")):
+        _add_symbol(repo, fid, qn, qn.split(".")[-1], f"pkg/{fid}.py", 1)
+    _add_edge(repo, "a", "b")
+    _add_edge(repo, "b", "c")
+    _add_edge(repo, "c", "d")
+    _add_edge(repo, "a", "c")  # 捷径：a→c→d 两跳
+    out = nav.nav_path(repo, "a", "d")
+    assert out["found"] is True
+    assert out["hops"] == 2
+    assert [p["fid"] for p in out["path"]] == ["a", "c", "d"]
+    assert out["path"][0]["qualified_name"] == "pkg.a.ent"
+    assert [h["type"] for h in out["hops_detail"]] == ["CALLS", "CALLS"]
+    assert out["hops_detail"][0]["from_fid"] == "a"
+    assert out["hops_detail"][0]["to_fid"] == "c"
+    # 反向不可达（边方向 src→dst）
+    rev = nav.nav_path(repo, "d", "a")
+    assert rev["found"] is False
+    assert rev["nodes_searched"] >= 1
+
+
+def test_nav_path_depth_bound(tmp_path):
+    repo = _mk_repo(tmp_path)
+    for fid in ("a", "b", "c"):
+        _add_symbol(repo, fid, f"pkg.{fid}", fid, f"pkg/{fid}.py", 1)
+    _add_edge(repo, "a", "b")
+    _add_edge(repo, "b", "c")
+    shallow = nav.nav_path(repo, "a", "c", max_hops=1)
+    assert shallow["found"] is False
+    assert shallow["max_hops"] == 1
+    deep = nav.nav_path(repo, "a", "c", max_hops=5)
+    assert deep["found"] is True
+    assert deep["hops"] == 2
+    assert [p["fid"] for p in deep["path"]] == ["a", "b", "c"]
+
+
+def test_nav_path_cycle_safe_no_repeat(tmp_path):
+    repo = _mk_repo(tmp_path)
+    for fid in ("a", "b", "c", "d"):
+        _add_symbol(repo, fid, f"pkg.{fid}", fid, f"pkg/{fid}.py", 1)
+    _add_edge(repo, "a", "b")
+    _add_edge(repo, "b", "c")
+    _add_edge(repo, "c", "a")  # 环
+    _add_edge(repo, "c", "d")
+    out = nav.nav_path(repo, "a", "d")
+    assert out["found"] is True
+    assert out["hops"] == 3
+    fids = [p["fid"] for p in out["path"]]
+    assert fids == ["a", "b", "c", "d"]
+    assert len(set(fids)) == len(fids)  # 无重复节点（BFS 去重）
+
+
+def test_nav_path_parallel_edges_deterministic(tmp_path):
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "a", "pkg.a.x", "x", "pkg/a.py", 1)
+    _add_symbol(repo, "b", "pkg.b.y", "y", "pkg/b.py", 1)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence, confidence) VALUES ('a', 'b', 'IMPORTS', 'structural', 0.5)")
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence, confidence) VALUES ('a', 'b', 'CALLS', 'structural', 0.9)")
+    con.commit()
+    con.close()
+    out = nav.nav_path(repo, "a", "b")
+    assert out["hops_detail"][0]["type"] == "CALLS"  # (type, evidence) 字典序确定性选一
+    assert out["hops_detail"][0]["confidence"] == 0.9
+
+
+def test_nav_path_validation(tmp_path):
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "a", "pkg.a.x", "x", "pkg/a.py", 1)
+    for bad in ((" ", "a"), ("a", " "), ("a", "a"), ("a", "ghost"), ("ghost", "a")):
+        try:
+            nav.nav_path(repo, bad[0], bad[1])
+            raise AssertionError(f"must reject: {bad!r}")
+        except SystemExit:
+            pass
+
+
 def test_query_facts_select_only_guard(tmp_path):
     repo = _mk_repo(tmp_path)
     _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
