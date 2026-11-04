@@ -1,9 +1,11 @@
 # 构想v7——AI 重构主流程与梳理层定稿
 
-> 状态：定稿 r3（2026-11-04）。r1 以渲染层四投影为中心，经产品定位纠偏后修订：
+> 状态：定稿 r4（2026-11-04）。r1 以渲染层四投影为中心，经产品定位纠偏后修订：
 > **主流程 = 工具分析 → AI 梳理分析 → AI 重构 → 工具分析（回归验证）**；
 > 可视化降格为各环节中间产物的呈现（横切），引入用户决策环节。
-> r3 增补：AI 接口层（MCP+skill，§1.4）与驱动循环定稿（§1.5）——②环生产侧落地载体。
+> r3 增补：AI 接口层（MCP+skill，§1.4）与驱动循环定稿（§1.5）。
+> r4 定稿：市场定位翻转（vrp 本质 = MCP 插件，§0.4）、导航接口族（§1.4.2）、
+> 现成工具最佳组合 + 工具组全局原则（§1.6）、信任分级交付（§3.3）、批次含 R3.5'（§6）。
 > 《渲染层方案.md》为讨论稿，本文档为其定稿取代（保留作决策过程记录）。
 
 ## 0. 决策记录
@@ -32,6 +34,20 @@
 - **决策体验配套**（用户裁决"允许"）：`transact --preview` diff 预览跟随 T4 confirm 走，进 R1'，confirm 不盲签。
 - **驱动循环**（用户裁决"帮定"）：外部 agent 经 MCP 驱动为主、人肉为底、vrp 内置 LLM 循环明确排除；T4 人工闸 MCP 侧不可绕过；循环协议 8 步进 skill（§1.5）。
 - **分析层定位**（用户裁决）："已完成的 S1-S5 只是最初步的"——分析层后续深化经 dossier/facts.db 统一消费面自动流到 AI，接口层不变更；深化方向另轮讨论。
+
+### 0.4 r4 定稿（用户验收通过）
+
+**市场定位翻转（用户构想，核心）**：项目虽叫"管道"，市场定位是**重构项目的 AI 分析工具，本质是一个 MCP 插件**，需 AI 深度参与——梳理业务、发现问题、给出建议、配合可视化材料让用户拍板、AI 重构、再分析进入循环。**核心价值主张：不让 AI 全读裸代码——AI 对代码的认知来自 vrp 的分层接口**。视角翻转：CLI（run/transact/curate）= 引擎面，MCP = 用户面；r3 的"接口层"升格为"产品本体"。
+
+**四子点定稿**：
+1. **导航接口族**（§1.4.2）：不同深度/颗粒度的分层查询接口，全链可查（L0 架构→模块→符号→行/边，每层返回下钻句柄），防 AI 只分析浅层——双机制：句柄体系与 curate 验证器同一套 fid/edge 锚（过验收必须下钻到底）+ 导航引导。
+2. **初末态对比（诚实版）**：session_begin/end 快照（sqlite 单文件复制）+ session_report = 初末计数 diff + 双 L0 架构图并排 + verdict 时间线；**不做图 diff**（fid 内容敏感重构后必变，符号匹配研究级，远期再议）。
+3. **MCP 工具面信息架构**：五族前缀命名约 22 件（nav_*/tx_*/curate_*/render_*/session_*），描述含用途/何时用/返回什么/下钻约定。
+4. **地基质量透传**：nav 返回值统一带 confidence + repo xcheck 摘要徽标；低置信边需下钻核实；每批次 dogfood 反哺分析深化。
+
+**工具组全局原则**（§1.6）：每环节 = 契约 + 工具组（多项目可插拔）+ 策略（按语言选择/全跑交叉/降级链）——把 S2 病理源组、G4 双工具交叉、archify 降级链三个既有隐式模式升格为全局架构原则；**每个环节不局限于单工具，用多个项目组成工具组**（用户裁决）。
+
+**r3 推翻项**：`vrp mcp` 弃自研 stdio JSON-RPC 子集，改官方 MCP Python SDK（`mcp` 包，24.8k★ MIT，Py3.11+ 匹配），optional extra `pip install vrp[mcp]`——核心管道零依赖红线不变，AI 接口层/可视化层作为生态接入件允许 extra 依赖（与 cargo-mutants/archify 可选先例一致）。
 
 ## 1. AI 重构主流程（核心闭环）
 
@@ -65,42 +81,57 @@
 - **dossier**：七节（architecture/repo_map_brief/repomap/sql_views/evidence/summary/raw_pack）按 T1-T4 档位预算分配 = AI 消费面
 - **annotations**：ai-gate 四态已入库
 
-### 1.3 vrp 侧闭环缺口（r3 增补为五件）
+### 1.3 vrp 侧闭环缺口（r4 增补为六件）
 
 1. **事务契约文档化**：schema 现只在 s6 docstring——出契约文档（schema+样例+G 码对照表：生产常见错误→验收失败码映射）+ AI 取材指南（T1-T4 各档 dossier 七节取材路径）
 2. **verdict 回馈面**：dossier evidence 节内嵌上轮未成功 verdicts + `vrp verdicts` 命令（§0.1-5）
 3. **curate 定位修正**：从"渲染供数"改为"AI 重构理解的沉淀与消费面"（§2）
-4. **AI 接口层**（r3 新增）：②环生产侧落地载体——MCP server + skill，vrp 对 AI 从"文件格式契约"升级为"可编程接口"（§1.4）
-5. **决策体验配套**（r3 新增）：`vrp transact --preview`（difflib unified diff，纯 stdlib）——T4 confirm 前人工/AI 自查 diff，不盲签；契约文档配套
+4. **AI 接口层**：②环生产侧落地载体——MCP server + skill，vrp 对 AI 从"文件格式契约"升级为"可编程接口"（§1.4）
+5. **决策体验配套**：`vrp transact --preview`（difflib unified diff 兜底 + difftastic 结构化优先，工具组）——T4 confirm 前人工/AI 自查 diff，不盲签；契约文档配套
+6. **导航接口族**（r4 新增）：AI 梳理所需的**不同深度/颗粒度查询接口**，全链可查防浅层（§1.4.2）——现有 get_dossier（预算化组装产物，被动）与 query_facts（裸 SQL，无颗粒度引导）均不满足，此为产品核心缺口
 
-### 1.4 AI 接口层：MCP server + skill（②环生产侧定稿）
+### 1.4 AI 接口层：MCP server + 导航族 + skill（产品本体）
 
-**问题**：主流程四环中①④是工具（已建）、③有事务契约，但②环 vrp 只定义了验收端（curate）——梳理的**生产**（谁调 LLM、读什么、什么策略）完全在管道外。若 vrp 只做格式校验器，②环质量全靠外部 LLM 应用自觉，闭环②环形同虚设。
+**问题**：主流程四环中①④是工具（已建）、③有事务契约，但②环 vrp 只定义了验收端（curate）——梳理的**生产**（谁调 LLM、读什么、什么策略）完全在管道外。核心价值主张：**不让 AI 全读裸代码**——AI 的代码认知来自 vrp 的分层接口（facts.db 6691 边级结构化数据、dossier 分节预算、repomap），而非裸代码塞 context。
 
 **定稿**：vrp 提供**可编程接口 + 操作指南**两层，生产仍留管道外（确定性红线不动）：
 
-1. **`vrp mcp` 子命令——MCP server（纯标准库）**
-   - 传输：stdio JSON-RPC 2.0（MCP 协议本质即 JSON-RPC over stdio；stdlib `json` 足够，**零第三方依赖红线不破**）
-   - 协议子集：`initialize` / `tools/list` / `tools/call` 三方法（notifications 不实现）
-   - 工具面（分批开放）：
-     | 批次 | 工具 | 说明 |
-     |---|---|---|
-     | R1.5' | `get_dossier(repo, task?)` | 取 dossier（节选按预算） |
-     | R1.5' | `query_facts(repo, sql)` | 只读 facts.db：sqlite `mode=ro` URI + SELECT-only 校验，白名单表/视图 |
-     | R1.5' | `get_verdicts(repo)` | 读 verdicts |
-     | R1.5' | `preview_transaction(repo, tx)` | diff 预览（§1.3-5） |
-     | R1.5' | `submit_transaction(repo, tx)` | 校验+落 `.vrp/transactions/` |
-     | R1.5' | `run_transaction(repo, tid)` | 执行 transact 返回 verdict |
-     | R2' | `submit_slice` / `submit_structure` / `curate` / `reject_artifact` / `get_annotations` | 梳理系 |
-   - **安全闸**：`run_transaction` 对 T4 一律返回 needs_confirmation verdict，不收 confirm 参数——**T4 放行只能 CLI 人工 `--confirm`，agent 不可绕过**（§3 决策点矩阵的执行保障）
-   - 长任务（gate 跑测试）同步等待返回，文档注明调用方设长超时；v1 不做异步句柄（简单优先）
+#### 1.4.1 `vrp mcp`——MCP server（官方 SDK，optional extra）
 
-2. **skill（repo 内分发，随批次出）**
-   - `skills/vrp-loop/SKILL.md`（R1.5'）：重构循环协议（§1.5）+ 事务契约摘要 + G 码对照 + 重试纪律
-   - `skills/vrp-curation/SKILL.md`（R2'）：梳理生产指南——dossier 取材路径、slices/structure 样例与验证规则（§2）、收据拒绝码处理
-   - skill 是文档（MCP 工具的使用说明书），不是运行时——vrp 安装不含 skill，AI 客户端按需引用
+- 框架：官方 MCP Python SDK（`mcp` 包，modelcontextprotocol/python-sdk，24.8k★ MIT，Python 3.11+ 匹配 vrp requires-python），装饰器风格；**弃 r3 自研 stdio JSON-RPC 子集**（§0.4）
+- 依赖形态：`pip install vrp[mcp]`；核心管道零第三方运行时依赖红线不变——AI 接口层/可视化层是生态接入件，允许 extra 依赖（与 cargo-mutants/difftastic/archify 可选外部工具先例一致）
+- 双 server 组合：`vrp mcp`（vrp 特有工具）+ **bytebase/dbhub**（3.8k★，SQLite 只读通用数据库 MCP server，进阶自由 SQL 浏览 facts.db，推荐非必须）
+- **安全闸**：`tx_run` 对 T4 一律返回 needs_confirmation，不收 confirm 参数——**T4 放行只能 CLI 人工 `--confirm`，agent 不可绕过**（§3 决策点矩阵的执行保障）
+- 长任务（gate 跑测试）同步等待返回，文档注明调用方设长超时；v1 不做异步句柄（简单优先）
 
-3. **分析层深化的接口保证**："S1-S5 只是最初步的"——分析层（病理源、evidence 厚度）后续深化通过 **dossier/facts.db 统一消费面**自动流到 AI，MCP/skill 接口层无需变更。深化方向（新病理工具、更厚 evidence、测试盲区分析等）另轮讨论定稿。
+#### 1.4.2 导航接口族（nav_*，产品核心）
+
+分层下钻，每层返回下钻句柄；句柄体系与 curate 验证器同一套 fid/edge 锚——**AI 想过 curate 验收就必须下钻到底，浅层结论进不了库**（防浅层双机制：导航引导 + 验证锚定）：
+
+```
+nav_search(query)            → 符号/模块名搜索（AI 入口）            [R1.5']
+nav_architecture(repo)       → L0：structure 优先，缺失包级聚合兜底（repomap 算法复用）；
+                               返回 module_id 句柄                    [R1.5']
+nav_module(module_id)        → L1：符号清单+病理摘要；返回 fid 句柄    [R1.5']
+nav_symbol(fid)              → L2：签名/行号/调用关系/所在 slices；返回 edge 句柄 [R1.5']
+nav_callers / nav_callees    → 调用链横跳                            [R2']
+nav_slice(slice_id)          → 业务线视角（steps+acts+符号句柄）      [R2']
+nav_path(from, to)           → 耦合路径查找（sqlite WITH RECURSIVE）  [R4']
+```
+
+- **地基质量透传**：返回值统一带 `confidence`（edges 现成列）+ repo xcheck 摘要徽标；工具描述声明"低置信边需下钻核实或读源码确认"——接口的"全链可查"承诺受限于分析质量（xcheck 84-95%），导航族只开放数据已验证路径，别让接口层跑在地基前面
+- **导航族无现成轮子**（已核实：roam-code 等同类皆为独立产品非可组合库）——差异化所在，实现为 facts.db 上的 SQL 封装（sqlite3 标准库），成本低
+- query_facts 保留为轻量直查（mode=ro + SELECT 校验，带 vrp schema 引导——通用工具不教 AI 哪个视图干嘛用）
+
+#### 1.4.3 skill（repo 内分发，随批次出）
+
+- `skills/vrp-loop/SKILL.md`（R1.5'）：重构循环协议（§1.5）+ 事务契约摘要 + G 码对照 + 重试纪律
+- `skills/vrp-curation/SKILL.md`（R2'）：梳理生产指南——dossier/导航族取材路径、slices/structure 样例与验证规则（§2）、收据拒绝码处理
+- skill 是文档（MCP 工具的使用说明书），不是运行时——vrp 安装不含 skill，AI 客户端按需引用；内容自研不可避免（教 vrp 独有流程），格式参照现有 skill 生态
+
+#### 1.4.4 分析层深化的接口保证
+
+"S1-S5 只是最初步的"——分析层（病理源、evidence 厚度）后续深化通过 **dossier/facts.db 统一消费面**自动流到 AI，MCP/skill 接口层无需变更。深化方向（新病理工具、更厚 evidence、测试盲区分析等）另轮讨论定稿。
 
 ### 1.5 驱动循环定稿（③环接口期望）
 
@@ -110,20 +141,42 @@
 
 ```
 1. get_dossier(task)          → 定位目标病理（findings/evidence）
-2. query_facts                → 深挖锚定/影响面（ fid/边/行号）
+2. nav_* 下钻                 → 全链核实：architecture→module→symbol→callers/callees
+                                （低置信边下钻核实或读源码确认）
 3. 产事务 JSON                 → 按契约：最小事务、declared_moves 齐全
-4. preview_transaction        → 自查 diff
-5. submit_transaction         → 落 .vrp/transactions/
-6. run_transaction            → T1-T3 直接出 verdict；
+4. tx_preview                 → 自查 diff（difftastic 优先/difflib 兜底）
+5. tx_submit                  → 落 .vrp/transactions/
+6. tx_run                     → T1-T3 直接出 verdict；
                                 T4 返回 needs_confirmation → 人工 CLI --confirm
 7. verdict 失败               → 读收据 G 码 → 修正重提（重试纪律：建议 ≤3 次/事务，
                                 应用层约定，verdict 历史可审计防失控）
-8. verdict committed          → 下一目标（回到 1）
+8. verdict committed          → 下一目标（回到 1）；多轮会话信任分级见 §3.3
 ```
 
 **安全边界**：
-- T4 人工闸不可自动化（§1.4）；transact_batch 按序停错（已建）；verdict 全历史落盘可审计（已建）
+- T4 人工闸不可自动化（§1.4.1）；transact_batch 按序停错（已建）；verdict 全历史落盘可审计（已建）
 - 循环纪律（重试上限、目标数）属应用层，vrp 只提供 verdict 历史与 dossier 回馈面作事实依据
+
+### 1.6 工具组全局原则（r4 定稿）
+
+> **每环节 = 契约（输入/输出 schema，vrp 拥有）+ 工具组（多项目可插拔，实现契约即接入）+ 策略（按语言自动选择 / 全跑交叉验证 / 降级链）**
+>
+> 每个环节不局限于单工具，用多个项目组成工具组；新工具接入 = 写一个契约 adapter，编排层零改动；工具组启用/优先级走 repo 级配置。
+
+| 环节 | 工具组 | 策略 |
+|---|---|---|
+| 结构提取 | CBM + code-atlas | 主备 + 交叉（xcheck） |
+| 变异测试 | stryker(JS/TS) + cargo-mutants(Rust) + **mutmut(Python，待评估补位)** | 按语言选择 |
+| dup/静态检查 | jscpd + ast-grep | 全跑 |
+| 结构 diff | difftastic + difflib（兜底） | 降级链 |
+| G2/G3 闸门执行器 | 项目自身工具链（ruff/mypy/eslint/tsc/cargo check/pytest/jest…） | 按语言探测 |
+| G4 交叉 | difftastic + code-atlas verify_changes | 双跑交叉，缺失降级 |
+| AI 接口 | mcp 官方 SDK + bytebase/dbhub | 双 server 组合 |
+| 可视化 | archify + Mermaid + SARIF + repomap（+ Datasette 推荐） | 多出口同 IR，archify 缺失降级 |
+| S7 执法（远期） | import-linter(Python) + eslint-plugin-boundaries / dependency-cruiser(JS/TS) | 按语言选择 |
+| 会话交付 | archify 双图 + 计数 diff + verdict 时间线 | 组合输出 |
+
+本表是既有模式的升格：S2 病理源组、G4 双工具交叉、archify 降级链三个隐式先例 → 全局原则。**自研保留边界**（产品本体，无轮子可替代）：facts.db/ETL 分析引擎、G0-G5 闸门、curate 验证器、导航族 SQL 封装、session 语义、skill 内容。
 
 ## 2. AI 梳理层（主流程②环）
 
@@ -242,6 +295,22 @@ decisions(
 
 细节随 R2' 实施定稿；原则：决策是数据（可追溯），不是口头约定。
 
+### 3.3 信任分级交付（r4 新增，session_* 族）
+
+多轮重构会话的监督强度分两级（用户构想）：
+
+| 级别 | 模式 | 交付物 |
+|---|---|---|
+| 全监督 | 每轮决策点拍板（curate reject / T4 confirm / render 材料） | 逐轮 verdict + 材料 |
+| 全信任 | AI 多轮重构期间零打扰 | **只在最初产出初态、最后产出末态的可视化对比作交付** |
+
+实现（诚实版，不做图 diff）：
+- `session_begin`：facts.db 文件快照（sqlite 单文件复制）+ 会话元数据
+- `session_end`：末态快照
+- `session_report`：初末计数 diff（节点/边/病理/xcheck 四组数字）+ 双 L0 架构图（archify）并排 + verdict 时间线
+- **不做图 diff**：fid 是内容敏感 sha256，重构后必变；符号匹配+结构对齐是研究级问题，远期再议——诚实版并排+计数足够拍板交付
+- 批次 R3.5'；MCP session_* 三件 + CLI 双入口
+
 ## 4. S7 架构规则固化（候补 = v4-S6）
 
 - 定位不变：**AI 理解，工具执法**——structure.rules → 各语言依赖规则工具配置 → 工具执行 → 违例清单 = 重构目标
@@ -269,7 +338,7 @@ decisions(
 | ③ 重构 | tx JSON | 事务 diff 预览 | difftastic（S6 已有基础） |
 | ④⑤ 回归/回馈 | verdicts | verdict 时间线、未决清单 | archify Timeline / index 列表 |
 
-四投影技术选型保留 r1 定稿：archify（图）/ SARIF 2.1.0（行级诊断）/ Mermaid+repomap（地图）/ 数据层不硬引入（facts.db 即产物，Datasette 列推荐）。
+四投影技术选型保留 r1 定稿：archify（图）/ SARIF 2.1.0（行级诊断）/ Mermaid+repomap（地图）/ 数据层不硬引入（facts.db 即产物，Datasette 列推荐）。触发方式双入口（r4）：`render_*` MCP 工具（AI 在决策点调可视化给用户出拍板材料）+ `vrp report` CLI（人查）。
 
 ### 5.3 渲染分层规范
 
@@ -287,17 +356,18 @@ decisions(
 - report.html 头部带 `facts.git_head` + IR 内容 hash（可溯源），**不带时间戳**（保字节级复现）
 - archify 钉法与降级链（§0.1-4）：沙箱缺失/validate 失败 → 降级 Mermaid-only，rc=0 不阻塞
 
-## 6. 实施批次（r3 重排，主线优先）
+## 6. 实施批次（r4 重排，含文件级要点）
 
-| 批次 | 内容 | 验收 |
+| 批次 | 内容 | 里程碑 / 验收 |
 |---|---|---|
-| **R1'** | 事务契约文档（schema+样例+G 码对照表+T1-T4 取材指南）+ verdict 回馈双入口（dossier evidence 节内嵌上轮未成功 verdicts + `vrp verdicts` 命令）+ `transact --preview`（difflib unified diff） | 契约文档对照 s6 代码逐字段核；dossier 内嵌快测；命令单测；preview 快测；门禁绿 |
-| **R1.5'** | `vrp mcp`（纯 stdlib stdio JSON-RPC，6 工具：get_dossier/query_facts/get_verdicts/preview_transaction/submit_transaction/run_transaction；T4 安全闸）+ `skills/vrp-loop/` v1（§1.5 循环协议） | MCP 握手+工具调用集成测试（subprocess 起 server 对打）；query_facts 只读性测试（SELECT 校验+mode=ro）；T4 经 MCP 必返 needs_confirmation 测试 |
-| **R2'** | curate 梳理层（slices/structure 表+验证器+curate 命令）+ 用户决策点（`--reject` + decisions 留痕表）+ MCP 梳理系工具（submit_slice/submit_structure/curate/reject_artifact/get_annotations）+ `skills/vrp-curation/` v1 | 验证器全拒绝路径参数化；手工 AI 工件样例→curate 入库 E2E；幂等/stale/留痕测试；MCP curate 工具集成测试 |
-| **R3'** | 中间产物可视化（按 §5.2 对象表：SARIF、archify 沙箱五视图、Mermaid、T4 清单、降级链） | 深测 E2E 两仓出 report.html（`archify validate --json` rc=0）；降级测试；dogfood 自报告 |
-| **R4'** | S7 架构规则固化 | 远期，随 R2' 经验定稿设计 |
+| **R1'** | 事务契约文档 `docs/契约/事务契约.md`（schema+样例+G 码对照+取材指南，对照 s6 代码逐字段核）+ verdict 双入口（dossier evidence 节内嵌上轮未成功 verdicts + `vrp verdicts` 命令）+ `transact --preview`（工具组：difflib 兜底+difftastic 优先） | 契约可依；快测三件；门禁绿 |
+| **R1.5'** | `vrp mcp`（官方 SDK，`pip install vrp[mcp]` extra，pyproject 加 optional-dependencies）+ nav 基础四件（search/architecture/module/symbol，`vrp/nav.py` SQL 封装）+ tx 四件（preview/submit/run/verdicts）+ query_facts + `skills/vrp-loop/` v1 | **AI 可开始重构循环**；MCP 集成测试（官方 SDK client in-process 对打）；nav SQL 单测；T4 闸测试（tx_run 必返 needs_confirmation） |
+| **R2'** | `vrp/curate.py`（slices/structure schema+验证器+表迁移）+ `vrp curate` CLI + `--reject` + decisions 留痕表 + curate MCP 族五件 + nav_slice/callers/callees + `skills/vrp-curation/` v1 | **AI 梳理闭环**；验证器全拒绝路径参数化；手工 AI 工件→curate 入库 E2E；幂等/stale/留痕测试 |
+| **R3'** | `vrp/render.py`（render_* MCP 工具 + `vrp report` CLI 双入口）+ S8 可视化（archify 沙箱 bootstrap `--with-archify` 钉 25cf3708、SARIF——sarif-om 与手写 JSON 二选一实施时定、Mermaid、T4 清单、降级链） | **AI 可出拍板材料**；深测 E2E 两仓出 report.html（`archify validate --json` rc=0）；降级测试；dogfood 自报告 |
+| **R3.5'** | `vrp/session.py`（session_begin/end/report，sqlite 文件快照）+ session MCP 族三件 + trust 模式进 skill（§3.3） | **全信任模式**；初末快照/计数 diff/双图并排 E2E |
+| **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺） | 规则固化；远期设计随 R2' 经验再定稿 |
 
-每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）。
+每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）、dogfood 反哺分析深化（§0.4-4）。
 
 ## 7. 与既有文档的关系
 
