@@ -415,8 +415,9 @@ def archify_available() -> bool:
 # ----------------------------------------------------------------- report
 
 
-def _report_html(repo: Path, ir_hash: str, git_head: str, sections: list[dict]) -> str:
-    """静态目录页：数据层说明 + T4/open 清单 + 产物链接；无时间戳保字节级复现。"""
+def _report_html(repo: Path, ir_hash: str, git_head: str, sections: list[dict], staleness: dict | None = None) -> str:
+    """静态目录页：数据层说明 + 陈旧横幅 + T4/open 清单 + 产物链接；无时间戳保字节级复现
+    （陈旧横幅随渲染时仓 HEAD 变化，是复现契约的有意例外——见 _stale_banner_html）。"""
     esc = html_mod.escape
     parts = [
         "<!DOCTYPE html>",
@@ -439,6 +440,7 @@ def _report_html(repo: Path, ir_hash: str, git_head: str, sections: list[dict]) 
         f"<h1>vrp report - {esc(repo.name)}</h1>",
         f'<p class="meta">facts.git_head: <code>{esc(git_head or "(none)")}</code>'
         f" | IR sha256: <code>{esc(ir_hash[:16])}...</code> | 数据真值 100% 来自 facts.db</p>",
+        _stale_banner_html(staleness),
         "<h2>数据层</h2>",
         "<p>本报告为静态产物（无服务端/无前端构建链）；数据层即 <code>.vrp/facts.db</code>（sqlite 单文件，"
         "可用 Datasette 直读：<code>datasette .vrp/facts.db</code>）；渲染委托 archify/Mermaid，"
@@ -480,6 +482,72 @@ def _verdicts_section(verdicts: list[dict]) -> dict:
     return {"title": "verdict 清单（T4 待放行优先）", "body": body}
 
 
+def _staleness(repo: Path, facts_head: str) -> dict | None:
+    """facts.git_head vs 仓当前 HEAD：展示路径的诚实新鲜度信号。
+
+    M4 freshness 只保护 rw 消费方（transact/curate 硬拒陈旧 facts）；
+    render 只读被豁免——但报告页必须诚实标旧（R6' 病根二：b5957b53 快照
+    被平静打开 5 批次无人知）。不可判定（非 git 仓/git 失败）返回 None。
+    """
+    if not facts_head:
+        return None
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if head.returncode != 0:
+        return None
+    current = head.stdout.strip()
+    if current == facts_head:
+        return None
+    behind: int | None = None
+    try:
+        count = subprocess.run(
+            ["git", "-C", str(repo), "rev-list", "--count", f"{facts_head}..{current}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if count.returncode == 0:
+            behind = int(count.stdout.strip())
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        pass
+    return {"facts_head": facts_head, "head": current, "behind": behind}
+
+
+def _stale_banner_html(staleness: dict | None) -> str:
+    """陈旧横幅：插在 meta 行后。随渲染时仓 HEAD 变化——新鲜度信号是
+    report.html 复现契约的**有意例外**（同 HEAD 下两次渲染仍字节级全等）。"""
+    if not staleness:
+        return ""
+    esc = html_mod.escape
+    if staleness["behind"] is not None:
+        detail = f"落后当前 HEAD 约 {staleness['behind']} 个提交"
+    else:
+        detail = "与当前 HEAD 不一致（非简单落后，可能分叉）"
+    return (
+        '<div style="background:#fde8e8;border:2px solid #b3261e;padding:.8rem 1rem;'
+        'border-radius:6px;margin:1rem 0">'
+        "<strong>⚠ 陈旧报告</strong>：facts.git_head "
+        f'<code>{esc(staleness["facts_head"][:12])}…</code> {detail}'
+        f'（当前 <code>{esc(staleness["head"][:12])}…</code>）——结论可能过期；'
+        "重跑 <code>vrp run</code> 后 <code>vrp report</code> 刷新。</div>"
+    )
+
+
+def _clean_render_out(out: Path) -> None:
+    """渲染前清自有产物（R6' 病根四：上轮孤儿混入本轮快照——timeline.html
+    渲了没链接即两轮渲染混目录）。只清 render 拥有的名字，外部文件不动。"""
+    for sub in ("ir", "html"):
+        d = out / sub
+        if d.is_dir():
+            shutil.rmtree(d)
+    for pattern in ("*.mmd", "findings.sarif", "report.html"):
+        for f in out.glob(pattern):
+            f.unlink()
+
+
 def render_report(repo: Path, out_dir: Path | None = None) -> dict:
     """S8 全量报告：IR → archify/Mermaid/SARIF → .vrp/report/report.html。"""
     repo = Path(repo)
@@ -505,6 +573,8 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         con.close()
 
     out = Path(out_dir) if out_dir else repo / REPORT_DIR
+    staleness = _staleness(repo, git_head)
+    _clean_render_out(out)
     (out / "ir").mkdir(parents=True, exist_ok=True)
     (out / "html").mkdir(parents=True, exist_ok=True)
 
@@ -573,7 +643,7 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
 
     report_path = out / "report.html"
     report_path.write_text(
-        _report_html(repo, ir_hash, git_head, sections), encoding="utf-8", newline="\n"
+        _report_html(repo, ir_hash, git_head, sections, staleness), encoding="utf-8", newline="\n"
     )
     artifacts.insert(0, "report.html")
 

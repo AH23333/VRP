@@ -368,7 +368,7 @@ decisions(
 | **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺）——**已完成（2026-11-05，详见 §8）**：nav_path 已落（c4b086d）；S7 Python 垂直切片已落（2b353a2，import-linter，TS 执法器后续批次）；mutmut 补位评估定案（§8.3：保持 2.4.5）；收口件 S7 parse 修复+tsa 第二仓 dogfood（§8.5：真违例抓出+parse bug 反哺修复）；全量 1784 绿（§8.4） | 规则固化；远期设计随 R2' 经验再定稿 |
 | **R5'** | S7 TS/JS 执法引擎（dependency-cruiser 18 沙箱垂直切片）——**已完成（2026-11-05，详见 §9）**：`vrp/s7_enforce_ts.py` 双引擎语言路由（.py→import-linter / .ts/.tsx/.js/.jsx/.mjs/.cjs→depcruise / 混语言诚实拒绝）；typescript **5.9.3 钉版**（7.x 超界静默空跑陷阱）；dogfood unwind 仓 1 契约 KEPT（73 模块真巡航）；全量口径 1803 | 双语言执法闭环；CLI/MCP 零新增面（enforce 内部路由） |
 
-每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）、dogfood 反哺分析深化（§0.4-4）。
+每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）、dogfood 反哺分析深化（§0.4-4）、**自身 dogfood 产物刷新**（收口前 `vrp run`+`vrp report` 自家仓——产物是活文档不是测试输出；R6' 病根一制度化：R1'~R5' 只顾推批次，自家 report 陈旧 5 批次无人知）。
 
 ## 7. 与既有文档的关系
 

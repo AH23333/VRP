@@ -1,7 +1,11 @@
-"""R3' render 测试：IR 生成 + Mermaid 源 + 报告复现性 + 降级路径。"""
+"""R3' render 测试：IR 生成 + Mermaid 源 + 报告复现性 + 降级路径。
+
+R6' 增：staleness 横幅（M4 不对称修复）+ 渲染输出清理（孤儿修复）。
+"""
 
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -269,6 +273,109 @@ def test_render_report_real_archify(tmp_path):
     assert (out / "html" / "architecture.html").is_file()
     assert (out / "html" / "slice-flow.html").is_file()
     assert (out / "html" / "timeline.html").is_file()
+    # R6' 产物完整性不变量：渲出的每个 html 必被 report.html 链接（无孤儿）
+    report_text = (out / "report.html").read_text(encoding="utf-8")
+    for html_file in (out / "html").glob("*.html"):
+        assert f"html/{html_file.name}" in report_text, f"孤儿 html：{html_file.name}"
+
+
+# ------------------------------------------- R6'：staleness 横幅 + 输出清理
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    )
+
+
+def _mk_git_repo(base: Path) -> Path:
+    repo = _mk_repo(base)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "x.txt").write_text("1", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "c1")
+    return repo
+
+
+def _set_git_head(repo: Path, head: str) -> None:
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("UPDATE meta SET value = ? WHERE key = 'git_head'", (head,))
+    con.commit()
+    con.close()
+
+
+def _head(repo: Path) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    )
+    return proc.stdout.strip()
+
+
+def test_staleness_none_when_fresh_or_nongit(tmp_path):
+    repo = _mk_git_repo(tmp_path)
+    assert render._staleness(repo, _head(repo)) is None
+    assert render._staleness(repo, "") is None  # 无 git_head 不判定
+    nongit = _mk_repo(tmp_path / "sub")
+    assert render._staleness(nongit, "0" * 40) is None
+
+
+def test_staleness_detected_when_behind(tmp_path):
+    repo = _mk_git_repo(tmp_path)
+    old = _head(repo)
+    (repo / "x.txt").write_text("2", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "c2")
+    st = render._staleness(repo, old)
+    assert st is not None
+    assert st["behind"] == 1 and st["head"] == _head(repo) and st["facts_head"] == old
+
+
+def test_report_carries_stale_banner(tmp_path, monkeypatch):
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_git_repo(tmp_path)
+    _seed(repo)
+    _set_git_head(repo, _head(repo))
+    (repo / "x.txt").write_text("2", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "c2")
+    result = render.render_report(repo)
+    text = Path(result["report"]).read_text(encoding="utf-8")
+    assert "陈旧报告" in text
+    assert "落后当前 HEAD 约 1 个提交" in text
+
+
+def test_report_no_banner_when_fresh(tmp_path, monkeypatch):
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_git_repo(tmp_path)
+    _seed(repo)
+    _set_git_head(repo, _head(repo))
+    result = render.render_report(repo)
+    text = Path(result["report"]).read_text(encoding="utf-8")
+    assert "陈旧报告" not in text
+
+
+def test_render_report_cleans_orphans_keeps_external(tmp_path, monkeypatch):
+    """R6' 病根四：渲染前清自有产物——上轮孤儿（timeline 孤儿教训）不得混入本轮。"""
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    out = repo / ".vrp" / "report"
+    (out / "html").mkdir(parents=True)
+    (out / "ir").mkdir(parents=True)
+    (out / "html" / "timeline.html").write_text("orphan", encoding="utf-8")
+    (out / "ir" / "timeline.json").write_text("{}", encoding="utf-8")
+    (out / "slice-dead.mmd").write_text("orphan", encoding="utf-8")
+    (out / "old-report.html").write_text("x", encoding="utf-8")
+    (out / "keep.txt").write_text("external", encoding="utf-8")
+    render.render_report(repo)
+    assert not (out / "html" / "timeline.html").exists()
+    assert not (out / "ir" / "timeline.json").exists()
+    assert not (out / "slice-dead.mmd").exists()
+    assert (out / "old-report.html").exists()  # 非 render 自有名（只写 report.html），不动
+    assert (out / "keep.txt").exists()  # 外部文件不动
+    assert (out / "architecture.mmd").is_file()
+    assert (out / "report.html").is_file()
 
 
 # ------------------------------------------------------- 快材料（MCP）

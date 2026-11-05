@@ -138,14 +138,28 @@ def install_cargo_mutants() -> None:
 
 
 def install_archify() -> None:
-    """S8 渲染工具：git clone archify 到 work/ 沙箱并 checkout 钉死 commit。"""
-    git = shutil.which("git")
-    if not git:
-        print("[archify] git not found - install git first")
-        return
+    """S8 渲染工具：优先复制同级已有 archify 项目（勿重复拉取），缺失才 git clone 钉 commit。
+
+    同级项目 = ROOT.parent / "archify"（本仓外的工作区 checkout，用户维护）；
+    复制其 archify/ 包子目录。版本跟随同级 checkout（当前 25cf3708 与钉值一致）。
+    """
     target = WORK / "archify"
     if ARCHIFY_MJS.is_file():
         print(f"[archify] {ARCHIFY_MJS} already present - skip")
+        return
+    sibling = ROOT.parent / "archify" / "archify"
+    if (sibling / "bin" / "archify.mjs").is_file():
+        if target.exists():
+            shutil.rmtree(target)
+        print(f"[archify] copying sibling project {sibling} -> {target / 'archify'}")
+        shutil.copytree(sibling, target / "archify")
+        if ARCHIFY_MJS.is_file():
+            print(f"[archify] installed (copied) {ARCHIFY_MJS}")
+            return
+        print("[archify] sibling copy incomplete - falling back to clone")
+    git = shutil.which("git")
+    if not git:
+        print("[archify] git not found - install git first")
         return
     if target.exists():
         shutil.rmtree(target)
