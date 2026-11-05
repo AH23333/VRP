@@ -367,6 +367,7 @@ decisions(
 | **R3.5'** | `vrp/session.py`（session_begin/end/report，sqlite 文件快照）+ session MCP 族三件 + trust 模式进 skill（§3.3）——**已完成（2026-11-04）**：快照走 sqlite backup API；CLI `vrp session <repo> begin/end/report` 双入口 | **全信任模式**；初末快照/计数 diff/双图并排 E2E——**已验收**（vrp 仓+unwind 仓，archify=true degraded=[]；diff 全零（facts 未动）；快测 +16，352 绿） |
 | **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺）——**已完成（2026-11-05，详见 §8）**：nav_path 已落（c4b086d）；S7 Python 垂直切片已落（2b353a2，import-linter，TS 执法器后续批次）；mutmut 补位评估定案（§8.3：保持 2.4.5）；收口件 S7 parse 修复+tsa 第二仓 dogfood（§8.5：真违例抓出+parse bug 反哺修复）；全量 1784 绿（§8.4） | 规则固化；远期设计随 R2' 经验再定稿 |
 | **R5'** | S7 TS/JS 执法引擎（dependency-cruiser 18 沙箱垂直切片）——**已完成（2026-11-05，详见 §9）**：`vrp/s7_enforce_ts.py` 双引擎语言路由（.py→import-linter / .ts/.tsx/.js/.jsx/.mjs/.cjs→depcruise / 混语言诚实拒绝）；typescript **5.9.3 钉版**（7.x 超界静默空跑陷阱）；dogfood unwind 仓 1 契约 KEPT（73 模块真巡航）；全量口径 1803 | 双语言执法闭环；CLI/MCP 零新增面（enforce 内部路由） |
+| **R6'** | 渲染诚实性修复（病根二 M4 不对称：freshness 只保护 rw 消费方展示路径裸奔）+ 病根五（S1/xcheck reused 短路）+ **agent 真实长跑 E2E**（真实 MCP stdio 客户端全链驱动 vrp 自仓：session→nav→edge→slices→structure→enforce→T2/T4，抓双真 bug 反哺修复）——**已完成（2026-11-05，详见 §10）**：T2 真死码 committed、T4 人工放行 committed；快测 402 绿 | 展示路径同享 M4 保护；长跑=环境保真的最强验收 |
 
 每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）、dogfood 反哺分析深化（§0.4-4）、**自身 dogfood 产物刷新**（收口前 `vrp run`+`vrp report` 自家仓——产物是活文档不是测试输出；R6' 病根一制度化：R1'~R5' 只顾推批次，自家 report 陈旧 5 批次无人知）。
 
@@ -443,3 +444,38 @@ verify/unwind（pnpm workspace，packages/core 41 文件 + packages/dashboard 29
 - quick +14（test_s7_enforce_ts.py：_prefix/derive_ts_containers/build_config 形状含中文契约名与 regex 转义/parse_violations error-only 去重；mocked E2E：violation 落库锚定+payload 逐字段/幂等/合规清旧/enforcer-failed 保旧（rc=1 stderr_tail）/timeout/not-found/全缺目录 not-enforceable；路由：run() 命中 TS 引擎/混语言拒绝/CLI 接线）；test_s7_enforce.py language-unsupported 改 .rs（.ts 已路由 TS 引擎）
 - deep +4（tests/deep/test_deep_s7_enforce_ts.py：真 depcruise E2E——violation→P9 锚定/幂等/修复清库/合规仓干净；模块级 skipif 沙箱缺失）
 - 快测 393 绿 64s；全量口径 1803（393+1410）；探针 work/probe_r5_*.py（契约取证/unwind dogfood/新鲜度检查）
+
+## 10. R6' 批次增补（2026-11-05，渲染诚实性 + agent 真实长跑）
+
+### 10.1 渲染诚实性修复（1/2，37d1c6f）
+
+病根二（M4 不对称）：freshness 硬拒只保护 `_open_facts_rw` 消费方，展示路径（render/report）裸奔——自家 report 陈旧 5 批次被平静打开无人知。修复三件（`vrp/render.py`）：**`render._staleness`**——facts.git_head vs 当前 HEAD（behind 计数），不可判定（无 git/无 head）诚实返回 None；**`_stale_banner_html`** 横幅插 meta 行后——横幅随渲染时 HEAD 变化是复现契约的有意例外（同 HEAD 仍字节级全等）；**`_clean_render_out`** 渲染前清自有产物（ir/ html/ *.mmd findings.sarif report.html，外部文件不动）——timeline.html 孤儿（两轮渲染混目录）教训制度化。test_render +5（staleness 三态/横幅有无/清孤儿保外部）；archify 沙箱改 bootstrap 同级复制优先（ROOT.parent/archify，钉值一致即用，勿重复拉取）。
+
+### 10.2 病根五：S1/xcheck reused 短路取消（1b，bb7109d）
+
+`s1_cbm.index_repository`/`xcheck.index_with_code_atlas` 的 reused 快路（缓存命中直接 return）跳过底层 CLI 调用——底层自身增量语义被 wrapper 吞掉，且任何依赖"底层跑过"的链路（如 CBM 自身增量刷新）被短路。修复：恒调底层 CLI（自身增量，reused 判定只用于溯源/提示），reindex 参数保 API 兼容等价；`run_cli` 恒调使 xcheck agreement 的 ledger 新鲜度与 facts.git_head 推进同链（M4 新鲜度链补洞）。test_s1_cbm_provenance 改写为"同仓二次调用恒增量刷新"语义。
+
+### 10.3 agent 真实长跑（2/2）：MCP stdio 真客户端全链 E2E
+
+**work/agent_longrun.py**（本地留存，不入库）：真实 MCP stdio 客户端（mcp ClientSession + StdioServerParameters，spawn `python -m vrp.mcp_server <REPO>`，env 合并 get_default_environment()+CBM_CACHE_DIR），九阶段全链驱动 vrp 自仓：session_begin（幂等续用，撞 "session already active" 解析续跑）→ nav 发现（nav_search 定位 6 符号 cmd_run/index_repository/run_cli/cmd_transact/transact/apply_edits）→ 边验证（nav_edges 四对相邻步 CALLS 实证）→ curate slices（幂等重提交，slice_id 覆盖）→ structure 重建（陈旧 fid→文件域→当前全量 fid 重解析，见 10.4-F1）→ enforce（1 契约 5 containers kept）→ T2（tx_preview→tx_run）→ T4（needs_confirmation 停人工闸）→ render_verdicts。
+
+**长跑即抓双真 bug（反哺闭环再兑现，坑 #85/#86）**：
+
+- **enforce GBK 解码**（f83a4b3 修）：lint-imports 子进程以 locale（GBK）读 UTF-8 importlinter.ini（中文契约名）→ UnicodeDecodeError rc=1 无 broken 块 → enforcer-failed。**为什么此前 dogfood 全绿**：开发 shell 有 PYTHONUTF8=1 代代继承；MCP stdio spawn 链（get_default_environment 最小集）第一次剥掉它就炸——**长跑是环境保真的最强验收**。修复：_execute env 钉 PYTHONUTF8=1。
+- **difftastic T2 删除误判**（f83a4b3 修）：纯删除形态 = lhs 有 token + rhs 存在但 token 空（非 rhs 缺失）；旧字典真值判定漏形态 → T2 删真死码被 G4 误拒 structural-change。修复：token 有无分类（双侧皆空=噪声跳过）。
+
+**T2/T4 双 verdict 落地**：T2 `tx-r6-dead-archify-available`（G1-G5 全过 confidence=high，**committed 4b79292**）删真死码 `render.archify_available`（v_dead_code 命中、全仓零调用方、无测试引用）；T4 `tx-r6-status-freshness`（cmd_status 输出加 freshness 节——facts.git_head vs HEAD 的 M4 新鲜度信号，仅扩函数体无新符号）**needs_confirmation → 用户拍板人工 CLI --confirm 放行 committed 96fca8f**——T4 人工闸在真实 agent 场景首次走完全程（agent 停闸→交人→放行→committed）。
+
+**session 收口**（20261105-071111，50min）：末态 git_head=96fca8f（先 `vrp run` 刷新 facts 再 session_end，末态快照含 T2/T4 实况）；diff：symbols +1（2155→2156）、edges +9（7373→7382）、findings ±0、ledger +4；session report 双 L0 图并排 + verdict 时间线 2 条全 committed；tsa 跨仓复验（enforce 受 #85 修复影响）：已知阳性对照复现一致（1 BROKEN、query_service.py:320 core→interface、1 P9 锚定）——修复无回归。
+
+### 10.4 诚实发现（进下批队列，非阻塞）
+
+- **F1 structure 载荷 fid 随内容轮换**：fid=sha256(project|qualified_name|content_hash)，符号内容变→fid 变——旧 structure 载荷里的 fid 在 facts 刷新后批量陈旧（本轮 8 个）。agent 侧靠"可溯 fid→文件集→当前 fid 重解析"重建；**待固化**：curate.structure 读出侧提供陈旧 fid 的文件域恢复辅助（nav/curate 面暴露），消除每个 agent 各自重实现的漂移风险。
+- **F2 工件漂移复验只在 CLI curate 路径触发**：`vrp curate` CLI 重跑时复验已入库工件（漂移标 stale），但 MCP `curate_submit` 与 `vrp run` 不复验——旧工件（slices/structure）可在 facts 刷新后保持假 active。**待固化**：把 stale 复验钩进 facts 刷新路径（etl 末尾或 MCP curate 读路径）。
+- **F3 facts 刷新后 session/slices/structure 的 M4 语义**：facts.git_head 推进后，slices 里 fid 引用仍有效（符号内容未变则 fid 不变），但"哪些 fid 陈旧"消费方无统一查询面——与 F1 同根。
+
+### 10.5 测试与验收
+
+- 快测 +9（R6'1/2：test_render +5 staleness/横幅/清孤儿；R6'1c：+2 真形态回归（PYTHONUTF8 env 钉值/difftastic rhs-changes-空 删除记账）+ test_s1_cbm_provenance 改写 +2）→ **402 绿 96s**；全量口径 1812（402+1410，复跑待下批或用户指令）
+- 探针 work/probe_r6_*.py（facts 复验/长跑侦察/陈旧 fid 溯源）+ work/agent_longrun.py（长跑主脚本）+ work/agent_longrun_result.json（运行结果）
+- 提交链（本地未 push）：37d1c6f（1/2）→bb7109d（1b）→f83a4b3（1c）→4b79292（T2）→96fca8f（T4）

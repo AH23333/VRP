@@ -98,9 +98,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 352 例 ~60-75s（默认排除 deep）
-python -m pytest -m deep -q                # 深度层 1402 例 ~10min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 1754 例（阶段性完工验收）
+python -m pytest -q                        # 快速层 402 例 ~60-100s（默认排除 deep）
+python -m pytest -m deep -q                # 深度层 1410 例 ~10min（真实工具全外链 E2E）
+python -m pytest -m "deep or not deep" -q  # 全量 1812 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
