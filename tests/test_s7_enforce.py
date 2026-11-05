@@ -284,7 +284,7 @@ def test_run_skipped_not_active(tmp_path):
 def test_run_language_unsupported(tmp_path):
     repo = _mk_repo(tmp_path, structure=None)
     con = _con(repo)
-    con.execute("UPDATE symbols SET file_path = 'src/app.ts'")
+    con.execute("UPDATE symbols SET file_path = 'src/main.rs'")
     con.execute(
         "INSERT INTO structure (payload_json, status, created_at) VALUES (?, 'active', 't')",
         (STRUCTURE,),
@@ -295,8 +295,8 @@ def test_run_language_unsupported(tmp_path):
     finally:
         con.close()
     assert out["status"] == "language-unsupported"
-    assert ".ts" in out["reason"]
-    assert "later batch" in out["reason"]
+    assert ".rs" in out["reason"]
+    assert "dependency-cruiser" in out["reason"]  # 支持清单列两引擎（.ts 已路由 TS 引擎，此处用 .rs）
 
 
 def test_run_enforcer_not_found(tmp_path, monkeypatch):

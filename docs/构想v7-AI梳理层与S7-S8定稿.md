@@ -366,6 +366,7 @@ decisions(
 | **R3'** | `vrp/render.py`（render_* MCP 工具 + `vrp report` CLI 双入口）+ S8 可视化（archify 沙箱 bootstrap `--with-archify` 钉 25cf3708、SARIF——sarif-om 与手写 JSON 二选一实施时定、Mermaid、T4 清单、降级链）——**已完成（2026-11-04）**：SARIF 手写 JSON 定案；踩坑 #83（archify validate 四坑） | **AI 可出拍板材料**；深测 E2E 两仓出 report.html（`archify validate --json` rc=0）；降级测试；dogfood 自报告——**已验收**（vrp 仓 8 件 + unwind 仓 5 件，archify=true degraded=[]；降级 rc=0） |
 | **R3.5'** | `vrp/session.py`（session_begin/end/report，sqlite 文件快照）+ session MCP 族三件 + trust 模式进 skill（§3.3）——**已完成（2026-11-04）**：快照走 sqlite backup API；CLI `vrp session <repo> begin/end/report` 双入口 | **全信任模式**；初末快照/计数 diff/双图并排 E2E——**已验收**（vrp 仓+unwind 仓，archify=true degraded=[]；diff 全零（facts 未动）；快测 +16，352 绿） |
 | **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺）——**已完成（2026-11-05，详见 §8）**：nav_path 已落（c4b086d）；S7 Python 垂直切片已落（2b353a2，import-linter，TS 执法器后续批次）；mutmut 补位评估定案（§8.3：保持 2.4.5）；收口件 S7 parse 修复+tsa 第二仓 dogfood（§8.5：真违例抓出+parse bug 反哺修复）；全量 1784 绿（§8.4） | 规则固化；远期设计随 R2' 经验再定稿 |
+| **R5'** | S7 TS/JS 执法引擎（dependency-cruiser 18 沙箱垂直切片）——**已完成（2026-11-05，详见 §9）**：`vrp/s7_enforce_ts.py` 双引擎语言路由（.py→import-linter / .ts/.tsx/.js/.jsx/.mjs/.cjs→depcruise / 混语言诚实拒绝）；typescript **5.9.3 钉版**（7.x 超界静默空跑陷阱）；dogfood unwind 仓 1 契约 KEPT（73 模块真巡航）；全量口径 1803 | 双语言执法闭环；CLI/MCP 零新增面（enforce 内部路由） |
 
 每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）、dogfood 反哺分析深化（§0.4-4）。
 
@@ -376,7 +377,7 @@ decisions(
 - 《产品目标.md》：R1' 实施时修订——主流程四环明示、"不做渲染引擎与服务"红线保留、阶段表补 S7/S8 行
 - 《交接文档》：每批次收口时同步（下一步节 + 代码地图）
 
-## 8. R4' 批次增补（2026-11-05，进行中——暂停收尾）
+## 8. R4' 批次增补（2026-11-05，全部完成）
 
 ### 8.1 nav_path 耦合路径查找（R4' 第一件，c4b086d）
 
@@ -418,3 +419,27 @@ decisions(
 **tsa dogfood 全链**（verify/tree-sitter-analyzer，第二仓数据点）：聚焦切片两层 structure——kernel（core/ 21 文件，层 core）+ interface（cli+mcp+lsp+api/ 323 文件，层 interface），一 fid/文件诚实锚定，curate 入库 → `vrp enforce`（真 lint-imports 分析 1012 文件/3112 依赖）→ 1 forbidden 契约 **BROKEN**：真违例 `tree_sitter_analyzer/core/query_service.py:320` `from ..api import analyze_code`（内核反向依赖接口层入口，try/except 包裹仍违例）→ P9 findings 锚定覆盖符号。**大仓 vibe 代码的真实架构债首次被 S7 执法抓出**。
 
 **dogfood 即抓 bug（反哺闭环兑现）**：首跑 2 findings 落库、锚点相同而契约名错乱——取证（work/probe_r4_tsa_raw.py）发现 import-linter forbidden 契约把同一条链列两遍（(容器,被禁模块) 聚合组在前、(模块,被禁模块) 明细组在后），且描述行 ~70 字符**折行**——折行片段无冒号尾，`parse_broken` 误当契约名，第二份违例挂错契约。**修复**：`parse_broken` 按 (importer, imported, line) 去重保首（首现聚合组，契约名归属正确）+"is not allowed to import" 描述片段跳过；+1 罐头测试（真实 tsa 输出形态）；修复后 tsa 复跑 1 violation/1 finding/1 anchored；快测 379 绿 73s、受影响深测组 s7 4 绿、全量口径 1785。探针：work/probe_r4_tsa_dogfood.py（authoring+curate+enforce 全链）/probe_r4_tsa_raw.py（原始 stdout 取证）。
+
+## 9. R5' 批次增补（2026-11-05，S7 TS/JS 执法引擎）
+
+### 9.1 S7 TS/JS 垂直切片：dependency-cruiser 18 沙箱
+
+**`vrp/s7_enforce_ts.py`**（dependency-cruiser 18.7.2 + typescript **5.9.3 钉版**，work/dep-cruise-probe 沙箱，VRP_DEPCRUISE_BIN 覆盖）：s7_enforce.run() 按语言路由——structure.symbol_fids 的 file_path 推导容器，.py 点分模块 → Python 引擎（import-linter，§8.2）；.ts/.tsx/.js/.jsx/.mjs/.cjs 目录前缀 → 本引擎；混语言（py+ts 容器并存）not-enforceable 诚实拒绝；CLI/MCP 零新增面（`vrp enforce`/MCP enforce 内部路由）。
+
+**契约生成复用**：层 DAG（§8.2 的 build_contracts/_forbidden_pairs/_rule_pair）语言无关，TS 容器=目录前缀（`_prefix`：根级文件/node_modules/非 TS 诚实跳过）；配置 `.vrp/dependency-cruiser.cjs`（forbidden[] {name 中文可, severity=error, from/to.path 正则}，按 `^(?:p1|p2)(?:/|$)` 组装防前缀污染——`^src/core` 误配 `src/corefish.ts`）；运行后清理（同 importlinter.ini 模式）。
+
+**探针契约四坑**（work/probe_r5_depcruise_contract.py，2026-11-05）：
+- **typescript 7.x 静默空跑陷阱**：depcruise 支持 typescript ">=2 <7"，装到 7.0.2 → extensionsFound .ts available:false、totalCruised:0、**rc=0**——空跑不是错误是陷阱；钉 5.9.3（同 stryker 沙箱先例）
+- **Windows shim**：npm .bin 无扩展名项是 sh 脚本（WinError 193），须 depcruise.cmd（cmd /c 包装）
+- **rc 语义与 import-linter 相反**：`-T json` 输出下 rc 恒 0（含违例）；rc≠0=配置/环境错误（stderr 出错）——违例判定只能看 JSON（modules[].dependencies[].rules[] severity=error + summary.error），不能看 rc
+- **无顶层 violations 键 + 无行号**：模块级图无行号——payload line=None 诚实记录，findings 行号取锚符号 start_line（文件首符号）
+
+### 9.2 dogfood：unwind 仓（TS，1 契约 KEPT）
+
+verify/unwind（pnpm workspace，packages/core 41 文件 + packages/dashboard 29 文件）：诚实分层——core（确定性扫描库）不许 import dashboard（UI）；一包一前缀容器（`packages/core/src`、`packages/dashboard/src`，`^(?:pkg/src)(?:/|$)` 覆盖全部嵌套）；curate 入库 → `vrp enforce` → **status ok / engine dependency-cruiser / 1 契约 / total_cruised 73 / 0 violations——KEPT**（core→dashboard 反向依赖不存在，干净架构数据点；73 模块真巡航非空跑）。**两引擎双数据点齐**：tsa（Python/import-linter）真违例抓出 vs unwind（TS/depcruise）干净契约保持。
+
+### 9.3 测试与验收
+
+- quick +14（test_s7_enforce_ts.py：_prefix/derive_ts_containers/build_config 形状含中文契约名与 regex 转义/parse_violations error-only 去重；mocked E2E：violation 落库锚定+payload 逐字段/幂等/合规清旧/enforcer-failed 保旧（rc=1 stderr_tail）/timeout/not-found/全缺目录 not-enforceable；路由：run() 命中 TS 引擎/混语言拒绝/CLI 接线）；test_s7_enforce.py language-unsupported 改 .rs（.ts 已路由 TS 引擎）
+- deep +4（tests/deep/test_deep_s7_enforce_ts.py：真 depcruise E2E——violation→P9 锚定/幂等/修复清库/合规仓干净；模块级 skipif 沙箱缺失）
+- 快测 393 绿 64s；全量口径 1803（393+1410）；探针 work/probe_r5_*.py（契约取证/unwind dogfood/新鲜度检查）

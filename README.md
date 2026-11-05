@@ -53,7 +53,7 @@ vrp transact <repo> tx.json             # 重构事务（声明→闸门→原�
 vrp transact <repo> tx.json --preview   # diff 预览（difflib+difftastic 工具组，无闸门不改树）
 vrp verdicts <repo>                     # verdict 历史（open 项自动回馈进 dossier evidence）
 vrp curate <repo>                       # AI 梳理工件验收入库（.vrp/ai/ slices/structure；--reject 用户否决留痕）
-vrp enforce <repo>                      # S7 架构执法：curate 入库的 structure 经 import-linter 执行，违例落 P9 findings
+vrp enforce <repo>                      # S7 架构执法：curate 入库的 structure 按语言路由执行（.py→import-linter；.ts/.js→dependency-cruiser），违例落 P9 findings
 vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SARIF+Mermaid+archify html；archify 缺失降级不阻塞）
 vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 facts.db 快照 → 计数 diff + 双 L0 图并排 + verdict 时间线
 ```
@@ -75,7 +75,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `transact` / `transact-batch` | 重构事务单发（`--preview` diff 预览）/ 目录批处理 |
 | `verdicts` | verdict 历史查询（`--tid` 单条详情；dossier evidence 自动内嵌 open 项） |
 | `curate` | AI 梳理工件验收（slices/structure 确定性验证全过才入库；`--reject` 否决留痕 decisions 表；复验失效标 stale） |
-| `enforce` | S7 架构执法（构想v7 §4）：structure(active) → 层 DAG+rules 生成 forbidden 契约 → import-linter 执行（配置运行后清理）；Broken contracts = P9 findings（`source='s7-enforce'`，幂等 replace-all）；无 structure/非 active 诚实 skipped，非 .py 仓 language-unsupported |
+| `enforce` | S7 架构执法（构想v7 §4/§8.2/§9）：structure(active) → 层 DAG+rules 生成 forbidden 契约 → 按语言路由执行——.py→import-linter（VRP_IMPORT_LINTER_BIN 覆盖）；.ts/.tsx/.js/.jsx/.mjs/.cjs→dependency-cruiser（typescript 5.9.3 钉版沙箱，VRP_DEPCRUISE_BIN 覆盖）；混语言诚实 not-enforceable；配置运行后清理；Broken contracts = P9 findings（`source='s7-enforce'`，幂等 replace-all）；无 structure/非 active 诚实 skipped |
 | `report` | S8 静态报告：三 IR（architecture/sequence/timeline）→ archify validate+render（缺失降级 Mermaid-only）→ `.vrp/report/`（report.html 无时间戳字节级复现+SARIF 2.1.0） |
 | `session` | 全信任模式（构想v7 §3.3）：begin/end 出初末 facts.db 快照（sqlite backup 安全复制），report 出初末计数 diff（四组）+ 双 L0 架构图并排 + 会话窗口 verdict 时间线；不做图 diff（诚实版） |
 | `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/curate_*/tx_*/render_*/session_*/enforce/query_facts 二十五件） |

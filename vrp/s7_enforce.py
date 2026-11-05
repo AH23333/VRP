@@ -5,9 +5,10 @@ lint-imports 执行（cwd=repo）→ Broken contracts 解析 → 违例 = P9 fin
 （kind='layer-violation'，source='s7-enforce'，幂等 replace-all）→ dossier
 侧进 AI 重构目标。
 
-V1 执法器：Python→import-linter 2.15（pip 全局；VRP_IMPORT_LINTER_BIN 覆盖）。
-TS/JS 执法器（dependency-cruiser 等）为后续批次——容器推导仅认 .py，非 .py
-仓诚实返回 language-unsupported。
+双引擎（R5' 起）：本模块 Python 路径（import-linter 2.15，pip 全局；
+VRP_IMPORT_LINTER_BIN 覆盖）；TS/JS 路径见 s7_enforce_ts.py（dependency-cruiser
+18 沙箱，work/dep-cruise-probe）。run() 按语言路由：.py 容器 → Python；
+.ts/.tsx/.js/.jsx/.mjs/.cjs 目录前缀 → TS 引擎；混语言 not-enforceable。
 
 探针事实（work/probe_r4_importlinter.py + probe_r4_forbidden.py，2026-11-05）：
 - rc 0=kept / 1=broken；rc 1 且 stdout 无 "Broken contracts" 块 = 配置/环境
@@ -359,18 +360,36 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
         }
     derived = derive_containers(con, payload)
     containers = derived["containers"]
-    if not any(containers.values()):
-        if derived["extensions"]:
+    from .s7_enforce_ts import derive_ts_containers, run_ts  # 惰性导入防环（ts 模块顶层反向 import 本模块）
+
+    ts_derived = derive_ts_containers(con, payload)
+    has_py = any(containers.values())
+    has_ts = any(ts_derived["containers"].values())
+    if has_py and has_ts:
+        return {
+            **base,
+            "structure_status": structure_status,
+            "status": "not-enforceable",
+            "reason": "mixed-language structure (py + ts/js): split per language into separate structures",
+        }
+    if has_ts:
+        return run_ts(repo, con, payload, structure_status, ts_derived["containers"], timeout)
+    if not has_py:
+        if derived["extensions"] or ts_derived["extensions"]:
+            seen = ", ".join(sorted(set(derived["extensions"]) | set(ts_derived["extensions"])))
             return {
                 **base,
                 "status": "language-unsupported",
-                "reason": f"no .py containers (seen: {', '.join(derived['extensions'])}); TS/JS enforcer is a later batch",
+                "reason": (
+                    f"no enforceable containers (seen: {seen}); supported: .py (import-linter),"
+                    " .ts/.tsx/.js/.jsx/.mjs/.cjs (dependency-cruiser)"
+                ),
                 "structure_status": structure_status,
             }
         return {
             **base,
             "status": "not-enforceable",
-            "reason": "no .py containers resolved from symbol_fids",
+            "reason": "no containers resolved from symbol_fids",
             "structure_status": structure_status,
         }
     built = build_contracts(payload, containers)
