@@ -404,14 +404,6 @@ def _run_archify(mjs: Path, args: list[str], timeout: int = ARCHIFY_TIMEOUT) -> 
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def archify_available() -> bool:
-    mjs = find_archify_mjs()
-    if mjs is None:
-        return False
-    rc, _, _ = _run_archify(mjs, ["guide"], timeout=30)
-    return rc == 0
-
-
 # ----------------------------------------------------------------- report
 
 
