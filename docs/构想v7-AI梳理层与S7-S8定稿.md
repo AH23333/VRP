@@ -476,6 +476,6 @@ verify/unwind（pnpm workspace，packages/core 41 文件 + packages/dashboard 29
 
 ### 10.5 测试与验收
 
-- 快测 +9（R6'1/2：test_render +5 staleness/横幅/清孤儿；R6'1c：+2 真形态回归（PYTHONUTF8 env 钉值/difftastic rhs-changes-空 删除记账）+ test_s1_cbm_provenance 改写 +2）→ **402 绿 96s**；全量口径 1812（402+1410，复跑待下批或用户指令）
+- 快测 +9（R6'1/2：test_render +5 staleness/横幅/清孤儿；R6'1c：+2 真形态回归（PYTHONUTF8 env 钉值/difftastic rhs-changes-空 删除记账）+ test_s1_cbm_provenance 改写 +2）→ **402 绿 96s**；全量口径 1812（402+1410，复跑待下批或用户指令）；**受影响深测组复验 12 绿 48s**（dif003 T2 删死码 committed 正中 #86 改动高危区 + s7 双引擎 E2E 8 例）
 - 探针 work/probe_r6_*.py（facts 复验/长跑侦察/陈旧 fid 溯源）+ work/agent_longrun.py（长跑主脚本）+ work/agent_longrun_result.json（运行结果）
 - 提交链（本地未 push）：37d1c6f（1/2）→bb7109d（1b）→f83a4b3（1c）→4b79292（T2）→96fca8f（T4）
