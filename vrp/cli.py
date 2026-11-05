@@ -364,7 +364,23 @@ def cmd_status(args) -> int:
         by_evidence = dict(con.execute("SELECT evidence, COUNT(*) FROM edges GROUP BY evidence"))
     finally:
         con.close()
-    print(json.dumps({"meta": meta, "counts": counts, "edges_by_evidence": by_evidence}, ensure_ascii=False, indent=2))
+    from . import render as render_mod
+
+    facts_head = str(meta.get("git_head", "") or "")
+    staleness = render_mod._staleness(repo, facts_head)
+    if not facts_head:
+        state = "unknown"
+    elif staleness is None:
+        state = "fresh"
+    else:
+        state = "stale"
+    freshness = {"state": state}
+    if staleness is not None:
+        freshness.update(staleness)
+    print(json.dumps(
+        {"meta": meta, "counts": counts, "edges_by_evidence": by_evidence, "freshness": freshness},
+        ensure_ascii=False, indent=2,
+    ))
     return 0
 
 
