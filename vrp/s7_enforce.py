@@ -12,7 +12,10 @@ TS/JS 执法器（dependency-cruiser 等）为后续批次——容器推导仅�
 探针事实（work/probe_r4_importlinter.py + probe_r4_forbidden.py，2026-11-05）：
 - rc 0=kept / 1=broken；rc 1 且 stdout 无 "Broken contracts" 块 = 配置/环境
   错误 → enforcer-failed（不能当违例）
-- broken 块格式：契约名行 + 破折线 + "desc:"（以冒号结尾）+ "- importer -> imported (l.N)"
+- broken 块格式：契约名行 + 破折线 + "desc:"（以冒号结尾）+ "- importer -> imported (l.N)"；
+  同一条链聚合组/明细组各列一次 + 描述行 ~70 字符折行（tsa dogfood 实证）→
+  parse_broken 按 (importer, imported, line) 去重保首、"is not allowed to
+  import" 片段跳过
 - forbidden 契约容器可为文件级模块（pkg.mod）；契约 name 可中文
 - 层 DAG：每对不允许的 (A,B) 生成一条 forbidden 契约（覆盖线性栈与任意 DAG）；
   rules[]：from_layer/to_layer 或 "X 不许 import Y"（X/Y=层名）文本模式映射为
@@ -209,8 +212,16 @@ def build_config(contracts: list[dict], root_packages: list[str]) -> str:
 
 
 def parse_broken(stdout: str) -> list[dict]:
-    """Broken contracts 块 → 违例列表（契约名/导入方/被导入方/行号）。"""
+    """Broken contracts 块 → 违例列表（按 (importer, imported, line) 去重保首）。
+
+    tsa dogfood 实证（work/probe_r4_tsa_raw.py，2026-11-05）：forbidden 契约
+    同一条链列两遍——(容器,被禁模块) 聚合组在前、(模块,被禁模块) 明细组在后，
+    且描述行 ~70 字符折行，折行片段无冒号尾（"X is not allowed to import"），
+    不能当契约名；去重保首（首现于聚合组，契约名归属正确），描述片段按
+    "is not allowed to import" 子串识别跳过。
+    """
     violations: list[dict] = []
+    seen: set[tuple[str, str, int]] = set()
     current_contract: str | None = None
     in_block = False
     for line in stdout.splitlines():
@@ -222,17 +233,22 @@ def parse_broken(stdout: str) -> list[dict]:
             continue
         m = _VIOLATION.match(stripped)
         if m:
-            violations.append(
-                {
-                    "contract": current_contract,
-                    "importer": m.group(1),
-                    "imported": m.group(2),
-                    "line": int(m.group(3)),
-                }
-            )
+            key = (m.group(1), m.group(2), int(m.group(3)))
+            if key not in seen:
+                seen.add(key)
+                violations.append(
+                    {
+                        "contract": current_contract,
+                        "importer": m.group(1),
+                        "imported": m.group(2),
+                        "line": int(m.group(3)),
+                    }
+                )
             continue
         if stripped.endswith(":") or set(stripped) <= {"-"}:
             continue  # 描述行 / 破折线
+        if "is not allowed to import" in stripped:
+            continue  # 描述行（含折行片段），不覆盖契约名
         current_contract = stripped  # 契约名行
     return violations
 

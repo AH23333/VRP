@@ -200,6 +200,53 @@ def test_parse_broken_canned_probe_output():
     ]
 
 
+# tsa dogfood 实测输出（work/probe_r4_tsa_raw.py，2026-11-05）：
+# 聚合组与明细组同链双列 + 描述行 ~70 字符折行（折行片段无冒号尾）
+CANNED_TSA_BROKEN = """
+---------
+Contracts
+---------
+
+Analyzed 1012 files, 3112 dependencies.
+---------------------------------------
+
+layer: core 不许 import interface BROKEN
+
+Contracts: 0 kept, 1 broken.
+
+
+----------------
+Broken contracts
+----------------
+
+layer: core 不许 import interface
+-------------------------------
+
+tree_sitter_analyzer.core is not allowed to import tree_sitter_analyzer.api:
+
+-   tree_sitter_analyzer.core.query_service -> tree_sitter_analyzer.api (l.320)
+
+
+tree_sitter_analyzer.core.query_service is not allowed to import
+tree_sitter_analyzer.api:
+
+-   tree_sitter_analyzer.core.query_service -> tree_sitter_analyzer.api (l.320)
+
+"""
+
+
+def test_parse_broken_dedups_aggregate_and_detail_groups():
+    violations = s7_enforce.parse_broken(CANNED_TSA_BROKEN)
+    assert violations == [
+        {
+            "contract": "layer: core 不许 import interface",
+            "importer": "tree_sitter_analyzer.core.query_service",
+            "imported": "tree_sitter_analyzer.api",
+            "line": 320,
+        }
+    ]
+
+
 # ------------------------------------------------------------ run() mocked
 
 

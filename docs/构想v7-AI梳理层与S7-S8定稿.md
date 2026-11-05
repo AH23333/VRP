@@ -365,7 +365,7 @@ decisions(
 | **R2'** | `vrp/curate.py`（slices/structure schema+验证器+表迁移）+ `vrp curate` CLI + `--reject` + decisions 留痕表 + curate MCP 族五件 + nav_slice/callers/callees + `skills/vrp-curation/` v1 | **AI 梳理闭环**；验证器全拒绝路径参数化；手工 AI 工件→curate 入库 E2E；幂等/stale/留痕测试 |
 | **R3'** | `vrp/render.py`（render_* MCP 工具 + `vrp report` CLI 双入口）+ S8 可视化（archify 沙箱 bootstrap `--with-archify` 钉 25cf3708、SARIF——sarif-om 与手写 JSON 二选一实施时定、Mermaid、T4 清单、降级链）——**已完成（2026-11-04）**：SARIF 手写 JSON 定案；踩坑 #83（archify validate 四坑） | **AI 可出拍板材料**；深测 E2E 两仓出 report.html（`archify validate --json` rc=0）；降级测试；dogfood 自报告——**已验收**（vrp 仓 8 件 + unwind 仓 5 件，archify=true degraded=[]；降级 rc=0） |
 | **R3.5'** | `vrp/session.py`（session_begin/end/report，sqlite 文件快照）+ session MCP 族三件 + trust 模式进 skill（§3.3）——**已完成（2026-11-04）**：快照走 sqlite backup API；CLI `vrp session <repo> begin/end/report` 双入口 | **全信任模式**；初末快照/计数 diff/双图并排 E2E——**已验收**（vrp 仓+unwind 仓，archify=true degraded=[]；diff 全零（facts 未动）；快测 +16，352 绿） |
-| **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺）——**进行中（2026-11-05 暂停收尾，详见 §8）**：nav_path 已落（c4b086d）；S7 Python 垂直切片已落（2b353a2，import-linter，TS 执法器后续批次）；mutmut 补位评估定案（§8.3：保持 2.4.5）；剩低负载全量复跑收口 | 规则固化；远期设计随 R2' 经验再定稿 |
+| **R4'** | S7 架构规则固化（执法器工具组按语言）+ nav_path（WITH RECURSIVE）+ 变异测试组 mutmut(Python) 补位评估 + 分析深化持续批次化（dogfood 反哺）——**已完成（2026-11-05，详见 §8）**：nav_path 已落（c4b086d）；S7 Python 垂直切片已落（2b353a2，import-linter，TS 执法器后续批次）；mutmut 补位评估定案（§8.3：保持 2.4.5）；收口件 S7 parse 修复+tsa 第二仓 dogfood（§8.5：真违例抓出+parse bug 反哺修复）；全量 1784 绿（§8.4） | 规则固化；远期设计随 R2' 经验再定稿 |
 
 每批次：小步提交、门禁快测全绿、深测按批跑、文档三件套同步（交接/踩坑/构想v7 增补节）、dogfood 反哺分析深化（§0.4-4）。
 
@@ -407,8 +407,14 @@ decisions(
 - **上游观察点**：boxed/mutmut#397（Windows 原生支持）——落地则重开 3.x 迁移评估
 - Python 侧 P8 无引擎缺口；剩余缺口为语言侧（JS/TS TESTS=0 预筛，构想v6 §12.4 已规划 ETL 自建），非 mutmut 补位范畴
 
-### 8.4 R4' 剩余（恢复后收口清单）
+### 8.4 R4' 收口清单（2026-11-05 全部完成）
 
-1. 低负载窗口全量复跑（口径 1784：快速 378 + 深度 1406；上轮 R3.5' 诚实记录 1752+1F+1E 定性环境性 #84 内存悬崖——收口前须确认全绿）
-2. （可选）unwind 仓 curate 入库 structure 后 `vrp enforce` 补第二仓 dogfood 数据点
-3. 队列清空后停下汇报；push 等用户指令（提交链 …→c4b086d（nav_path）→2b353a2（S7）本地，最后推送 d46757c）
+1. ~~低负载窗口全量复跑~~ **已完成**：**1784 全绿 1058.46s**（2026-11-05，6.0GB 空闲内存窗口；R3.5' 上轮 1752+1F+1E 定性 #84 内存悬崖理论再实证——同代码库健康内存全过）
+2. ~~第二仓 dogfood~~ **已完成（目标改 tsa）**：unwind 是 TS 仓，enforce 只能产出 language-unsupported（单测已覆盖，无数据点价值）；改 tsa（Python 大仓 66132 symbols）出真实执法数据点——**1 契约 BROKEN、真违例、dogfood 即抓 parse bug 反哺修复**，详见 §8.5
+3. 队列清空后停下汇报；push 等用户指令（提交链 …→c4b086d（nav_path）→2b353a2（S7）→7ef0472（mutmut 评估+文档）→收口提交 本地，最后推送 d46757c）
+
+### 8.5 S7 parse 修复 + tsa 第二仓 dogfood（R4' 收口件）
+
+**tsa dogfood 全链**（verify/tree-sitter-analyzer，第二仓数据点）：聚焦切片两层 structure——kernel（core/ 21 文件，层 core）+ interface（cli+mcp+lsp+api/ 323 文件，层 interface），一 fid/文件诚实锚定，curate 入库 → `vrp enforce`（真 lint-imports 分析 1012 文件/3112 依赖）→ 1 forbidden 契约 **BROKEN**：真违例 `tree_sitter_analyzer/core/query_service.py:320` `from ..api import analyze_code`（内核反向依赖接口层入口，try/except 包裹仍违例）→ P9 findings 锚定覆盖符号。**大仓 vibe 代码的真实架构债首次被 S7 执法抓出**。
+
+**dogfood 即抓 bug（反哺闭环兑现）**：首跑 2 findings 落库、锚点相同而契约名错乱——取证（work/probe_r4_tsa_raw.py）发现 import-linter forbidden 契约把同一条链列两遍（(容器,被禁模块) 聚合组在前、(模块,被禁模块) 明细组在后），且描述行 ~70 字符**折行**——折行片段无冒号尾，`parse_broken` 误当契约名，第二份违例挂错契约。**修复**：`parse_broken` 按 (importer, imported, line) 去重保首（首现聚合组，契约名归属正确）+"is not allowed to import" 描述片段跳过；+1 罐头测试（真实 tsa 输出形态）；修复后 tsa 复跑 1 violation/1 finding/1 anchored；快测 379 绿 73s、受影响深测组 s7 4 绿、全量口径 1785。探针：work/probe_r4_tsa_dogfood.py（authoring+curate+enforce 全链）/probe_r4_tsa_raw.py（原始 stdout 取证）。
