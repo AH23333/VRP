@@ -266,15 +266,22 @@ def check_edits(repo: Path, tx: dict, pre_db: Path, post_db: Path, timeout: int 
         for block in extract_blocks(parsed):
             lhs = block.get("lhs")
             rhs = block.get("rhs")
-            if lhs and not rhs:
+            # 分类按 token 有无而非侧字典真值：difftastic 的纯删除是
+            # lhs 有 token + rhs 存在但 token 空（R6' agent 长跑 T2 实证，
+            # 旧 `if lhs and not rhs` 漏此形态误报 structural-change）。
+            lhs_tokens = (lhs or {}).get("tokens") or []
+            rhs_tokens = (rhs or {}).get("tokens") or []
+            if lhs_tokens and not rhs_tokens:
                 if tx["type"] == "T2" or (lhs["line"] is not None and (lhs["line"] + 1) in removal_lines.get(rel, set())):
                     continue
-            elif rhs and not lhs:
+            elif rhs_tokens and not lhs_tokens:
                 if rhs["line"] is not None and (rhs["line"] + 1) in addition_lines.get(rel, set()):
                     continue
-            elif lhs and rhs:
-                if _pairs_match(lhs["tokens"], rhs["tokens"], allowed_pairs):
+            elif lhs_tokens and rhs_tokens:
+                if _pairs_match(lhs_tokens, rhs_tokens, allowed_pairs):
                     continue
+            else:
+                continue  # 双侧皆无 token：无结构内容（噪声块）
             bad.append(_block_summary(block))
         if bad:
             unaccounted.append({"file": rel, "blocks": bad[:5]})

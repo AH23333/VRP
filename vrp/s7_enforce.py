@@ -28,6 +28,7 @@ VRP_IMPORT_LINTER_BIN 覆盖）；TS/JS 路径见 s7_enforce_ts.py（dependency-
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -255,7 +256,12 @@ def parse_broken(stdout: str) -> list[dict]:
 
 
 def _execute(bin_path: str, repo: Path, config: Path, timeout: int):
-    """lint-imports 子进程（可测缝）：返回 (rc, stdout) 或 None=超时。"""
+    """lint-imports 子进程（可测缝）：返回 (rc, stdout) 或 None=超时。
+
+    child env 钉 PYTHONUTF8=1：lint-imports 以 locale 编码（中文 Windows=GBK）
+    读 UTF-8 的 importlinter.ini（契约名含中文）→ UnicodeDecodeError rc=1 无
+    broken 块（R6' agent 长跑在 vrp 自仓实证）。
+    """
     try:
         proc = subprocess.run(
             [bin_path, f"--config={config}", "--no-cache", "--no-logo"],
@@ -265,6 +271,7 @@ def _execute(bin_path: str, repo: Path, config: Path, timeout: int):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            env={**os.environ, "PYTHONUTF8": "1"},
         )
     except subprocess.TimeoutExpired:
         return None

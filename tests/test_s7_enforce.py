@@ -452,6 +452,28 @@ def test_run_timeout(tmp_path, monkeypatch):
     assert not (repo / ".vrp" / "importlinter.ini").exists()
 
 
+def test_execute_pins_pythonutf8_for_child(tmp_path, monkeypatch):
+    """R6' agent 长跑实证（vrp 自仓）：中文 Windows 下 lint-imports 以 locale
+    编码（GBK）读 UTF-8 的 importlinter.ini（契约名含中文）→ UnicodeDecodeError
+    rc=1 且无 broken 块。child env 必须钉 PYTHONUTF8=1。"""
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = "Contracts: 1 kept, 0 broken.\n"
+        stderr = ""
+
+    def fake_run(args, **kwargs):
+        captured.update(kwargs)
+        return FakeProc()
+
+    monkeypatch.setattr(s7_enforce.subprocess, "run", fake_run)
+    rc, out = s7_enforce._execute("lint-imports", tmp_path, tmp_path / "importlinter.ini", 60)
+    assert rc == 0
+    assert "kept" in out
+    assert captured["env"]["PYTHONUTF8"] == "1"
+
+
 def test_cli_enforce_wiring(tmp_path, monkeypatch, capsys):
     repo = _mk_repo(tmp_path)
     monkeypatch.setattr(s7_enforce, "find_import_linter", lambda: "fake-lint-imports")

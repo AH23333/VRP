@@ -303,6 +303,32 @@ def test_check_edits_t2_removals_ok_additions_fail(tmp_path, monkeypatch):
     assert fail_report["unaccounted"][0]["blocks"][0]["rhs"]["tokens"] == ["double"]
 
 
+def test_check_edits_t2_deletion_with_empty_rhs_tokens_ok(tmp_path, monkeypatch):
+    """R6' agent 长跑实证（T2 删 vrp/render.archify_available 被误拒）：
+    difftastic 纯删除形态 = lhs 有 token + rhs 存在但 token 空（非 rhs 缺失）——
+    旧真值判定（`if lhs and not rhs`）漏此形态，误报 structural-change。"""
+    repo = _mk_repo(tmp_path)
+    pre_db = _mk_span_db(tmp_path / "pre.db", [("f1", "p.a.add", "a.py", 1, 2)])
+    post_db = _mk_span_db(tmp_path / "post.db", [("f2", "p.a.add", "a.py", 1, 2)])
+    deletion_paired_empty_rhs = {
+        "status": "changed",
+        "chunks": [
+            [
+                {
+                    "lhs": {"line_number": 406, "changes": [{"content": "def"}, {"content": "gone"}]},
+                    "rhs": {"line_number": 406, "changes": []},
+                }
+            ]
+        ],
+    }
+    monkeypatch.setattr(s6_difftastic, "find_difftastic", lambda: "difft")
+    _patch_run(monkeypatch, {"a.py": deletion_paired_empty_rhs})
+    report = s6_difftastic.check_edits(repo, _mk_tx("T2"), pre_db, post_db)
+    assert report["status"] == "ok"
+    assert report["files"]["a.py"] == "accounted"
+    assert report["unaccounted"] == []
+
+
 def test_check_edits_degrades_per_file_on_run_failure(tmp_path, monkeypatch):
     repo = _mk_repo(tmp_path)
     pre_db = _mk_span_db(tmp_path / "pre.db", [])
