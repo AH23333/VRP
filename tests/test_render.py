@@ -4,6 +4,7 @@ R6' 增：staleness 横幅（M4 不对称修复）+ 渲染输出清理（孤儿�
 """
 
 import json
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -427,3 +428,172 @@ def test_cli_report_out_dir(tmp_path, monkeypatch):
     rc = cli.main(["report", str(repo), "--out", str(out)])
     assert rc == 0
     assert (out / "report.html").is_file()
+
+
+# ------------------------------------------- R7'：L1 模块页 / L2 符号页（多级下钻）
+
+
+def _seed_files(repo: Path) -> None:
+    (repo / "pkg").mkdir(exist_ok=True)
+    (repo / "pkg" / "x.py").write_text(
+        "def a():\n    return 1\n\n\ndef b():\n    return 2\n\n\ndef c():\n    return 3\n",
+        encoding="utf-8",
+    )
+
+
+def test_module_and_symbol_pages_chain(tmp_path, monkeypatch):
+    """主链优先：L0 report → L1 modules → L2 symbols（含源码片段）互链贯通。"""
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+    result = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    assert result["counts"]["module_pages"] == 2
+    assert result["counts"]["symbol_pages"] == 3
+    assert (out / "modules" / "m0-m1.html").is_file()
+    assert (out / "modules" / "m1-m2.html").is_file()
+    for fid in ("fid-a", "fid-b", "fid-c"):
+        assert (out / "symbols" / f"{fid}.html").is_file()
+    report = (out / "report.html").read_text(encoding="utf-8")
+    assert 'href="modules/m0-m1.html"' in report  # L0 → L1
+    assert 'href="modules/m1-m2.html"' in report
+    mod = (out / "modules" / "m0-m1.html").read_text(encoding="utf-8")
+    assert 'href="../report.html"' in mod  # L1 → L0
+    assert 'href="../symbols/fid-b.html"' in mod  # L1 → L2
+    sym = (out / "symbols" / "fid-a.html").read_text(encoding="utf-8")
+    assert 'href="../report.html"' in sym  # L2 → L0
+    assert 'href="../modules/m0-m1.html"' in sym  # L2 → L1
+    assert "def a():" in sym  # 源码片段（真实文件）
+    assert "flow" in sym  # 所属业务线
+    assert "graph LR" in sym  # 邻域图
+
+
+def test_interlink_integrity_all_targets_exist(tmp_path, monkeypatch):
+    """互链完整性不变量：所有页面上每个 href 目标必须存在（静态多页无断链）。"""
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+    render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    pages = [out / "report.html"]
+    pages += sorted((out / "modules").glob("*.html"))
+    pages += sorted((out / "symbols").glob("*.html"))
+    assert len(pages) == 6  # 1 report + 2 模块页 + 3 符号页（确定性）
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        for target in re.findall(r'href="([^"]+)"', text):
+            if target.startswith(("http://", "https://")):
+                continue
+            assert (page.parent / target).exists(), f"{page.name}: 断链 {target}"
+
+
+def test_module_page_dir_fallback(tmp_path, monkeypatch):
+    """structure rejected → 目录聚合兜底出模块页（与 L0 IR 同源语义）。"""
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("UPDATE structure SET status = 'rejected'")
+    con.commit()
+    con.close()
+    result = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    assert result["counts"]["module_pages"] == 1  # 目录 pkg 聚合
+    page = out / "modules" / "m0-pkg.html"
+    assert page.is_file()
+    assert "目录聚合" in page.read_text(encoding="utf-8")
+
+
+def test_symbol_pages_global_cap_honest(tmp_path, monkeypatch):
+    """符号页全局 cap：截断须诚实标注，不出页的符号不落文件。"""
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    monkeypatch.setattr(render, "SYMBOL_PAGES_GLOBAL_CAP", 1)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    result = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    assert result["counts"]["symbol_pages"] == 1
+    assert (out / "symbols" / "fid-a.html").is_file()  # m1 候选字典序首个
+    assert not (out / "symbols" / "fid-b.html").exists()
+    report = (out / "report.html").read_text(encoding="utf-8")
+    assert "截断" in report  # 诚实标注
+    idx = json.loads((out / "ir" / "modules-index.json").read_text(encoding="utf-8"))
+    assert idx["symbol_pages"] == ["fid-a"] and idx["symbol_pages_truncated"] is True
+
+
+def test_code_snippet_variants(tmp_path):
+    repo = tmp_path / "r"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "x.py").write_text("l1\nl2\nl3\nl4\nl5\nl6\nl7\n", encoding="utf-8")
+    sn = render._code_snippet(repo, "pkg/x.py", 4, 4)
+    assert sn is not None and sn["lo"] == 1 and sn["hi"] == 7 and not sn["truncated"]  # ±3 上下文
+    assert sn["text"].splitlines()[0] == "l1"
+    sn2 = render._code_snippet(repo, "pkg/x.py", 1, 1)
+    assert sn2 is not None and sn2["lo"] == 1 and sn2["hi"] == 4 and not sn2["truncated"]
+    short = tmp_path / "s"
+    short.mkdir()
+    (short / "f.py").write_text("only\n", encoding="utf-8")
+    sn3 = render._code_snippet(short, "f.py", 1, 1)
+    assert sn3 is not None and sn3["truncated"]  # EOF 截断（want_hi=4 > 1 行）
+    assert render._code_snippet(repo, "missing.py", 1, 1) is None  # 文件缺失
+    assert render._code_snippet(repo, "<synthetic>", 1, 1) is None  # 尖括号 synthetic 守卫
+    assert render._code_snippet(repo, "../escape.py", 1, 1) is None  # .. 逃逸守卫
+    assert render._code_snippet(repo, "C:/abs.py", 1, 1) is None  # 绝对路径守卫
+
+
+def test_module_page_pathology_badges_and_findings(tmp_path, monkeypatch):
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("UPDATE findings SET anchor_fid = 'fid-a'")
+    con.commit()
+    con.close()
+    render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    mod = (out / "modules" / "m0-m1.html").read_text(encoding="utf-8")
+    assert ">P1<" in mod  # 符号行病理徽章
+    assert "pkg/x.py:2" in mod  # findings 表（按文件命中）
+    sym = (out / "symbols" / "fid-a.html").read_text(encoding="utf-8")
+    assert ">P1<" in sym
+    assert "class s0 p1" in sym  # 邻域图焦点病理着色
+    assert "class s1 p1" in mod  # 模块图成员病理着色（fid-a=s1）
+
+
+def test_mermaid_module_graph(tmp_path):
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = _ro_con(repo)
+    md = render._module_page_data(con, 0, render._iter_modules(con)[0])
+    con.close()
+    src = render.mermaid_module_graph(md)
+    assert src.startswith("graph LR")
+    assert "classDef p1 fill:#fdf0f0,stroke:#b3261e" in src  # 病理着色样式恒备
+    assert 's0["b"]' in src and 's1["a"]' in src  # 度序：b(2) > a(1)
+    assert "s1 --> s0" in src  # a→b 实测边
+
+
+def test_multilevel_pages_reproducible(tmp_path, monkeypatch):
+    """复现契约扩展到 L1/L2：两次渲染全产物字节级全等（无时间戳/确定性排序）。"""
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+    r1 = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+
+    def _snapshot(root: Path) -> dict:
+        return {
+            str(p.relative_to(root)).replace("\\", "/"): p.read_bytes()
+            for p in sorted(root.rglob("*"))
+            if p.is_file() and p.suffix in (".html", ".json", ".mmd", ".sarif")
+        }
+
+    snap1 = _snapshot(out)
+    r2 = render.render_report(repo)
+    snap2 = _snapshot(out)
+    assert r1["ir_sha256"] == r2["ir_sha256"]
+    assert len(snap1) >= 10  # report + 2 模块页 + 3 符号页 + ir 若干 + sarif + mmd
+    assert snap1 == snap2

@@ -9,6 +9,8 @@
 - Mermaid 降级链：IR → .mmd 源文本（零依赖，核心红线内）
 - SARIF 2.1.0：findings 手写 JSON（不引 sarif-om，零依赖）
 - report.html：目录页 + T4/open 清单 + Mermaid 内嵌（CDN script，无网显源码）
+- R7' 多级颗粒度：report.html（L0）→ modules/m{i}-{arch_id}.html（L1 模块页）
+  → symbols/{fid}.html（L2 符号页 + 源码片段），静态多页互链（主链优先）
 - 复现性：report.html 不带时间戳，带 facts.git_head + IR sha256（可溯源）
 - 产物落 <repo>/.vrp/report/（.vrp/ 已进目标仓 info/exclude，#76 纪律）
 
@@ -33,6 +35,18 @@ ARCHIFY_TIMEOUT = 120
 SEQUENCE_SLICES_CAP = 10
 SARIF_FINDINGS_CAP = 2000
 VERDICTS_CAP = 200
+FID_CHUNK = 500
+MODULE_PAGES_CAP = 50
+MODULE_SYMBOLS_TABLE_CAP = 500
+MODULE_GRAPH_NODES_CAP = 40
+MODULE_TOP_SYMBOL_PAGES = 20
+SYMBOL_PAGES_GLOBAL_CAP = 300
+SYMBOL_NEIGHBORS_PAGE_CAP = 20
+MODULE_FINDINGS_TABLE_CAP = 100
+FINDINGS_INDEX_CAP = 200
+SNIPPET_CONTEXT = 3
+SNIPPET_MAX_LINES = 80
+SYMBOL_PAGE_SLICES_CAP = 10
 
 _MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
 
@@ -404,6 +418,620 @@ def _run_archify(mjs: Path, args: list[str], timeout: int = ARCHIFY_TIMEOUT) -> 
     return proc.returncode, proc.stdout, proc.stderr
 
 
+# --------------------------- R7'：L1 模块页 / L2 符号页（静态多页互链，主链优先）
+
+_PATHOLOGY_COLORS = {
+    "P1": "#b3261e",
+    "P2": "#e8710a",
+    "P3": "#616161",
+    "P4": "#7b1fa2",
+    "P5": "#00695c",
+    "P6": "#4e342e",
+    "P7": "#37474f",
+    "P8": "#1565c0",
+    "P9": "#ad1457",
+}
+
+
+def _in_chunks(items: list, chunk: int = FID_CHUNK):
+    """fid 列表分块（IN 子句防超长；大仓 interface 模块 ~30k fids → 60 块）。"""
+    for i in range(0, len(items), chunk):
+        yield items[i:i + chunk]
+
+
+def _iter_modules(con: sqlite3.Connection) -> list[dict]:
+    """L1 页模块来源：structure active 优先（层序 + module_id 排序，与 L0 IR 同源）；
+    缺失/无 active/空 modules 走目录聚合兜底。
+    统一形状：{module_id, name, layer, responsibility, fids, source}。"""
+    if _has_table(con, "structure"):
+        row = con.execute(
+            "SELECT payload_json FROM structure WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is not None:
+            try:
+                payload = json.loads(row[0])
+            except json.JSONDecodeError:
+                payload = None
+            if payload is not None:
+                layers = [l.get("name") for l in payload.get("layers", [])
+                          if isinstance(l, dict) and l.get("name")]
+                order = {name: i for i, name in enumerate(layers)}
+                mods = []
+                for m in payload.get("modules", []):
+                    if not isinstance(m, dict) or not m.get("module_id"):
+                        continue
+                    mods.append({
+                        "module_id": str(m["module_id"]),
+                        "name": str(m.get("name") or m["module_id"]),
+                        "layer": str(m.get("layer") or ""),
+                        "responsibility": str(m.get("responsibility") or ""),
+                        "fids": [f for f in m.get("symbol_fids", []) if isinstance(f, str)],
+                        "source": "structure",
+                    })
+                if mods:
+                    mods.sort(key=lambda m: (order.get(m["layer"], len(order)), m["module_id"]))
+                    return mods
+    return _dir_modules(con)
+
+
+def _dir_modules(con: sqlite3.Connection) -> list[dict]:
+    """目录聚合兜底：符号文件按目录聚合，符号数 top MODULE_PAGES_CAP。"""
+    by_dir: dict[str, list[str]] = {}
+    for fid, fp in con.execute(
+        "SELECT fid, file_path FROM symbols"
+        " WHERE file_path != '' AND file_path NOT GLOB '<*' AND file_path NOT GLOB '>*'"
+    ):
+        norm = fp.replace("\\", "/")
+        d = norm.rsplit("/", 1)[0] if "/" in norm else "."
+        by_dir.setdefault(d, []).append(fid)
+    mods = []
+    for d in sorted(by_dir, key=lambda k: (-len(by_dir[k]), k))[:MODULE_PAGES_CAP]:
+        mods.append({
+            "module_id": d,
+            "name": d,
+            "layer": "",
+            "responsibility": f"目录聚合兜底：{len(by_dir[d])} 个符号",
+            "fids": sorted(by_dir[d]),
+            "source": "dirs",
+        })
+    return mods
+
+
+def _rows_by_fid(con: sqlite3.Connection, fids: list[str]) -> dict[str, sqlite3.Row]:
+    out: dict[str, sqlite3.Row] = {}
+    for chunk in _in_chunks(list(fids)):
+        marks = ",".join("?" * len(chunk))
+        for row in con.execute(
+            "SELECT fid, qualified_name, name, file_path, start_line, end_line FROM symbols"
+            f" WHERE fid IN ({marks})",
+            chunk,
+        ):
+            out[row["fid"]] = row
+    return out
+
+
+def _degrees(con: sqlite3.Connection, fids: list[str]) -> dict[str, int]:
+    deg: dict[str, int] = {}
+    for chunk in _in_chunks(list(fids)):
+        marks = ",".join("?" * len(chunk))
+        for (fid,) in con.execute(f"SELECT src_fid FROM edges WHERE src_fid IN ({marks})", chunk):
+            deg[fid] = deg.get(fid, 0) + 1
+        for (fid,) in con.execute(f"SELECT dst_fid FROM edges WHERE dst_fid IN ({marks})", chunk):
+            deg[fid] = deg.get(fid, 0) + 1
+    return deg
+
+
+def _findings_by_anchor(con: sqlite3.Connection, fids: list[str]) -> dict[str, list[sqlite3.Row]]:
+    out: dict[str, list[sqlite3.Row]] = {}
+    for chunk in _in_chunks(list(fids)):
+        marks = ",".join("?" * len(chunk))
+        for row in con.execute(
+            "SELECT pathology, kind, source, anchor_fid, file_path, start_line FROM findings"
+            f" WHERE anchor_fid IN ({marks})"
+            " ORDER BY pathology, kind, source, file_path, start_line, id",
+            chunk,
+        ):
+            out.setdefault(row["anchor_fid"], []).append(row)
+    return out
+
+
+def _findings_by_files(con: sqlite3.Connection, files: list[str]) -> tuple[int, list[sqlite3.Row]]:
+    """模块文件命中的 findings：总量 + 截断页（两查防大仓全量载入内存）。"""
+    total = 0
+    rows: list[sqlite3.Row] = []
+    for chunk in _in_chunks(list(files)):
+        marks = ",".join("?" * len(chunk))
+        total += con.execute(
+            f"SELECT COUNT(*) FROM findings WHERE file_path IN ({marks})", chunk
+        ).fetchone()[0]
+        if len(rows) >= MODULE_FINDINGS_TABLE_CAP:
+            continue
+        for row in con.execute(
+            "SELECT pathology, kind, source, anchor_fid, file_path, start_line FROM findings"
+            f" WHERE file_path IN ({marks})"
+            " ORDER BY pathology, kind, source, file_path, start_line, id LIMIT ?",
+            (*chunk, MODULE_FINDINGS_TABLE_CAP - len(rows)),
+        ):
+            rows.append(row)
+    return total, rows
+
+
+def _module_page_data(con: sqlite3.Connection, index: int, mod: dict) -> dict:
+    """L1 模块页数据（连接存活期收完；行存 sqlite3.Row——关连接后仍可读，
+    大仓 66k 行不转 dict 防内存膨胀）。"""
+    fids = [f for f in mod.get("fids", []) if isinstance(f, str)]
+    rows = _rows_by_fid(con, fids)
+    deg = _degrees(con, fids)
+    anchored = _findings_by_anchor(con, fids)
+    files = sorted({r["file_path"] for r in rows.values() if r["file_path"]})
+    findings_total, findings_rows = _findings_by_files(con, files)
+    ordered = sorted(fids, key=lambda f: (-deg.get(f, 0), f))
+    graph_fids = ordered[:MODULE_GRAPH_NODES_CAP]
+    graph_edges: list[tuple[str, str]] = []
+    for chunk in _in_chunks(graph_fids):
+        marks = ",".join("?" * len(chunk))
+        for src, dst in con.execute(
+            f"SELECT src_fid, dst_fid FROM edges WHERE src_fid IN ({marks}) AND dst_fid IN ({marks})",
+            (*chunk, *chunk),
+        ):
+            graph_edges.append((src, dst))
+    return {
+        "index": index,
+        "module": mod,
+        "page_file": f"m{index}-{_arch_id(mod['module_id'])}.html",
+        "rows": rows,
+        "degrees": deg,
+        "top_table": ordered[:MODULE_SYMBOLS_TABLE_CAP],
+        "graph_fids": graph_fids,
+        "graph_edges": sorted(set(graph_edges)),
+        "files": files,
+        "findings_total": findings_total,
+        "findings_rows": findings_rows,
+        "anchored": anchored,
+        "drifted": [f for f in fids if f not in rows],
+    }
+
+
+def _select_symbol_pages(module_datas: list[dict]) -> tuple[dict[str, str], bool]:
+    """符号页选择：每模块度 top MODULE_TOP_SYMBOL_PAGES ∪ 锚定 findings fids（fid 字典序），
+    全局 cap SYMBOL_PAGES_GLOBAL_CAP；返回 (fid→模块页文件, 是否截断)。"""
+    selected: dict[str, str] = {}
+    truncated = False
+    for md in module_datas:
+        cands = set(md["top_table"][:MODULE_TOP_SYMBOL_PAGES]) | set(md["anchored"])
+        for fid in sorted(cands):
+            if fid in selected:
+                continue
+            if len(selected) >= SYMBOL_PAGES_GLOBAL_CAP:
+                truncated = True
+                break
+            selected[fid] = md["page_file"]
+    return selected, truncated
+
+
+def _dedupe_by_fid(rows: list) -> list:
+    seen: set[str] = set()
+    out = []
+    for r in rows:
+        if r["fid"] in seen:
+            continue
+        seen.add(r["fid"])
+        out.append(r)
+    return out
+
+
+def _slices_of_fid(con: sqlite3.Connection, fid: str) -> list[dict]:
+    """包含该符号的 active slices：LIKE 粗筛 + 步骤精确核对，cap SYMBOL_PAGE_SLICES_CAP。"""
+    if not _has_table(con, "slices"):
+        return []
+    out: list[dict] = []
+    for slice_id, name, payload_json in con.execute(
+        "SELECT slice_id, name, payload_json FROM slices"
+        " WHERE status = 'active' AND payload_json LIKE ? ORDER BY slice_id",
+        (f"%{fid}%",),
+    ):
+        if len(out) >= SYMBOL_PAGE_SLICES_CAP:
+            break
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError:
+            continue
+        steps = payload.get("steps", []) if isinstance(payload, dict) else []
+        if any(isinstance(s, dict) and s.get("fid") == fid for s in steps):
+            out.append({"slice_id": slice_id, "name": name})
+    return out
+
+
+def _symbol_page_data(repo: Path, con: sqlite3.Connection, fid: str, module_page: str) -> dict:
+    """L2 符号页数据：行/邻域/slices/findings/源码片段（连接存活期收完）。"""
+    row = con.execute(
+        "SELECT fid, qualified_name, name, file_path, start_line, end_line FROM symbols WHERE fid = ?",
+        (fid,),
+    ).fetchone()
+    outs_all = con.execute(
+        "SELECT e.dst_fid AS fid, e.type AS etype, s.qualified_name AS qualified_name, s.name AS name"
+        " FROM edges e LEFT JOIN symbols s ON s.fid = e.dst_fid WHERE e.src_fid = ?"
+        " ORDER BY e.dst_fid, e.type",
+        (fid,),
+    ).fetchall()
+    ins_all = con.execute(
+        "SELECT e.src_fid AS fid, e.type AS etype, s.qualified_name AS qualified_name, s.name AS name"
+        " FROM edges e LEFT JOIN symbols s ON s.fid = e.src_fid WHERE e.dst_fid = ?"
+        " ORDER BY e.src_fid, e.type",
+        (fid,),
+    ).fetchall()
+    outs = _dedupe_by_fid(outs_all)
+    ins = _dedupe_by_fid(ins_all)
+    return {
+        "fid": fid,
+        "row": row,
+        "module_page": module_page,
+        "outs": outs[:SYMBOL_NEIGHBORS_PAGE_CAP],
+        "outs_total": len(outs),
+        "ins": ins[:SYMBOL_NEIGHBORS_PAGE_CAP],
+        "ins_total": len(ins),
+        "slices": _slices_of_fid(con, fid),
+        "findings": con.execute(
+            "SELECT pathology, kind, source, file_path, start_line FROM findings WHERE anchor_fid = ?"
+            " ORDER BY pathology, kind, source, file_path, start_line, id",
+            (fid,),
+        ).fetchall(),
+        "snippet": (
+            _code_snippet(repo, row["file_path"], row["start_line"] or 1, row["end_line"] or row["start_line"] or 1)
+            if row is not None and row["file_path"] else None
+        ),
+    }
+
+
+def _code_snippet(repo: Path, file_path: str, start: int, end: int) -> dict | None:
+    """符号源码片段：[start,end] ± SNIPPET_CONTEXT 行，cap SNIPPET_MAX_LINES；
+    truncated = hi < want_hi（同时覆盖 cap 与 EOF 截断）。
+    路径守卫（normrel 战果 #59/#60 同族）：绝对/含 ':'/'..'/尖括号 synthetic 全拒。"""
+    fp = str(file_path or "").replace("\\", "/")
+    if not fp or ":" in fp or ".." in fp or fp.startswith(("/", "<", ">")) or os.path.isabs(fp):
+        return None
+    try:
+        text = (repo / fp).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    s = int(start or 1)
+    e = max(s, int(end or s))
+    lo = max(1, s - SNIPPET_CONTEXT)
+    want_hi = e + SNIPPET_CONTEXT
+    hi = min(len(lines), want_hi, lo + SNIPPET_MAX_LINES - 1)
+    if lo > len(lines):
+        return None
+    return {"text": "\n".join(lines[lo - 1:hi]), "lo": lo, "hi": hi, "truncated": hi < want_hi}
+
+
+def mermaid_module_graph(data: dict) -> str:
+    """L1 模块内符号图（内嵌 Mermaid，零子进程）：度 top 节点 + 其间边，
+    病理 classDef 着色（archify 保持 L0 专用——性能：N 页×子进程不可行）。"""
+    rows = data["rows"]
+    anchored = data["anchored"]
+    id_of = {f: f"s{i}" for i, f in enumerate(data["graph_fids"])}
+    lines = ["graph LR"]
+    for code, color in sorted(_PATHOLOGY_COLORS.items()):
+        lines.append(f"    classDef {code.lower()} fill:#fdf0f0,stroke:{color},stroke-width:2px")
+    for f in data["graph_fids"]:
+        row = rows.get(f)
+        label = str(row["name"]) if row is not None else f"漂移 {f[:8]}"
+        lines.append(f'    {id_of[f]}["{label.replace(chr(34), chr(39))}"]')
+    for src, dst in data["graph_edges"]:
+        lines.append(f"    {id_of[src]} --> {id_of[dst]}")
+    for f in data["graph_fids"]:
+        found = anchored.get(f)
+        if found and found[0]["pathology"] in _PATHOLOGY_COLORS:
+            lines.append(f"    class {id_of[f]} {found[0]['pathology'].lower()}")
+    return "\n".join(lines) + "\n"
+
+
+def mermaid_symbol_graph(data: dict) -> str:
+    """L2 符号邻域图：焦点 s0 + 出入邻居；焦点病理着色。"""
+    row = data["row"]
+    focal = str(row["name"]) if row is not None else f"漂移 {data['fid'][:8]}"
+    id_of: dict[str, str] = {}
+    lines = ["graph LR"]
+    for code, color in sorted(_PATHOLOGY_COLORS.items()):
+        lines.append(f"    classDef {code.lower()} fill:#fdf0f0,stroke:{color},stroke-width:2px")
+    lines.append(f'    s0["{focal.replace(chr(34), chr(39))}"]')
+    i = 1
+    for r in list(data["ins"]) + list(data["outs"]):
+        nfid = r["fid"]
+        if nfid not in id_of:
+            id_of[nfid] = f"s{i}"
+            name = str(r["name"]) if r["name"] else f"漂移 {nfid[:8]}"
+            lines.append(f'    {id_of[nfid]}["{name.replace(chr(34), chr(39))}"]')
+            i += 1
+    for r in data["ins"]:
+        lines.append(f"    {id_of[r['fid']]} --> s0")
+    for r in data["outs"]:
+        lines.append(f"    s0 --> {id_of[r['fid']]}")
+    found = data["findings"]
+    if found and found[0]["pathology"] in _PATHOLOGY_COLORS:
+        lines.append(f"    class s0 {found[0]['pathology'].lower()}")
+    return "\n".join(lines) + "\n"
+
+
+def _page_shell(title: str, crumb: str, body: str) -> str:
+    """L1/L2 共用页面壳（面包屑导航 + Mermaid CDN，样式与 report.html 同族；
+    crumb 为预构建 HTML（含互链），title 转义）。"""
+    parts = [
+        "<!DOCTYPE html>",
+        '<html lang="zh">',
+        "<head>",
+        '<meta charset="utf-8">',
+        f"<title>{html_mod.escape(title)}</title>",
+        "<style>",
+        "body{font-family:system-ui,sans-serif;max-width:960px;margin:2rem auto;padding:0 1rem;color:#222}",
+        "h1,h2{border-bottom:2px solid #ddd;padding-bottom:.3rem}",
+        "table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:.3rem .6rem;text-align:left}",
+        ".meta{color:#666;font-size:.9rem}",
+        ".crumb{font-size:.9rem;margin:0 0 1rem}",
+        "pre.mmd,pre.code{background:#f6f6f6;padding:1rem;overflow-x:auto;border-radius:6px;font-size:.85rem}",
+        ".badge{display:inline-block;padding:0 .4rem;border-radius:4px;font-size:.8rem;font-weight:600}",
+        "</style>",
+        f'<script src="{_MERMAID_CDN}"></script>',
+        "<script>if(window.mermaid){mermaid.initialize({startOnLoad:true,securityLevel:'loose'});}</script>",
+        "</head>",
+        "<body>",
+        f'<p class="crumb">{crumb}</p>',
+        f"<h1>{html_mod.escape(title)}</h1>",
+        body,
+        "</body></html>",
+    ]
+    return "\n".join(parts) + "\n"
+
+
+def _pathology_badge(code: str) -> str:
+    color = _PATHOLOGY_COLORS.get(code, "#616161")
+    return (
+        f'<span class="badge" style="background:{color}1a;color:{color}">'
+        f"{html_mod.escape(code)}</span>"
+    )
+
+
+def _module_page_html(repo_name: str, data: dict, selected: dict[str, str]) -> str:
+    """L1 模块页：meta + 模块内符号图 + 符号表（度 top）+ findings 表；
+    出链 ../report.html、../symbols/{fid}.html。"""
+    esc = html_mod.escape
+    m = data["module"]
+    src_label = "structure（curated）" if m["source"] == "structure" else "目录聚合（fallback）"
+    crumb = f'<a href="../report.html">report</a> / modules / {esc(m["module_id"])}'
+    meta = [f"来源：{esc(src_label)}"]
+    if m["layer"]:
+        meta.append(f"层：{esc(m['layer'])}")
+    meta.append(f"符号：{len(m['fids'])}")
+    meta.append(f"findings（按文件命中）：{data['findings_total']}")
+    parts = [f'<p class="meta">{" | ".join(meta)}</p>']
+    if m["responsibility"]:
+        parts.append(f"<p>{esc(m['responsibility'])}</p>")
+    if data["drifted"]:
+        parts.append(f'<p class="meta">fid 可能已漂移：{len(data["drifted"])} 个（不在 symbols 表）。</p>')
+    parts.append("<h2>模块内符号图</h2>")
+    if data["graph_fids"]:
+        if len(m["fids"]) > MODULE_GRAPH_NODES_CAP:
+            parts.append(
+                f'<p class="meta">图示度数 top {len(data["graph_fids"])} / 共 {len(m["fids"])} 符号（截断）。</p>'
+            )
+        parts.append(f'<pre class="mermaid">\n{html_mod.escape(mermaid_module_graph(data))}</pre>')
+    else:
+        parts.append('<p class="meta">该模块无可绘图符号。</p>')
+    parts.append("<h2>符号表</h2>")
+    if data["top_table"]:
+        if len(m["fids"]) > MODULE_SYMBOLS_TABLE_CAP:
+            parts.append(
+                f'<p class="meta">示前 {len(data["top_table"])} / 共 {len(m["fids"])} 符号（按度数截断）。</p>'
+            )
+        rows_html = []
+        for f in data["top_table"]:
+            row = data["rows"].get(f)
+            deg = data["degrees"].get(f, 0)
+            if row is not None:
+                name_html = (
+                    f'<a href="../symbols/{esc(f)}.html">{esc(row["name"])}</a>'
+                    if f in selected else esc(row["name"])
+                )
+                qn = esc(row["qualified_name"])
+                loc = f'{esc(row["file_path"])}:{row["start_line"] or "?"}'
+            else:
+                name_html = esc(f"漂移 {f[:12]}…")
+                qn = "—"
+                loc = "—"
+            badges = "".join(_pathology_badge(r["pathology"]) for r in data["anchored"].get(f, []))
+            rows_html.append(f"<tr><td>{name_html}{badges}</td><td>{qn}</td><td>{loc}</td><td>{deg}</td></tr>")
+        parts.append(
+            "<table><tr><th>符号</th><th>qualified_name</th><th>位置</th><th>度数</th></tr>"
+            + "".join(rows_html) + "</table>"
+        )
+    else:
+        parts.append('<p class="meta">该模块无符号。</p>')
+    parts.append("<h2>findings</h2>")
+    if data["findings_rows"]:
+        if data["findings_total"] > len(data["findings_rows"]):
+            parts.append(
+                f'<p class="meta">示前 {len(data["findings_rows"])} / 共 {data["findings_total"]} 条（截断）。</p>'
+            )
+        frows = []
+        for r in data["findings_rows"]:
+            fp = str(r["file_path"]).replace("\\", "/")
+            loc = f"{esc(fp)}:{r['start_line'] or '?'}"
+            anchor = ""
+            if r["anchor_fid"] and r["anchor_fid"] in selected:
+                anchor = f' → <a href="../symbols/{esc(r["anchor_fid"])}.html">符号页</a>'
+            frows.append(
+                f'<tr><td>{_pathology_badge(r["pathology"])}</td><td>{esc(r["kind"] or "")}</td>'
+                f"<td>{loc}</td><td>{esc(r['source'] or '')}</td><td>{anchor}</td></tr>"
+            )
+        parts.append(
+            "<table><tr><th>病理</th><th>kind</th><th>位置</th><th>source</th><th>符号页</th></tr>"
+            + "".join(frows) + "</table>"
+        )
+    else:
+        parts.append('<p class="meta">无 findings。</p>')
+    return _page_shell(f"{m['name']} - {repo_name}", crumb, "\n".join(parts))
+
+
+def _symbol_page_html(repo_name: str, data: dict, selected: dict[str, str],
+                      page_to_module_id: dict[str, str]) -> str:
+    """L2 符号页：源码片段（行号）+ 邻域图 + 出入邻居 + slices + findings；
+    出链 ../report.html、../modules/...、邻居 ../symbols/{fid}.html。"""
+    esc = html_mod.escape
+    row = data["row"]
+    fid = data["fid"]
+    title = str(row["qualified_name"]) if row is not None else f"漂移符号 {fid[:16]}…"
+    mod_id = page_to_module_id.get(data["module_page"], "模块")
+    crumb = (
+        f'<a href="../report.html">report</a> / '
+        f'<a href="../modules/{esc(data["module_page"])}">{esc(mod_id)}</a> / {esc(title)}'
+    )
+    parts = []
+    if row is not None:
+        loc = f"{esc(row['file_path'])}:{row['start_line'] or '?'}"
+        if row["end_line"]:
+            loc = f"{loc}-{row['end_line']}"
+        parts.append(f'<p class="meta">fid：<code>{esc(fid)}</code> | 位置：<code>{loc}</code></p>')
+    else:
+        parts.append(f'<p class="meta">fid：<code>{esc(fid)}</code>（已漂移：不在 symbols 表）</p>')
+    if data["snippet"] is not None:
+        sn = data["snippet"]
+        note = "（截断）" if sn["truncated"] else ""
+        parts.append("<h2>源码片段</h2>")
+        parts.append(f'<p class="meta">行 {sn["lo"]}-{sn["hi"]}{note}；facts 陈旧时可能错位，以仓内文件为准。</p>')
+        numbered = "\n".join(
+            f"{n:>5} | {html_mod.escape(line)}"
+            for n, line in zip(range(sn["lo"], sn["hi"] + 1), sn["text"].split("\n"))
+        )
+        parts.append(f'<pre class="code">{numbered}</pre>')
+    else:
+        parts.append('<p class="meta">无源码片段（文件缺失/路径被守卫拒绝/fid 漂移）。</p>')
+    if data["ins"] or data["outs"]:
+        parts.append("<h2>邻域图</h2>")
+        parts.append(f'<pre class="mermaid">\n{html_mod.escape(mermaid_symbol_graph(data))}</pre>')
+    else:
+        parts.append('<p class="meta">无出入边。</p>')
+    if data["outs_total"] or data["ins_total"]:
+
+        def _neighbor_rows(items: list) -> str:
+            out = []
+            for r in items:
+                nfid = r["fid"]
+                name = str(r["name"]) if r["name"] else f"漂移 {nfid[:12]}…"
+                name_html = (
+                    f'<a href="../symbols/{esc(nfid)}.html">{esc(name)}</a>'
+                    if nfid in selected else esc(name)
+                )
+                out.append(
+                    f"<tr><td>{name_html}</td><td>{esc(r['qualified_name'] or '—')}</td>"
+                    f"<td>{esc(r['etype'] or '—')}</td></tr>"
+                )
+            return ("<table><tr><th>符号</th><th>qualified_name</th><th>边类型</th></tr>"
+                    + "".join(out) + "</table>")
+
+        parts.append("<h2>调用关系</h2>")
+        if data["outs"]:
+            if data["outs_total"] > len(data["outs"]):
+                parts.append(
+                    f'<p class="meta">出边邻居示前 {len(data["outs"])} / 共 {data["outs_total"]}（截断）。</p>'
+                )
+            parts.append("<h3>出边（调用/引用）</h3>")
+            parts.append(_neighbor_rows(data["outs"]))
+        if data["ins"]:
+            if data["ins_total"] > len(data["ins"]):
+                parts.append(
+                    f'<p class="meta">入边邻居示前 {len(data["ins"])} / 共 {data["ins_total"]}（截断）。</p>'
+                )
+            parts.append("<h3>入边（被调用）</h3>")
+            parts.append(_neighbor_rows(data["ins"]))
+    if data["slices"]:
+        parts.append("<h2>所属业务线</h2>")
+        if len(data["slices"]) >= SYMBOL_PAGE_SLICES_CAP:
+            parts.append(f'<p class="meta">最多示 {SYMBOL_PAGE_SLICES_CAP} 条（可能截断）。</p>')
+        items = "".join(
+            f'<li><code>{esc(s["slice_id"])}</code> {esc(s["name"])}</li>' for s in data["slices"]
+        )
+        parts.append(f"<ul>{items}</ul>")
+    if data["findings"]:
+        parts.append("<h2>病理 findings</h2>")
+        frows = []
+        for r in data["findings"]:
+            fp = str(r["file_path"] or "").replace("\\", "/")
+            loc = f"{esc(fp)}:{r['start_line'] or '?'}" if fp else "—"
+            frows.append(
+                f'<tr><td>{_pathology_badge(r["pathology"])}</td><td>{esc(r["kind"] or "")}</td>'
+                f"<td>{loc}</td><td>{esc(r['source'] or '')}</td></tr>"
+            )
+        parts.append(
+            "<table><tr><th>病理</th><th>kind</th><th>位置</th><th>source</th></tr>"
+            + "".join(frows) + "</table>"
+        )
+    return _page_shell(f"{title} - {repo_name}", crumb, "\n".join(parts))
+
+
+def _modules_index_section(datas: list[dict], modules_truncated: bool,
+                           symbol_pages: int, symbols_truncated: bool) -> dict:
+    esc = html_mod.escape
+    if not datas:
+        return {"title": "模块页（L1）", "body": "<p>无可渲染模块数据（structure 无 active 且目录聚合为空）。</p>"}
+    rows = []
+    for d in datas:
+        m = d["module"]
+        src = "structure" if m["source"] == "structure" else "目录聚合"
+        rows.append(
+            f'<tr><td><a href="modules/{esc(d["page_file"])}">{esc(m["module_id"])}</a></td>'
+            f"<td>{esc(m['layer'] or '—')}</td><td>{len(m['fids'])}</td>"
+            f"<td>{d['findings_total']}</td><td>{esc(src)}</td></tr>"
+        )
+    notes = []
+    if modules_truncated:
+        notes.append(f"模块页示前 {MODULE_PAGES_CAP} 个（更多模块未出页，截断）")
+    if symbols_truncated:
+        notes.append(f"符号页全局上限 {SYMBOL_PAGES_GLOBAL_CAP}（按模块序取满即止，截断）")
+    note_html = f'<p class="meta">{"；".join(notes)}。</p>' if notes else ""
+    body = (
+        "<p>多级颗粒度下钻：L0 架构 → L1 模块页 → L2 符号页（含源码片段）；"
+        f"本批出 {len(datas)} 个模块页、{symbol_pages} 个符号页。</p>" + note_html
+        + "<table><tr><th>模块</th><th>层</th><th>符号数</th><th>findings</th><th>来源</th></tr>"
+        + "".join(rows) + "</table>"
+    )
+    return {"title": "模块页（L1）", "body": body}
+
+
+def _findings_index_rows(con: sqlite3.Connection) -> tuple[int, list]:
+    total = con.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+    rows = con.execute(
+        "SELECT pathology, kind, source, anchor_fid, file_path, start_line FROM findings"
+        " ORDER BY pathology, kind, source, file_path, start_line, id LIMIT ?",
+        (FINDINGS_INDEX_CAP,),
+    ).fetchall()
+    return total, rows
+
+
+def _findings_index_section(rows: list, total: int, selected: dict[str, str],
+                            file_to_module: dict[str, str]) -> dict:
+    esc = html_mod.escape
+    if total == 0:
+        return {"title": "病理 findings 索引", "body": "<p>无 findings。</p>"}
+    items = []
+    for r in rows:
+        fp = str(r["file_path"] or "").replace("\\", "/")
+        loc = f"<code>{esc(fp)}:{r['start_line'] or '?'}</code>" if fp else "<code>—</code>"
+        link = ""
+        if r["anchor_fid"] and r["anchor_fid"] in selected:
+            link = f' → <a href="symbols/{esc(r["anchor_fid"])}.html">符号页</a>'
+        elif fp:
+            page = file_to_module.get(fp)
+            if page:
+                link = f' → <a href="modules/{esc(page)}">模块页</a>'
+        items.append(
+            f"<li>{_pathology_badge(r['pathology'])} {esc(r['kind'] or '')} {loc}"
+            f"（source: {esc(r['source'] or '?')}）{link}</li>"
+        )
+    note = f'<p class="meta">示前 {len(rows)} / 共 {total} 条（截断）。</p>' if total > len(rows) else ""
+    return {"title": "病理 findings 索引", "body": note + "<ul>" + "".join(items) + "</ul>"}
+
+
 # ----------------------------------------------------------------- report
 
 
@@ -531,7 +1159,7 @@ def _stale_banner_html(staleness: dict | None) -> str:
 def _clean_render_out(out: Path) -> None:
     """渲染前清自有产物（R6' 病根四：上轮孤儿混入本轮快照——timeline.html
     渲了没链接即两轮渲染混目录）。只清 render 拥有的名字，外部文件不动。"""
-    for sub in ("ir", "html"):
+    for sub in ("ir", "html", "modules", "symbols"):
         d = out / sub
         if d.is_dir():
             shutil.rmtree(d)
@@ -561,6 +1189,18 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         verdicts = s6_transact.load_verdicts(repo)
         timeline_ir = build_timeline_ir(verdicts) if verdicts else None
         sarif = build_sarif(repo, con, _tool_version())
+        # R7' L1/L2：模块页/符号页数据（连接存活期收完；Row 关连接后仍可读）
+        modules_all = _iter_modules(con)
+        modules_truncated = len(modules_all) > MODULE_PAGES_CAP
+        module_datas = [_module_page_data(con, i, m) for i, m in enumerate(modules_all[:MODULE_PAGES_CAP])]
+        selected, symbols_truncated = _select_symbol_pages(module_datas)
+        symbol_datas = [_symbol_page_data(repo, con, fid, selected[fid]) for fid in sorted(selected)]
+        page_to_module_id = {md["page_file"]: md["module"]["module_id"] for md in module_datas}
+        file_to_module: dict[str, str] = {}
+        for md in module_datas:
+            for f in md["files"]:
+                file_to_module.setdefault(f.replace("\\", "/"), md["page_file"])
+        findings_total, findings_rows = _findings_index_rows(con)
     finally:
         con.close()
 
@@ -569,16 +1209,41 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
     _clean_render_out(out)
     (out / "ir").mkdir(parents=True, exist_ok=True)
     (out / "html").mkdir(parents=True, exist_ok=True)
+    (out / "modules").mkdir(parents=True, exist_ok=True)
+    (out / "symbols").mkdir(parents=True, exist_ok=True)
 
     irs: dict[str, dict] = {"architecture": arch_ir, **{f"slice-{k}": v for k, v in seq_irs.items()}}
     if timeline_ir is not None:  # 空 events 被 archify minItems 拒；无 verdicts 不出 timeline
         irs["timeline"] = timeline_ir
-    ir_hash = hashlib.sha256(_dumps_canonical(irs).encode("utf-8")).hexdigest()
+    # R7' modules-index：进 ir_sha256（复现契约），不进 archify 循环（无 diagram_type）
+    modules_index_ir = {
+        "schema_version": 1,
+        "kind": "modules-index",
+        "modules": [
+            {
+                "page": md["page_file"],
+                "module_id": md["module"]["module_id"],
+                "layer": md["module"]["layer"],
+                "source": md["module"]["source"],
+                "symbols": len(md["module"]["fids"]),
+                "findings": md["findings_total"],
+            }
+            for md in module_datas
+        ],
+        "symbol_pages": sorted(selected),
+        "symbol_pages_truncated": symbols_truncated,
+    }
+    ir_hash = hashlib.sha256(
+        _dumps_canonical({**irs, "modules-index": modules_index_ir}).encode("utf-8")
+    ).hexdigest()
     for name, ir in irs.items():
         (out / "ir" / f"{name}.json").write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out / "ir" / "modules-index.json").write_text(
+        json.dumps(modules_index_ir, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     (out / "findings.sarif").write_text(json.dumps(sarif, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    artifacts: list[str] = ["ir/architecture.json", "findings.sarif"]
+    artifacts: list[str] = ["ir/architecture.json", "ir/modules-index.json", "findings.sarif"]
     degraded_reasons: list[str] = []
 
     # Mermaid 源（零依赖，恒出）
@@ -612,8 +1277,20 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
             except (subprocess.TimeoutExpired, OSError) as exc:
                 degraded_reasons.append(f"archify error: {name} ({exc})")
 
+    # R7' L1/L2 页写入（静态多页互链；_clean_render_out 已清上轮，与本轮同批落盘）
+    for md in module_datas:
+        (out / "modules" / md["page_file"]).write_text(
+            _module_page_html(repo.name, md, selected), encoding="utf-8", newline="\n"
+        )
+    for sd in symbol_datas:
+        (out / "symbols" / f"{sd['fid']}.html").write_text(
+            _symbol_page_html(repo.name, sd, selected, page_to_module_id), encoding="utf-8", newline="\n"
+        )
+
     sections = [
         _verdicts_section(verdicts),
+        _modules_index_section(module_datas, modules_truncated, len(symbol_datas), symbols_truncated),
+        _findings_index_section(findings_rows, findings_total, selected, file_to_module),
         {
             "title": "架构图（L0）",
             "body": "<p>archify 渲染缺失时 Mermaid 源如下（本页内嵌，联网渲染）：</p>"
@@ -644,7 +1321,13 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         "artifacts": artifacts,
         "archify": bool(archify_html),
         "degraded": degraded_reasons,
-        "counts": {"slices": len(seq_irs), "verdicts": len(verdicts), "sarif_results": len(sarif["runs"][0]["results"])},
+        "counts": {
+            "slices": len(seq_irs),
+            "verdicts": len(verdicts),
+            "sarif_results": len(sarif["runs"][0]["results"]),
+            "module_pages": len(module_datas),
+            "symbol_pages": len(symbol_datas),
+        },
         "ir_sha256": ir_hash,
     }
 
