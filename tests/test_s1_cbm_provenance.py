@@ -60,7 +60,10 @@ def test_same_name_different_repo_rebuilds(tmp_path, cache, monkeypatch):
     assert s1_cbm._recorded_repo_path(db) == str(repo_b.resolve())
 
 
-def test_same_repo_reuses(tmp_path, cache, monkeypatch):
+def test_same_repo_second_call_refreshes(tmp_path, cache, monkeypatch):
+    """R6' 病根五：reused 短路取消——同仓二次调用必须恒走 CBM 增量刷新。
+    （旧语义 reused 不重扫，仓库演进后陈旧 CBM 内容被 etl 盖新鲜 git_head，
+    M4 被击穿——dogfood 实证 facts.git_head=37d1c6f 而零 R4'-R6' 符号。）"""
     db = cache / "proj.db"
     calls: list = []
     monkeypatch.setattr(s1_cbm, "run_cli", _fake_cbm(db, calls))
@@ -68,8 +71,8 @@ def test_same_repo_reuses(tmp_path, cache, monkeypatch):
 
     s1_cbm.index_repository(repo, "proj")
     r2 = s1_cbm.index_repository(repo, "proj")
-    assert r2["status"] == "reused"
-    assert len(calls) == 1, "same repo must reuse the cache without re-indexing"
+    assert r2["status"] == "indexed", "同仓二次调用必须重扫（CBM 自身增量）"
+    assert len(calls) == 2
     assert "rebuild_reason" not in r2
 
 
@@ -99,8 +102,8 @@ def test_cbm_renamed_project_uses_returned_project(tmp_path, cache, monkeypatch)
     def fake(args, timeout=3600):
         calls.append(args)
         con = sqlite3.connect(slug_db)
-        con.execute("CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT)")
-        con.execute("INSERT INTO store_meta VALUES ('db_uid', 'uid-1')")
+        con.execute("CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT)")
+        con.execute("INSERT OR REPLACE INTO store_meta VALUES ('db_uid', 'uid-1')")
         con.commit()
         con.close()
         return {"ok": True, "project": "D-path-slug-proj"}
@@ -113,9 +116,9 @@ def test_cbm_renamed_project_uses_returned_project(tmp_path, cache, monkeypatch)
     assert r["db"] == str(slug_db)
 
     r2 = s1_cbm.index_repository(repo, "proj")
-    assert r2["status"] == "reused", "provenance fallback must find the renamed db"
+    assert r2["status"] == "indexed", "provenance fallback must find the renamed db（且恒增量刷新）"
     assert r2["project"] == "D-path-slug-proj"
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_find_cbm_db_provenance_fallback(tmp_path, cache):

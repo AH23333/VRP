@@ -119,17 +119,23 @@ def _parse_json_stdout(stdout: str) -> dict:
 
 
 def index_repository(repo: Path, name: str, reindex: bool = False, timeout: int = 3600) -> dict:
+    """S1 索引：恒调 CBM CLI（CBM 自身增量刷新）。
+
+    R6' 病根五（dogfood 抓出）：旧版缓存 db 存在即 "reused" 短路、从不重扫——
+    仓库演进后陈旧 CBM 内容被 etl 盖上当前 git_head，M4 新鲜度闸门被击穿
+    （facts.git_head=37d1c6f 而零 R4'-R6' 符号）。reindex 参数保留 API 兼容
+    （短路已取消，两者等价——恒增量刷新）。溯源护栏保留（#81）：缓存 db
+    溯源缺失/异仓时标注 rebuild_reason 提示，不再静默。
+    """
     repo_path = str(Path(repo).resolve())
     rebuild_reason = None
     db = find_cbm_db(name, repo_path)
-    if db is not None and not reindex:
+    if db is not None:
         recorded = _recorded_repo_path(db)
         if recorded is None:
             rebuild_reason = "unknown-source"
         elif recorded != repo_path:
             rebuild_reason = "repo-path-mismatch"
-        else:
-            return {"status": "reused", "project": db.stem, "db": str(db)}
     result = run_cli(
         ["index_repository", "--repo-path", str(repo), "--name", name], timeout=timeout
     )

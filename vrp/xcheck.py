@@ -72,12 +72,12 @@ _ca_js_path = ca_js_path
 
 
 def index_with_code_atlas(repo: Path, reindex: bool = False, timeout: int = 900) -> dict:
+    """恒跑 code-atlas index（R6' 病根五同修：index.db 存在即 reused 的短路取消——
+    陈旧交叉索引会让 agreement% 失真。reindex 保留 API 兼容，两者等价）。"""
     node = shutil.which("node")
     if not node:
         return {"status": "skipped", "reason": "node not found"}
     db = repo / ".code-atlas" / "index.db"
-    if db.exists() and not reindex:
-        return {"status": "reused", "db": str(db)}
     js = _ca_js_path()
     if js is not None:
         proc = subprocess.run(
