@@ -5,12 +5,13 @@ lint-imports 执行（cwd=repo）→ Broken contracts 解析 → 违例 = P9 fin
 （kind='layer-violation'，source='s7-enforce'，幂等 replace-all）→ dossier
 侧进 AI 重构目标。
 
-四引擎：本模块 Python 路径（import-linter 2.15，pip 全局；
+五引擎：本模块 Python 路径（import-linter 2.15，pip 全局；
 VRP_IMPORT_LINTER_BIN 覆盖）；TS/JS 路径见 s7_enforce_ts.py（dependency-cruiser
 18 沙箱，work/dep-cruise-probe）；Go 路径见 s7_enforce_go.py（go list -e -json）；
-Rust 路径见 s7_enforce_rs.py（内置源级 use 树解析）。run() 按语言路由：
+Rust 路径见 s7_enforce_rs.py（内置源级 use 树解析）；Java 路径见
+s7_enforce_java.py（内置源级 package/import 解析）。run() 按语言路由：
 .py 容器 → Python；.ts/.tsx/.js/.jsx/.mjs/.cjs 目录前缀 → TS 引擎；.go 容器
-→ Go 引擎；.rs 符号 → Rust 引擎；混语言 not-enforceable。
+→ Go 引擎；.rs 符号 → Rust 引擎；.java 符号 → Java 引擎；混语言 not-enforceable。
 
 探针事实（work/probe_r4_importlinter.py + probe_r4_forbidden.py，2026-11-05）：
 - rc 0=kept / 1=broken；rc 1 且 stdout 无 "Broken contracts" 块 = 配置/环境
@@ -428,17 +429,26 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     from .s7_enforce_ts import derive_ts_containers, run_ts  # 惰性导入防环（ts 模块顶层反向 import 本模块）
     from .s7_enforce_go import derive_go_containers, run_go  # 惰性导入防环（go 模块 import 本模块常量）
     from .s7_enforce_rs import derive_rs_containers, run_rs  # 惰性导入防环（rs 模块 import 本模块常量）
+    from .s7_enforce_java import derive_java_containers, run_java  # 惰性导入防环（java 模块 import 本模块常量）
 
     ts_derived = derive_ts_containers(con, payload)
     go_derived = derive_go_containers(con, payload)
     rs_derived = derive_rs_containers(repo, con, payload, timeout)
+    java_derived = derive_java_containers(repo, con, payload, timeout)
     has_py = any(containers.values())
     has_ts = any(ts_derived["containers"].values())
     has_go = any(go_derived["containers"].values())
     has_rs = rs_derived["rs_files"] > 0
+    has_java = java_derived["java_files"] > 0
     langs = [
         name
-        for name, present in (("py", has_py), ("ts", has_ts), ("go", has_go), ("rs", has_rs))
+        for name, present in (
+            ("py", has_py),
+            ("ts", has_ts),
+            ("go", has_go),
+            ("rs", has_rs),
+            ("java", has_java),
+        )
         if present
     ]
     if len(langs) > 1:
@@ -465,6 +475,18 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
         if rs_derived.get("orphan_files"):
             result["orphan_rs_files"] = rs_derived["orphan_files"]
         return result
+    if has_java:
+        if java_derived.get("timed_out"):
+            return {
+                **base,
+                "structure_status": structure_status,
+                "status": "enforcer-failed",
+                "reason": f"java scan exceeded {timeout}s (partial results discarded)",
+            }
+        result = run_java(repo, con, payload, structure_status, java_derived["containers"], timeout)
+        if java_derived.get("orphan_files"):
+            result["orphan_java_files"] = java_derived["orphan_files"]
+        return result
     if has_ts:
         return run_ts(repo, con, payload, structure_status, ts_derived["containers"], timeout)
     if not has_py:
@@ -473,6 +495,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
             or ts_derived["extensions"]
             or go_derived["extensions"]
             or rs_derived["extensions"]
+            or java_derived["extensions"]
         ):
             seen = ", ".join(
                 sorted(
@@ -480,6 +503,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
                     | set(ts_derived["extensions"])
                     | set(go_derived["extensions"])
                     | set(rs_derived["extensions"])
+                    | set(java_derived["extensions"])
                 )
             )
             return {
@@ -488,7 +512,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
                 "reason": (
                     f"no enforceable containers (seen: {seen}); supported: .py (import-linter),"
                     " .ts/.tsx/.js/.jsx/.mjs/.cjs (dependency-cruiser), .go (go list),"
-                    " .rs (built-in use parser)"
+                    " .rs (built-in use parser), .java (built-in package/import parser)"
                 ),
                 "structure_status": structure_status,
             }
