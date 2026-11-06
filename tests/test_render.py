@@ -855,3 +855,41 @@ def test_chain_index_cards_show_curation(tmp_path):
     assert m1["responsibility"] == "负责一"
     assert m1["layer"] == "domain"
     assert m1["depends_on"] == ["m2"]
+
+
+# ------------------------------------------- archify validate 错误通道（R7' tsa 空括号病根）
+
+def test_archify_error_text_json_stdout():
+    """validate --json 失败：错误在 stdout JSON 的 error 字段（stderr 恒空）。"""
+    stdout = json.dumps({"ok": False, "error": "sequence schema validation failed:\n  / must have required property 'meta'"})
+    got = render._archify_error_text(stdout, "")
+    assert "must have required property" in got
+    assert got.startswith("sequence schema")
+
+
+def test_archify_error_text_plain_stderr_fallback():
+    got = render._archify_error_text("", "plain failure text")
+    assert got == "plain failure text"
+
+
+def test_archify_error_text_non_json_stdout_passthrough():
+    got = render._archify_error_text("not json at all", "ignored")
+    assert got == "not json at all"
+
+
+def test_archify_error_text_limit():
+    got = render._archify_error_text("x" * 500, "")
+    assert len(got) == 120
+
+
+def test_archify_error_text_empty_both():
+    assert render._archify_error_text("", "") == ""
+
+
+def test_render_chain_error_text_uses_stdout_json():
+    """render_chain._archify_error_text 与 render 同语义（proc 对象输入）。"""
+    proc = subprocess.CompletedProcess(["node"], 1, stdout=json.dumps({"ok": False, "error": "boom detail"}),
+                                       stderr="")
+    assert render_chain._archify_error_text(proc) == "boom detail"
+    proc2 = subprocess.CompletedProcess(["node"], 1, stdout="", stderr="plain err")
+    assert render_chain._archify_error_text(proc2) == "plain err"

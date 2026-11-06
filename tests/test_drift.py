@@ -438,3 +438,109 @@ def test_etl_hook_keeps_fresh_artifacts_active(tmp_path, monkeypatch):
     con = sqlite3.connect(out_db)
     assert con.execute("SELECT status FROM slices").fetchone()[0] == "active"
     con.close()
+
+
+# ------------------------------------------------------------- remap apply（F1 产品化）
+
+def _write_ai(repo: Path, slices: list | None = None, structure: dict | None = None) -> None:
+    ai = repo / ".vrp" / "ai"
+    ai.mkdir(parents=True, exist_ok=True)
+    if slices is not None:
+        (ai / "slices.json").write_text(json.dumps(slices, ensure_ascii=False, indent=2), encoding="utf-8")
+    if structure is not None:
+        (ai / "structure.json").write_text(json.dumps(structure, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _insert_structure(repo: Path, fids: list[str], status: str = "active") -> None:
+    con = _con(repo)
+    try:
+        con.execute(
+            "INSERT INTO structure (payload_json, status) VALUES (?, ?)",
+            (json.dumps(_structure(fids), ensure_ascii=False), status),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _drift(repo: Path) -> dict:
+    con = _con(repo)
+    try:
+        return curate_mod.drift_report(con)
+    finally:
+        con.close()
+
+
+def test_remap_rewrites_ai_files_then_curate_reingests(tmp_path):
+    """完整恢复环：DB 工件漂移 + ai 文件含旧 fid → remap 重写 → curate 复活 active。"""
+    repo = _mk_repo(tmp_path)
+    _seed_symbols(repo)
+    _insert_slice(repo, ["fid-a-old", "fid-b"], status="stale")
+    _insert_structure(repo, ["fid-a-old", "fid-b"], status="stale")
+    _write_ai(repo,
+              slices=[_slice(["fid-a-old", "fid-b"])],
+              structure=_structure(["fid-a-old", "fid-b"]))
+    report = _drift(repo)
+    result = curate_mod.apply_remap_to_ai(repo, report)
+    assert result["total_remapped"] == 2  # structure 1 + slices 1（按去重 fid）
+    assert result["unresolved_total"] == 0
+    assert result["structure"]["remapped"] == 1
+    assert result["slices"]["remapped"] == 1
+    slices = json.loads((repo / ".vrp" / "ai" / "slices.json").read_text(encoding="utf-8"))
+    assert [s["fid"] for s in slices[0]["steps"]] == ["fid-a", "fid-b"]
+    structure = json.loads((repo / ".vrp" / "ai" / "structure.json").read_text(encoding="utf-8"))
+    assert structure["modules"][0]["symbol_fids"] == ["fid-a", "fid-b"]
+    # 重提入库：active 复活（curate 全量重验，非旁路）
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate(repo, con)
+    finally:
+        con.close()
+    assert all(f["status"] == "accepted" for f in receipt["files"])
+    con = _con(repo)
+    try:
+        assert con.execute("SELECT status FROM slices").fetchone()[0] == "active"
+        assert con.execute("SELECT status FROM structure").fetchone()[0] == "active"
+    finally:
+        con.close()
+
+
+def test_remap_unresolved_when_no_unique_candidate(tmp_path):
+    """ledger 无记录的 missing fid：零候选，诚实留 unresolved，文件不重写该 fid。"""
+    repo = _mk_repo(tmp_path)
+    _seed_symbols(repo)
+    _insert_slice(repo, ["fid-never-seen", "fid-b"], slice_id="ghost-flow")
+    _write_ai(repo, slices=[_slice(["fid-never-seen", "fid-b"], slice_id="ghost-flow")])
+    report = _drift(repo)
+    result = curate_mod.apply_remap_to_ai(repo, report)
+    assert result["total_remapped"] == 0
+    assert result["slices"]["unresolved"] == ["fid-never-seen"]
+    assert result["unresolved_total"] == 1
+    slices = json.loads((repo / ".vrp" / "ai" / "slices.json").read_text(encoding="utf-8"))
+    assert slices[0]["steps"][0]["fid"] == "fid-never-seen"
+
+
+def test_remap_missing_ai_files_honest_noop(tmp_path):
+    """ai 文件缺失（本会话 vrp 自仓实例）：present=False，missing 全部 unresolved。"""
+    repo = _mk_repo(tmp_path)
+    _seed_symbols(repo)
+    _insert_slice(repo, ["fid-a-old", "fid-b"], status="stale")
+    report = _drift(repo)
+    result = curate_mod.apply_remap_to_ai(repo, report)
+    assert result["slices"]["present"] is False
+    assert result["slices"]["remapped"] == 0
+    # 文件缺失：可重定位的 missing fid 无人落笔 → 仍 unresolved
+    assert result["slices"]["unresolved"] == ["fid-a-old"]
+    assert not (repo / ".vrp" / "ai").exists() or not (repo / ".vrp" / "ai" / "slices.json").exists()
+
+
+def test_remap_hand_fixed_fid_not_unresolved(tmp_path):
+    """ai 文件已被手工修正（不再引用死 fid）：不误报 unresolved。"""
+    repo = _mk_repo(tmp_path)
+    _seed_symbols(repo)
+    _insert_slice(repo, ["fid-a-old", "fid-b"], status="stale")
+    _write_ai(repo, slices=[_slice(["fid-a", "fid-b"])])  # 已修
+    report = _drift(repo)
+    result = curate_mod.apply_remap_to_ai(repo, report)
+    assert result["total_remapped"] == 0
+    assert result["unresolved_total"] == 0

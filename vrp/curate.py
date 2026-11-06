@@ -608,3 +608,115 @@ def drift_report(con: sqlite3.Connection) -> dict:
     summary["active_but_drifted"] = active_but_drifted
     report["summary"] = summary
     return report
+
+
+# ------------------------------------------------------------- remap apply
+# F1 产品化（R7' dogfood 手工回路的收编）：drift_report 给出的唯一候选
+# remap 一键写回 .vrp/ai/ 工作工件；多候选/无候选诚实留 unresolved 待判读。
+# 只改 ai/*.json 的 fid 引用，不触 facts.db——重提仍走 curate 全量重验，不构成旁路。
+
+
+def _remap_file(path: Path, remapping: dict[str, str]) -> tuple[dict, set[str]]:
+    """单个 ai 工件的重写：返回 (收据条目, 文件中仍存活的旧 fid 集)。
+
+    remapped 按去重 fid 计（与 remap 语义一致）；文件缺失/不可解析诚实标注，
+    不写不报替换。remaining = 文件重写后仍引用的（未映射）fid 集。
+    """
+    entry: dict = {"file": f"{AI_DIR_NAME}/{path.name}", "present": path.is_file(),
+                   "remapped": 0, "unresolved": []}
+    if not entry["present"]:
+        return entry, set()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        entry["unparseable"] = True
+        return entry, set()
+    replaced: set[str] = set()
+    remaining: set[str] = set()
+
+    def _map_fid(fid: object) -> None:
+        if not isinstance(fid, str):
+            return
+        if fid in remapping:
+            replaced.add(fid)
+        else:
+            remaining.add(fid)
+
+    if path.name == "structure.json":
+        if isinstance(raw, dict):
+            for mod in raw.get("modules", []):
+                if not isinstance(mod, dict):
+                    continue
+                fids = mod.get("symbol_fids")
+                if not isinstance(fids, list):
+                    continue
+                for i, fid in enumerate(fids):
+                    if isinstance(fid, str) and fid in remapping:
+                        fids[i] = remapping[fid]
+                        replaced.add(fid)
+                    else:
+                        _map_fid(fid)
+    elif isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            steps = item.get("steps")
+            if not isinstance(steps, list):
+                continue
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                fid = step.get("fid")
+                if isinstance(fid, str) and fid in remapping:
+                    step["fid"] = remapping[fid]
+                    replaced.add(fid)
+                else:
+                    _map_fid(fid)
+    if replaced:
+        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    entry["remapped"] = len(replaced)
+    return entry, remaining
+
+
+def apply_remap_to_ai(repo: Path, report: dict) -> dict:
+    """drift_report → .vrp/ai/*.json 一键 remap（F1 产品化，CLI `vrp remap`）。
+
+    unresolved = drift 报出的 missing fid 中，重写后仍被工件引用者
+    （多候选/无候选/文件缺失/载荷未含）——需 AI/人工判读，不自动猜测。
+    """
+    ai_dir = repo / AI_DIR_NAME
+    structure_report = report.get("structure") or {}
+    struct_remapping: dict[str, str] = dict(structure_report.get("remap") or {})
+    struct_missing = sorted(
+        e.get("fid") for e in structure_report.get("missing_fids", []) if isinstance(e, dict)
+    )
+    slice_remapping: dict[str, str] = {}
+    for s in report.get("slices", []):
+        if isinstance(s, dict):
+            slice_remapping.update(s.get("remap") or {})
+    slice_missing = sorted({
+        e.get("fid")
+        for s in report.get("slices", [])
+        if isinstance(s, dict)
+        for e in s.get("missing_fids", [])
+        if isinstance(e, dict)
+    })
+    struct_entry, struct_remaining = _remap_file(ai_dir / "structure.json", struct_remapping)
+    slice_entry, slice_remaining = _remap_file(ai_dir / "slices.json", slice_remapping)
+    # 文件缺失/不可解析：无人能落笔重写，missing 全部 unresolved（DB 侧死引用待判读）
+    if struct_entry.get("present") and not struct_entry.get("unparseable"):
+        struct_entry["unresolved"] = [f for f in struct_missing if f in struct_remaining]
+    else:
+        struct_entry["unresolved"] = struct_missing
+    if slice_entry.get("present") and not slice_entry.get("unparseable"):
+        slice_entry["unresolved"] = [f for f in slice_missing if f in slice_remaining]
+    else:
+        slice_entry["unresolved"] = slice_missing
+    result = {
+        "structure": struct_entry,
+        "slices": slice_entry,
+        "total_remapped": struct_entry["remapped"] + slice_entry["remapped"],
+        "unresolved_total": len(struct_entry["unresolved"]) + len(slice_entry["unresolved"]),
+        "note": "re-run 'vrp curate' to re-ingest remapped artifacts (full re-validation)",
+    }
+    return result

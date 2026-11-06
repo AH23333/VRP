@@ -445,6 +445,22 @@ def _run_archify(mjs: Path, args: list[str], timeout: int = ARCHIFY_TIMEOUT) -> 
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def _archify_error_text(stdout: str, stderr: str, limit: int = 120) -> str:
+    """archify validate --json 的错误在 stdout JSON 的 error 字段（stderr 恒空——
+    R7' tsa 链 degraded 空括号病根）；纯文本模式在 stderr。两通道都兜。"""
+    out = (stdout or "").strip()
+    if out:
+        try:
+            doc = json.loads(out)
+            err = doc.get("error")
+            if err:
+                return str(err).strip()[:limit]
+        except json.JSONDecodeError:
+            pass
+        return out[:limit]
+    return (stderr or "").strip()[:limit]
+
+
 # --------------------------- R7'：L1 模块页 / L2 符号页（静态多页互链，主链优先）
 
 _PATHOLOGY_COLORS = {
@@ -1566,9 +1582,9 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
             ir_path = out / "ir" / f"{name}.json"
             target = out / "html" / f"{name}.html"
             try:
-                rc, _, err = _run_archify(mjs, ["validate", ir["diagram_type"], str(ir_path), "--json"])
+                rc, a_out, a_err = _run_archify(mjs, ["validate", ir["diagram_type"], str(ir_path), "--json"])
                 if rc != 0:
-                    degraded_reasons.append(f"archify validate failed: {name} ({err.strip()[:120]})")
+                    degraded_reasons.append(f"archify validate failed: {name} ({_archify_error_text(a_out, a_err)})")
                     continue
                 rc, _, err = _run_archify(mjs, ["render", ir["diagram_type"], str(ir_path), str(target)])
                 if rc != 0 or not target.is_file():

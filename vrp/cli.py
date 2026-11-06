@@ -357,6 +357,65 @@ def cmd_drift(args) -> int:
     return 1 if result["summary"]["active_but_drifted"] else 0
 
 
+def cmd_remap(args) -> int:
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = sqlite3.connect(f"file:{facts_path}?mode=ro", uri=True)
+    try:
+        report = curate_mod.drift_report(con)
+    finally:
+        con.close()
+    result = curate_mod.apply_remap_to_ai(repo, report)
+    _print_step("S2.5 remap", result)
+    # rc=1 = 存在无法唯一重定位的 missing fid（需 AI/人工判读）
+    return 1 if result["unresolved_total"] else 0
+
+
+def cmd_refresh(args) -> int:
+    repo = _repo_arg(args.repo)
+    name = args.cbm_name or repo.name
+
+    pre = s0_precheck.precheck(repo)
+    _print_step("S0 precheck", {"name": pre["name"], "repo": pre["repo"], "commands": pre["commands"]})
+
+    idx = s1_cbm.index_repository(repo, name, reindex=args.reindex)
+    _print_step("S1 cbm index", idx)
+
+    etl_result = etl_mod.run_etl(repo, name)
+    _print_step("S1.5 etl", etl_result)
+
+    xc = xcheck.run_xcheck(repo, repo / ".vrp" / "facts.db", reindex=False)
+    _print_step("S1 xcheck", xc)
+
+    facts_path = repo / ".vrp" / "facts.db"
+    con = sqlite3.connect(f"file:{facts_path}?mode=ro", uri=True)
+    try:
+        drift = curate_mod.drift_report(con)
+    finally:
+        con.close()
+    _print_step("S2.5 drift", drift["summary"])
+
+    remap_result = curate_mod.apply_remap_to_ai(repo, drift)
+    _print_step("S2.5 remap", remap_result)
+
+    con, _ = _open_facts_rw(repo)
+    try:
+        receipt = curate_mod.curate(repo, con)
+    finally:
+        con.close()
+    _print_step("S2.5 curate", receipt)
+
+    from . import render as render_mod
+
+    report_result = render_mod.render_report(repo, Path(args.out) if args.out else None)
+    _print_step("S8 report", report_result)
+
+    rejected = any(f.get("status") == "rejected" for f in receipt.get("files", []))
+    return 1 if (remap_result["unresolved_total"] or rejected) else 0
+
+
 def cmd_report(args) -> int:
     from . import render as render_mod
 
@@ -584,6 +643,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("repo")
     p.set_defaults(func=cmd_drift)
+
+    p = sub.add_parser(
+        "remap",
+        help="S2.5: apply drift remap proposals (unique qualified_name candidates) back to .vrp/ai/*.json working files",
+    )
+    p.add_argument("repo")
+    p.set_defaults(func=cmd_remap)
+
+    p = sub.add_parser(
+        "refresh",
+        help="S0 -> S1 -> S1.5 -> xcheck -> drift -> remap -> curate -> report (one-shot drift recovery loop)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--reindex", action="store_true", help="force CBM re-index")
+    p.add_argument("--cbm-name", help="CBM project name override")
+    p.add_argument("--out", help="report output directory (default: <repo>/.vrp/report)")
+    p.set_defaults(func=cmd_refresh)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")

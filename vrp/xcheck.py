@@ -98,6 +98,16 @@ def _norm(p: str) -> str:
     return (p or "").replace("\\", "/").removeprefix("./")
 
 
+# 第三方收编代码路径段（R7' 诚实发现：CBM 默认不索引 vendor/，CA 全量索引——
+# vrp 自仓 xcheck agreement 27.7% 即 vrp/vendor/archify 的 4744 条 CA calls
+# 单侧污染所致）。双仓对称过滤后再比对，排除计数入 summary 公开，不静默。
+EXCLUDED_SEGMENTS = frozenset({"vendor", "node_modules", "site-packages"})
+
+
+def _excluded_path(rel: str) -> bool:
+    return any(seg in EXCLUDED_SEGMENTS for seg in _norm(rel).split("/"))
+
+
 def _quad(sname: str, sfile: str, tname: str, tfile: str) -> tuple[str, str, str, str]:
     return (sname, _norm(sfile), tname, _norm(tfile))
 
@@ -113,10 +123,21 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
     facts = sqlite3.connect(facts_db)
     try:
         ca_sym = {}
+        ca_excluded_ids: set = set()
+        ca_excluded_symbols = 0
         for r in ca.execute("SELECT s.id, s.name, f.path FROM symbols s JOIN files f ON s.file_id = f.id"):
+            if _excluded_path(r[2]):
+                ca_excluded_ids.add(r[0])
+                ca_excluded_symbols += 1
+                continue
             ca_sym[r[0]] = (r[1], _norm(r[2]))
+        ca_excluded_files = sum(1 for r in ca.execute("SELECT path FROM files") if _excluded_path(r[0]))
         ca_edges: dict[tuple, tuple] = {}
+        ca_excluded_calls = 0
         for r in ca.execute("SELECT src_symbol_id, dst_symbol_id, confidence, provenance FROM edges WHERE kind='calls'"):
+            if r[0] in ca_excluded_ids or r[1] in ca_excluded_ids:
+                ca_excluded_calls += 1
+                continue
             s = ca_sym.get(r[0])
             t = ca_sym.get(r[1])
             if not s or not t:
@@ -126,6 +147,7 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
 
         cbm_calls: dict[tuple, str] = {}
         cbm_usage: set[tuple] = set()
+        cbm_excluded_calls = 0
         name_of: dict[str, str] = {}
         file_of: dict[str, str] = {}
         for fid, name, file_path in facts.execute("SELECT fid, name, file_path FROM symbols"):
@@ -137,10 +159,15 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
         ):
             if r[0] not in name_of or r[1] not in name_of:
                 continue
+            if _excluded_path(file_of[r[0]]) or _excluded_path(file_of[r[1]]):
+                cbm_excluded_calls += 1
+                continue
             quad = _quad(name_of[r[0]], file_of[r[0]], name_of[r[1]], file_of[r[1]])
             cbm_calls[quad] = r[3] or ""
         for r in facts.execute("SELECT src_fid, dst_fid FROM usage_hints"):
             if r[0] not in name_of or r[1] not in name_of:
+                continue
+            if _excluded_path(file_of[r[0]]) or _excluded_path(file_of[r[1]]):
                 continue
             cbm_usage.add(_quad(name_of[r[0]], file_of[r[0]], name_of[r[1]], file_of[r[1]]))
 
@@ -179,8 +206,13 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
         )
         summary = {
             "index": index_result,
+            "excluded_segments": sorted(EXCLUDED_SEGMENTS),
+            "ca_excluded_files": ca_excluded_files,
+            "ca_excluded_symbols": ca_excluded_symbols,
+            "ca_excluded_calls": ca_excluded_calls,
             "ca_calls": len(ca_edges),
             "cbm_calls": len(cbm_calls),
+            "cbm_excluded_calls": cbm_excluded_calls,
             "agreement": agreement,
             "agreement_pct": round(100.0 * agreement / len(ca_edges), 1) if ca_edges else None,
             "ca_only": sum(1 for r in ledger if r[0] == "ca_only"),

@@ -1052,6 +1052,21 @@ class SymbolIndex:
 # ---------------------------------------------------------------- archify 子进程
 
 
+def _archify_error_text(proc: subprocess.CompletedProcess, limit: int = 160) -> str:
+    """validate --json 的错误在 stdout JSON 的 error 字段（stderr 恒空）；两通道都兜。"""
+    out = (proc.stdout or "").strip()
+    if out:
+        try:
+            doc = json.loads(out)
+            err = doc.get("error")
+            if err:
+                return str(err).strip()[:limit]
+        except json.JSONDecodeError:
+            pass
+        return out[:limit]
+    return (proc.stderr or "").strip()[:limit]
+
+
 def _render_diagram(mjs: Path, mod_staging: Path, ir: dict,
                     name: str, dtype: str) -> tuple[Path | None, str | None]:
     """单图：写 IR → validate → render 进模块暂存区。返回 (html, 错误)。"""
@@ -1067,7 +1082,7 @@ def _render_diagram(mjs: Path, mod_staging: Path, ir: dict,
         return None, f"archify validate error: {exc}"
     if proc.returncode != 0:
         return None, (f"archify validate failed: {name} rc={proc.returncode}"
-                      f" {proc.stderr.strip()[:160]}")
+                      f" {_archify_error_text(proc)}")
     out_html = mod_staging / f"{name}.html"
     try:
         proc = subprocess.run(
