@@ -479,3 +479,29 @@ verify/unwind（pnpm workspace，packages/core 41 文件 + packages/dashboard 29
 - 快测 +9（R6'1/2：test_render +5 staleness/横幅/清孤儿；R6'1c：+2 真形态回归（PYTHONUTF8 env 钉值/difftastic rhs-changes-空 删除记账）+ test_s1_cbm_provenance 改写 +2）→ **402 绿 96s**；全量口径 1812（402+1410，复跑待下批或用户指令）；**受影响深测组复验 12 绿 48s**（dif003 T2 删死码 committed 正中 #86 改动高危区 + s7 双引擎 E2E 8 例）
 - 探针 work/probe_r6_*.py（facts 复验/长跑侦察/陈旧 fid 溯源）+ work/agent_longrun.py（长跑主脚本）+ work/agent_longrun_result.json（运行结果）
 - 提交链（本地未 push）：37d1c6f（1/2）→bb7109d（1b）→f83a4b3（1c）→4b79292（T2）→96fca8f（T4）
+
+## 11. R7' 批次增补（预留位，收口待补）
+
+R7'（渲染层）已实现并提交（7f5e743 多级颗粒度链 / fa6213f archify 交互图链），本节收口记录暂缓——待英文化整改与 R7' 收口文档一并补写（见交接文档暂缓队列）。
+
+## 12. F 批次增补（2026-11-06，curate 漂移治理）
+
+### 12.1 三病同根（R6' §10.4 诚实发现 F1/F2/F3 的固化）
+
+F1（载荷 fid 随内容轮换，消费方各自重实现恢复）/ F2（漂移复验只在 CLI curate 路径触发，etl/MCP 不复验→假 active 窗口）/ F3（无统一漂移查询面）同根：fid=sha256(project|qn|content_hash) 内容敏感，漂移是常态而治理面缺失。一体交付（2281c60）：
+
+- **F2 复验补洞**：`run_etl` 在 `_etl_coverage` 后、`_write_meta` 前挂 `curate_mod._revalidate_ingested(dst)`——**一处覆盖三路**（`vrp run`/`vrp etl`/事务 promote：G1 的 s6_transact 两处调用都走 run_etl）；MCP `curate_submit` 在 `curate_payload` 入库成功后同复验，收据带 `stale` 节（被拒路径不触发）。stats 新键 `curate_stale_slices`/`curate_stale_structure` → meta count_ 键。重建即 fid 轮换时刻，假 active 窗口就此关闭。
+- **F1 fid_ledger 身份史**：新自有表 `fid_ledger(fid PK, project, qualified_name, file_path, first_seen_at)` + qn/file 两索引；`_etl_symbols` 末尾 INSERT OR IGNORE（首见时刻稳定、内容不变零增长、幂等）；经 OWNED_TABLES 快照回灌跨 etl 存续。**不改 fid 契约**——ledger 是读出辅助：旧 fid 反查 qn → 正查现行 symbols（UNIQUE(project,qn) 天然无歧义）得唯一新 fid 即 remap；qn 消亡→ledger 文件域现行符号补位（cap 10，人工判读）；ledger 无记录诚实零候选。
+- **F3 统一查询面**：`curate.drift_report(con)` 只读——slices[]/structure 逐条 `fresh`/`missing_fids`（含候选）/`missing_edges`，`fids_recovered`（内容回退 fid 复活，原载荷可原样重提），`summary.active_but_drifted` 非空=复验链有洞（对账信号）；CLI `vrp drift <repo>`（rc=1 仅当 stored active 实际漂移；stale 已是诚实状态不影响 rc）+ MCP `drift_report`（二十六件）。
+- **remap 是提议不是旁路**：改写后仍走正常 curate_submit 全量重验（fid 存在性/相邻边/acts）；标记永远发生在写路径，drift_report 零副作用。
+
+### 12.2 dogfood 实录（真实轮换首燃）
+
+- **vrp 自仓**：`vrp run`（2281c60 代码态）→ 钩子 `curate_stale_structure: 1`——**F2 首燃即抓出历史遗留假 active**：missing 三 fid = `vrp.cli`/`build_parser`/`cmd_status`，其中 cmd_status 是 R6' T4（96fca8f）改的，F2 之前跨 R7' 整批保持假 active，本轮一次抓齐；三 fid 均 `ledger:false`（表与漂移同轮诞生，pre-F fid 天然无记录——诚实局限，非缺陷）；复梳理=ai-layer 文件域（cli.py）当前全量 29 fid 重解析（R6' 长跑先例）→ CLI curate accepted（收据 stale 节空）→ drift 全 fresh rc=0 → report 刷新 20.3s（chain/ 链复现）。**下批任何 cli.py 内容变更即首次真实 remap 触发**（本轮 ledger 已灌，fid 全覆盖）。
+- **tsa 跨仓**：`vrp run` 24.5s 无回归；fid_ledger 首灌 **66,132 行**（=符号数），fid→qn 反查 0.12ms（索引）；R4' structure（kernel/interface）active 存续 fresh；drift rc=0。
+
+### 12.3 测试与文档
+
+- 快测 +14（test_drift.py 12：drift 单元×9 + MCP 补验 + etl 钩子全周期 E2E + 无漂移零误伤；MCP/CLI 接线 2）→ **430 绿 121s**；test_etl_preserve OWNED_TABLES 契约+ledger 回灌改写；test_mcp_server TOOL_NAMES 26 件+drift over MCP+CLI 接线
+- 契约文档《梳理工件契约》§0/§3 重写 + 新 §4（漂移查询面与重定位）；README 快速开始/CLI 表/MCP 件数三处
+- 提交链（本地未 push）：2281c60（功能本体：代码+测试+契约+README）→ 本节（docs 收口）
