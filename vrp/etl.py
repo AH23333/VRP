@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
+from . import curate as curate_mod
 from . import evidence as ev
 from . import s1_cbm, testsig
 
@@ -83,6 +84,7 @@ OWNED_TABLES = (
     "slices",
     "structure",
     "decisions",
+    "fid_ledger",
 )
 
 
@@ -198,6 +200,14 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
             stats["symbols"] = len(fid_by_id)
             stats.update(_etl_edges(dst, src, project, fid_by_id, file_by_id, replaced))
             stats.update(_etl_coverage(dst, src, project))
+            # F2 (curate drift governance): this rebuild is THE moment fids rotate,
+            # so the restored curate artifacts are revalidated here - drifted ones
+            # get marked stale and the "fake active" window closes. Covers all
+            # three write paths (etl / run / transact G1 promote), which all go
+            # through run_etl.
+            revalidated = curate_mod._revalidate_ingested(dst)
+            stats["curate_stale_slices"] = len(revalidated["slices"])
+            stats["curate_stale_structure"] = 1 if revalidated["structure"] else 0
             _write_meta(dst, project, store_meta, repo, stats)
             dst.commit()
         finally:
@@ -265,6 +275,16 @@ def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _Cont
         "INSERT OR REPLACE INTO symbols (fid, project, qualified_name, label, name, file_path,"
         " start_line, end_line, content_hash, properties_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
         symbol_rows,
+    )
+    # F1 (fid identity ledger): record every fid ever seen (fid -> qn/file) so
+    # drifted curate artifacts can be relocated later (curate.drift_report).
+    # INSERT OR IGNORE keeps first_seen_at stable and growth bounded by real
+    # content churn; survives etl via OWNED_TABLES snapshot/restore.
+    now = _now()
+    dst.executemany(
+        "INSERT OR IGNORE INTO fid_ledger (fid, project, qualified_name, file_path, first_seen_at)"
+        " VALUES (?,?,?,?,?)",
+        [(r[0], r[1], r[2], r[5], now) for r in symbol_rows],
     )
     return fid_by_id, file_by_id, replaced
 

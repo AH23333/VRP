@@ -25,6 +25,10 @@ def _build_db(path: Path):
         "INSERT INTO runtime_evidence (caller_key, callee_key, payload_json)"
         " VALUES (NULL, 'test', '{\"exit_code\": 0}')"
     )
+    con.execute(
+        "INSERT INTO fid_ledger (fid, project, qualified_name, file_path, first_seen_at)"
+        " VALUES ('f-old', 'p', 'pkg.old', 'pkg/x.py', '2026-11-06T00:00:00Z')"
+    )
     con.commit()
     con.close()
 
@@ -53,6 +57,10 @@ def test_snapshot_and_restore_roundtrip(tmp_path):
     assert gates == [("G1", "pass")]
     ev = fresh.execute("SELECT callee_key, payload_json FROM runtime_evidence").fetchall()
     assert ev == [("test", '{"exit_code": 0}')]
+    ledger = fresh.execute(
+        "SELECT fid, project, qualified_name, file_path, first_seen_at FROM fid_ledger"
+    ).fetchall()
+    assert ledger == [("f-old", "p", "pkg.old", "pkg/x.py", "2026-11-06T00:00:00Z")]
     fresh.close()
 
 
@@ -81,4 +89,5 @@ def test_owned_tables_constant():
         "slices",
         "structure",
         "decisions",
+        "fid_ledger",
     }

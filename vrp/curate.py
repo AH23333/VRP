@@ -332,7 +332,11 @@ def _curate_file(con: sqlite3.Connection, path: Path, kind: str) -> dict:
 
 
 def curate_payload(con: sqlite3.Connection, kind: str, payload_json: str) -> dict:
-    """MCP curate_submit 用：内存验证+入库，返回单文件收据（不入 .vrp/ai/）。"""
+    """MCP curate_submit 用：内存验证+入库，返回单文件收据（不入 .vrp/ai/）。
+
+    入库成功后立即复验其余 active 工件（F2）：MCP 路径与 CLI curate 同权，
+    收据带 stale 节，假 active 窗口不再依赖 CLI 路径被走到。
+    """
     try:
         raw = json.loads(payload_json)
     except json.JSONDecodeError as exc:
@@ -348,13 +352,15 @@ def curate_payload(con: sqlite3.Connection, kind: str, payload_json: str) -> dic
         if errors:
             return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": len(raw), "errors": errors}
         _ingest_slices(con, raw)
-        return {"kind": kind, "status": "accepted", "accepted": len(raw), "rejected": 0, "errors": []}
+        return {"kind": kind, "status": "accepted", "accepted": len(raw), "rejected": 0, "errors": [],
+                "stale": _revalidate_ingested(con)}
     if kind == "structure":
         errors = _validate_structure(con, raw)
         if errors:
             return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": 1, "errors": errors}
         _ingest_structure(con, raw)
-        return {"kind": kind, "status": "accepted", "accepted": 1, "rejected": 0, "errors": []}
+        return {"kind": kind, "status": "accepted", "accepted": 1, "rejected": 0, "errors": [],
+                "stale": _revalidate_ingested(con)}
     raise SystemExit(f"kind 必须是 slices 或 structure: {kind}")
 
 
@@ -413,3 +419,192 @@ def reject(con: sqlite3.Connection, kind: str, target_id: str, note: str = "") -
     )
     con.commit()
     return {"kind": kind, "target_id": target_id, "status": "rejected", "note": note}
+
+
+# ------------------------------------------------------------- drift report
+# F3 统一漂移查询面 + F1 读出辅助（R6' 诚实发现，构想v7 §12）：
+# - 只读：不改任何 status，标记永远发生在写路径（curate/run_etl/MCP submit）
+# - fid_ledger 身份史：旧 fid → (project, qualified_name, file_path) 反查，
+#   再按 (project, qn) 正查现行 symbols 得唯一新 fid（remap）；
+#   qn 消失（改名/删除）→ ledger 的文件域补位（cap，供 AI 人工判读）
+# - remap 只是提议：边/acts 仍在 curate_submit 提交时全量重验，不构成旁路
+
+SAME_FILE_CANDIDATE_CAP = 10
+
+
+def _has_table(con: sqlite3.Connection, name: str) -> bool:
+    row = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def _missing_fid_entry(
+    con: sqlite3.Connection, fid: str, step: int | None, has_ledger: bool
+) -> dict:
+    """单 missing fid 条目：ledger 反查 + 重定位候选（F1 读出辅助）。"""
+    entry: dict = {"fid": fid, "ledger": False, "candidates": []}
+    if step is not None:
+        entry["step"] = step
+    if not has_ledger:
+        return entry
+    row = con.execute(
+        "SELECT project, qualified_name, file_path FROM fid_ledger WHERE fid = ?", (fid,)
+    ).fetchone()
+    if row is None:
+        return entry
+    project, qn, file_path = row
+    entry["ledger"] = True
+    entry["ledger_qn"] = qn
+    entry["ledger_file_path"] = file_path
+    cur = con.execute(
+        "SELECT fid, file_path FROM symbols WHERE project = ? AND qualified_name = ?",
+        (project, qn),
+    ).fetchone()
+    if cur is not None:
+        entry["candidates"] = [{"fid": cur[0], "file_path": cur[1], "match": "qualified_name"}]
+        return entry
+    # qn 已消亡（改名/删除）：ledger 记录的文件域补位（确定性排序，cap 诚实截断）
+    same_file: list[dict] = []
+    for r in con.execute(
+        "SELECT fid, qualified_name, file_path FROM symbols WHERE file_path = ?"
+        " ORDER BY qualified_name LIMIT ?",
+        (file_path, SAME_FILE_CANDIDATE_CAP),
+    ).fetchall():
+        same_file.append(
+            {"fid": r[0], "qualified_name": r[1], "file_path": r[2], "match": "same_file"}
+        )
+    entry["candidates"] = same_file
+    return entry
+
+
+def _apply_remap(item: dict) -> None:
+    """唯一 qn 候选 → 直接给 old→new 映射（多候选/无候选诚实不映射）。"""
+    remap: dict[str, str] = {}
+    for entry in item.get("missing_fids", []):
+        qn_c = [c for c in entry.get("candidates", []) if c.get("match") == "qualified_name"]
+        if len(qn_c) == 1:
+            remap[entry["fid"]] = qn_c[0]["fid"]
+    if remap:
+        item["remap"] = remap
+
+
+def _edge_exists(con: sqlite3.Connection, a: str, b: str) -> bool:
+    row = con.execute(
+        "SELECT 1 FROM edges WHERE ((src_fid = ? AND dst_fid = ?) OR (src_fid = ? AND dst_fid = ?))"
+        f" AND type IN ({','.join('?' * len(SLICE_EDGE_TYPES))})",
+        (a, b, b, a, *SLICE_EDGE_TYPES),
+    ).fetchone()
+    return row is not None
+
+
+def _drift_slice(con: sqlite3.Connection, row: tuple, has_ledger: bool) -> dict:
+    slice_id, name, status, payload_json = row
+    item: dict = {
+        "slice_id": slice_id,
+        "name": name,
+        "status": status,
+        "fresh": True,
+        "missing_fids": [],
+        "missing_edges": [],
+    }
+    try:
+        raw = json.loads(payload_json)
+    except json.JSONDecodeError:
+        item["fresh"] = False
+        item["unparseable_payload"] = True
+        return item
+    steps = raw.get("steps", [])
+    present: set[str] = set()
+    for i, step in enumerate(steps):
+        fid = step.get("fid", "") if isinstance(step, dict) else ""
+        if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is not None:
+            present.add(fid)
+        else:
+            item["fresh"] = False
+            item["missing_fids"].append(_missing_fid_entry(con, fid, i, has_ledger))
+    # 相邻边检查仅对两端 fid 均存活的步对；单边 fid 漂移时缺边是衍生信号，不重复报
+    for i in range(len(steps) - 1):
+        a = steps[i].get("fid", "") if isinstance(steps[i], dict) else ""
+        b = steps[i + 1].get("fid", "") if isinstance(steps[i + 1], dict) else ""
+        if a not in present or b not in present:
+            continue
+        if not _edge_exists(con, a, b):
+            item["fresh"] = False
+            item["missing_edges"].append({"step": i, "from_fid": a, "to_fid": b})
+    _apply_remap(item)
+    if status == "stale" and item["fresh"]:
+        item["fids_recovered"] = True  # 内容回退使 fid 复活：原载荷可原样重提
+    return item
+
+
+def _drift_structure(con: sqlite3.Connection, row: tuple, has_ledger: bool) -> dict:
+    sid, payload_json, status = row
+    item: dict = {
+        "id": sid,
+        "status": status,
+        "fresh": True,
+        "modules": [],
+        "missing_fids": [],
+    }
+    try:
+        raw = json.loads(payload_json)
+    except json.JSONDecodeError:
+        item["fresh"] = False
+        item["unparseable_payload"] = True
+        return item
+    for mod in raw.get("modules", []):
+        mid = mod.get("module_id") if isinstance(mod, dict) else None
+        mod_missing = []
+        for fid in (mod.get("symbol_fids") or []) if isinstance(mod, dict) else []:
+            if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is None:
+                item["fresh"] = False
+                entry = _missing_fid_entry(con, fid, None, has_ledger)
+                if mid is not None:
+                    entry["module"] = mid
+                mod_missing.append(entry)
+                item["missing_fids"].append(entry)
+        if mod_missing:
+            item["modules"].append({"module_id": mid, "missing": len(mod_missing)})
+    _apply_remap(item)
+    if status == "stale" and item["fresh"]:
+        item["fids_recovered"] = True
+    return item
+
+
+def drift_report(con: sqlite3.Connection) -> dict:
+    """统一漂移查询面（F3）：active/stale 梳理工件逐条 fresh/missing_fids/
+    missing_edges + 重定位候选与 remap（F1 读出辅助）。只读，不落任何状态。
+
+    rejected 不入（用户已裁决出列）；stored active 但实际漂移者在
+    summary.active_but_drifted 单列——F2 写路径钩子在位时该列应为空，
+    非空即复验链有洞，本面即是对账面。
+    """
+    has_ledger = _has_table(con, "fid_ledger")
+    report: dict = {"slices": [], "structure": None}
+    for row in con.execute(
+        "SELECT slice_id, name, status, payload_json FROM slices"
+        " WHERE status IN ('active', 'stale') ORDER BY slice_id"
+    ).fetchall():
+        report["slices"].append(_drift_slice(con, row, has_ledger))
+    row = con.execute(
+        "SELECT id, payload_json, status FROM structure"
+        " WHERE status IN ('active', 'stale') ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        report["structure"] = _drift_structure(con, row, has_ledger)
+    structure = report["structure"]
+    summary = {
+        "slices_checked": len(report["slices"]),
+        "slices_fresh": sum(1 for s in report["slices"] if s["fresh"]),
+        "slices_drifted": sum(1 for s in report["slices"] if not s["fresh"]),
+        "structure_drifted": bool(structure is not None and not structure["fresh"]),
+    }
+    active_but_drifted = [
+        s["slice_id"] for s in report["slices"] if s["status"] == "active" and not s["fresh"]
+    ]
+    if structure is not None and structure["status"] == "active" and not structure["fresh"]:
+        active_but_drifted.append("structure")
+    summary["active_but_drifted"] = active_but_drifted
+    report["summary"] = summary
+    return report

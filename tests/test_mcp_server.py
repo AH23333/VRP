@@ -26,6 +26,7 @@ TOOL_NAMES = {
     "curate_structure",
     "curate_reject",
     "curate_receipt",
+    "drift_report",
     "tx_preview",
     "tx_submit",
     "tx_run",
@@ -340,6 +341,90 @@ def test_render_tools_over_mcp(tmp_path, monkeypatch):
     assert out["report"]["archify"] is False
     assert any("archify not found" in d for d in out["report"]["degraded"])
     assert (repo / ".vrp" / "report" / "report.html").is_file()
+
+
+def test_drift_report_over_mcp(tmp_path):
+    """F3 统一漂移查询面 over MCP：submit → drift fresh → 漂移 → 复验标 stale → remap 候选。"""
+    slices_ok = json.dumps([{
+        "slice_id": "calc-flow",
+        "name": "计算线",
+        "summary": "total 调 double",
+        "steps": [{"fid": "f1", "role": "entry"}, {"fid": "f2", "role": "process"}],
+    }], ensure_ascii=False)
+
+    async def plan(session: ClientSession):
+        empty = await _call(session, "drift_report", {})
+        st = await _call(session, "curate_submit", {"kind": "slices", "payload_json": slices_ok})
+        fresh = await _call(session, "drift_report", {})
+        return {"empty": empty, "st": st, "fresh": fresh}
+
+    repo = _mk_repo(tmp_path)
+    # 身份史先行（模拟 F1 ledger：f1 前代 fid-old 已轮换）
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO fid_ledger (fid, project, qualified_name, file_path, first_seen_at)"
+        " VALUES ('fid-old', 'p', 'pkg.calc.total', 'pkg/calc.py', 't0')"
+    )
+    con.commit()
+    con.close()
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert out["empty"]["summary"]["slices_checked"] == 0
+    assert out["st"]["status"] == "accepted"
+    assert out["st"]["stale"] == {"slices": [], "structure": False}
+    assert out["fresh"]["slices"][0]["fresh"] is True
+    assert out["fresh"]["summary"]["active_but_drifted"] == []
+
+    # 直插漂移 slice（引用已消亡 fid-old）→ drift_report 给 ledger remap
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, payload_json, status)"
+        " VALUES ('ghost', 'n', 's', ?, 'active')",
+        (json.dumps({"steps": [{"fid": "fid-old", "role": "entry"}]}),),
+    )
+    con.commit()
+    con.close()
+
+    async def again(session: ClientSession):
+        return await _call(session, "drift_report", {})
+
+    drifted = _run(_drive(repo, {"plan": again}))["plan"]
+    ghost = [s for s in drifted["slices"] if s["slice_id"] == "ghost"][0]
+    assert ghost["fresh"] is False
+    assert ghost["remap"] == {"fid-old": "f1"}
+    assert drifted["summary"]["active_but_drifted"] == ["ghost"]
+
+
+def test_cli_drift_wiring(tmp_path, capsys):
+    """CLI drift 子命令接线：rc=1 当 stored active 实际漂移（对账跳闸）。"""
+    from vrp import cli
+
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, payload_json, status)"
+        " VALUES ('ghost', 'n', 's', ?, 'active')",
+        (json.dumps({"steps": [{"fid": "f1", "role": "entry"}]}),),
+    )
+    con.commit()
+    con.close()
+
+    rc = cli.main(["drift", str(repo)])
+    out = capsys.readouterr().out
+    assert rc == 0  # f1 存活 → fresh
+    assert "drift report" in out
+
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("UPDATE slices SET payload_json = ? WHERE slice_id = 'ghost'",
+                (json.dumps({"steps": [{"fid": "gone", "role": "entry"}]}),))
+    con.commit()
+    con.close()
+
+    rc = cli.main(["drift", str(repo)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert '"active_but_drifted": [' in out
+    assert '"ghost"' in out
 
 
 def test_cli_mcp_wiring(tmp_path, monkeypatch):

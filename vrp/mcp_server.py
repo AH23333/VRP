@@ -150,6 +150,16 @@ def build_server(repo: Path) -> "MCPServer":
     def curate_receipt() -> str:
         return _dumps(curate_mod.read_receipt(repo) or {"receipt": None})
 
+    def drift_report() -> str:
+        facts = repo / ".vrp" / "facts.db"
+        if not facts.exists():
+            raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts}")
+        con = sqlite3.connect(f"file:{facts}?mode=ro", uri=True)
+        try:
+            return _dumps(curate_mod.drift_report(con))
+        finally:
+            con.close()
+
     def tx_preview(tx_json: str) -> str:
         tmp = _write_temp(tx_json)
         try:
@@ -306,6 +316,15 @@ def build_server(repo: Path) -> "MCPServer":
         name="curate_receipt",
         description="读最近一次 curate 收据（.vrp/curate-receipt.json）："
         "被拒时按 errors 码逐条修正工件后重提",
+    )
+    server.add_tool(
+        _guard(drift_report),
+        name="drift_report",
+        description="统一漂移查询面（只读）：active/stale 梳理工件逐条 fresh/missing_fids/"
+        "missing_edges + 重定位候选——fid_ledger 身份史反查 qn 再正查现行 fid，"
+        "唯一候选直接给 remap 映射（F1 读出辅助），qn 消亡走同文件域补位；"
+        "按 remap 重梳理工件后 curate_submit 再入库（重验不旁路）；"
+        "summary.active_but_drifted 非空 = 复验链有洞，须上报",
     )
     server.add_tool(
         _guard(tx_preview),

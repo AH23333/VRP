@@ -323,6 +323,21 @@ def cmd_curate(args) -> int:
     return 1 if any(f.get("status") == "rejected" for f in result.get("files", [])) else 0
 
 
+def cmd_drift(args) -> int:
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = sqlite3.connect(f"file:{facts_path}?mode=ro", uri=True)
+    try:
+        result = curate_mod.drift_report(con)
+    finally:
+        con.close()
+    _print_step("S2.5 drift report", result)
+    # rc=1 = stored active 实际已漂移（假 active——F2 复验链有洞的对账信号）
+    return 1 if result["summary"]["active_but_drifted"] else 0
+
+
 def cmd_report(args) -> int:
     from . import render as render_mod
 
@@ -528,6 +543,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reject", help="veto an ingested artifact: a slice_id or the literal 'structure'")
     p.add_argument("--note", help="optional decision note recorded with --reject")
     p.set_defaults(func=cmd_curate)
+
+    p = sub.add_parser(
+        "drift",
+        help="S2.5: unified drift report for curate artifacts (missing fids/edges + relocation candidates; read-only)",
+    )
+    p.add_argument("repo")
+    p.set_defaults(func=cmd_drift)
 
     p = sub.add_parser("status", help="facts.db summary")
     p.add_argument("repo")

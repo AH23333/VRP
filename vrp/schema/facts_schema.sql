@@ -181,6 +181,16 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_target ON decisions(kind, target_id);
 
+CREATE TABLE IF NOT EXISTS fid_ledger (
+    fid TEXT PRIMARY KEY,
+    project TEXT NOT NULL,
+    qualified_name TEXT NOT NULL,
+    file_path TEXT NOT NULL DEFAULT '',
+    first_seen_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fid_ledger_qn ON fid_ledger(project, qualified_name);
+CREATE INDEX IF NOT EXISTS idx_fid_ledger_file ON fid_ledger(file_path);
+
 CREATE TABLE IF NOT EXISTS baseline (
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,
