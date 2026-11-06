@@ -358,8 +358,8 @@ def test_report_carries_stale_banner(tmp_path, monkeypatch):
     _git(repo, "commit", "-q", "-am", "c2")
     result = render.render_report(repo)
     text = Path(result["report"]).read_text(encoding="utf-8")
-    assert "陈旧报告" in text
-    assert "落后当前 HEAD 约 1 个提交" in text
+    assert "Stale report" in text
+    assert "about 1 commit(s) behind current HEAD" in text
 
 
 def test_report_no_banner_when_fresh(tmp_path, monkeypatch):
@@ -369,7 +369,7 @@ def test_report_no_banner_when_fresh(tmp_path, monkeypatch):
     _set_git_head(repo, _head(repo))
     result = render.render_report(repo)
     text = Path(result["report"]).read_text(encoding="utf-8")
-    assert "陈旧报告" not in text
+    assert "Stale report" not in text
 
 
 def test_render_report_cleans_orphans_keeps_external(tmp_path, monkeypatch):
@@ -519,7 +519,7 @@ def test_module_page_dir_fallback(tmp_path, monkeypatch):
     assert result["counts"]["module_pages"] == 1  # 目录 pkg 聚合
     page = out / "modules" / "m0-pkg.html"
     assert page.is_file()
-    assert "目录聚合" in page.read_text(encoding="utf-8")
+    assert "directory fallback" in page.read_text(encoding="utf-8")
 
 
 def test_symbol_pages_global_cap_honest(tmp_path, monkeypatch):
@@ -534,7 +534,7 @@ def test_symbol_pages_global_cap_honest(tmp_path, monkeypatch):
     assert (out / "symbols" / "fid-a.html").is_file()  # m1 候选字典序首个
     assert not (out / "symbols" / "fid-b.html").exists()
     report = (out / "report.html").read_text(encoding="utf-8")
-    assert "截断" in report  # 诚实标注
+    assert "truncated" in report  # 诚实标注
     idx = json.loads((out / "ir" / "modules-index.json").read_text(encoding="utf-8"))
     assert idx["symbol_pages"] == ["fid-a"] and idx["symbol_pages_truncated"] is True
 

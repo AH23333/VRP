@@ -302,7 +302,7 @@ def session_report(repo: Path, session_id: str = "", out_dir: Path | None = None
         "git_head": {"begin": doc["begin"]["git_head"], "end": doc["end"]["git_head"]},
         "archify": bool(archify_html),
         "degraded": degraded,
-        "note": "不做图 diff（fid 内容敏感，§3.3 诚实版）；同会话字节级复现",
+        "note": "no diagram diff (fid content sensitive, §3.3 honest mode); byte-reproducible within the same session",
     }
 
 
@@ -328,7 +328,7 @@ def _report_html(
     esc = html_mod.escape
     parts = [
         "<!DOCTYPE html>",
-        '<html lang="zh">',
+        '<html lang="en">',
         "<head>",
         '<meta charset="utf-8">',
         f"<title>vrp session {esc(doc['id'])} - {esc(repo.name)}</title>",
@@ -352,9 +352,9 @@ def _report_html(
         f" | began_at: <code>{esc(doc['began_at'])}</code> | ended_at: <code>{esc(doc['ended_at'])}</code></p>",
         f'<p class="meta">begin.git_head: <code>{esc(doc["begin"]["git_head"] or "(none)")}</code>'
         f' | end.git_head: <code>{esc(doc["end"]["git_head"] or "(none)")}</code>'
-        " | 不做图 diff（fid 内容敏感，诚实版并排+计数，§3.3）</p>",
-        "<h2>初末计数 diff（四组）</h2>",
-        "<table><tr><th>组</th><th>初态</th><th>末态</th><th>delta</th></tr>",
+        " | no diagram diff (fid content sensitive; honest side-by-side + counts, §3.3)</p>",
+        "<h2>Count diff begin vs end (four groups)</h2>",
+        "<table><tr><th>Group</th><th>Begin</th><th>End</th><th>delta</th></tr>",
     ]
     for key in DIFF_KEYS:
         d = diff[key]
@@ -364,10 +364,10 @@ def _report_html(
             f'<td class="{cls}">{esc(_delta_str(d["delta"]))}</td></tr>'
         )
     parts.append("</table>")
-    parts.append("<h2>verdict 时间线（会话窗口内）</h2>")
+    parts.append("<h2>Verdict timeline (session window)</h2>")
     if verdicts:
-        parts.append(f"<p>窗口内 {verdicts_total} 条"
-                     + ("（展示截断）" if verdicts_total > len(verdicts) else "") + "。</p>")
+        parts.append(f"<p>{verdicts_total} verdicts in window"
+                     + (" (display truncated)" if verdicts_total > len(verdicts) else "") + ".</p>")
         parts.append("<table><tr><th>tid</th><th>type</th><th>status</th><th>verdict_at</th></tr>")
         for v in verdicts:
             parts.append(
@@ -376,21 +376,21 @@ def _report_html(
             )
         parts.append("</table>")
     else:
-        parts.append("<p>会话窗口内无 verdict。</p>")
-    parts.append("<h2>双 L0 架构图并排（初态 | 末态）</h2>")
+        parts.append("<p>No verdicts in the session window.</p>")
+    parts.append("<h2>Side-by-side L0 architecture (begin | end)</h2>")
     if len(archify_html) == 2:
         parts.append('<div class="cols">')
-        parts.append(f'<div class="col"><h3>初态</h3><iframe src="{esc(archify_html[0])}"></iframe></div>')
-        parts.append(f'<div class="col"><h3>末态</h3><iframe src="{esc(archify_html[1])}"></iframe></div>')
+        parts.append(f'<div class="col"><h3>Begin</h3><iframe src="{esc(archify_html[0])}"></iframe></div>')
+        parts.append(f'<div class="col"><h3>End</h3><iframe src="{esc(archify_html[1])}"></iframe></div>')
         parts.append("</div>")
     else:
         parts.append('<div class="cols">')
-        parts.append(f'<div class="col"><h3>初态</h3><pre class="mermaid">\n{esc(mmd_begin)}</pre></div>')
-        parts.append(f'<div class="col"><h3>末态</h3><pre class="mermaid">\n{esc(mmd_end)}</pre></div>')
+        parts.append(f'<div class="col"><h3>Begin</h3><pre class="mermaid">\n{esc(mmd_begin)}</pre></div>')
+        parts.append(f'<div class="col"><h3>End</h3><pre class="mermaid">\n{esc(mmd_end)}</pre></div>')
         parts.append("</div>")
     if degraded:
         items = "".join(f"<li>{esc(r)}</li>" for r in degraded)
-        parts.append("<h2>降级记录（诚实失败）</h2>")
-        parts.append(f"<ul>{items}</ul><p>降级不阻塞（rc=0）。</p>")
+        parts.append("<h2>Degradation record (honest failure)</h2>")
+        parts.append(f"<ul>{items}</ul><p>Degradation does not block (rc=0).</p>")
     parts.append("</body></html>")
     return "\n".join(parts) + "\n"

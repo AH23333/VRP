@@ -497,7 +497,7 @@ def _dir_modules(con: sqlite3.Connection) -> list[dict]:
             "module_id": d,
             "name": d,
             "layer": "",
-            "responsibility": f"目录聚合兜底：{len(by_dir[d])} 个符号",
+            "responsibility": f"Directory fallback: {len(by_dir[d])} symbols",
             "fids": sorted(by_dir[d]),
             "source": "dirs",
         })
@@ -723,7 +723,7 @@ def mermaid_module_graph(data: dict) -> str:
         lines.append(f"    classDef {code.lower()} fill:#fdf0f0,stroke:{color},stroke-width:2px")
     for f in data["graph_fids"]:
         row = rows.get(f)
-        label = str(row["name"]) if row is not None else f"漂移 {f[:8]}"
+        label = str(row["name"]) if row is not None else f"drifted {f[:8]}"
         lines.append(f'    {id_of[f]}["{label.replace(chr(34), chr(39))}"]')
     for src, dst in data["graph_edges"]:
         lines.append(f"    {id_of[src]} --> {id_of[dst]}")
@@ -737,7 +737,7 @@ def mermaid_module_graph(data: dict) -> str:
 def mermaid_symbol_graph(data: dict) -> str:
     """L2 符号邻域图：焦点 s0 + 出入邻居；焦点病理着色。"""
     row = data["row"]
-    focal = str(row["name"]) if row is not None else f"漂移 {data['fid'][:8]}"
+    focal = str(row["name"]) if row is not None else f"drifted {data['fid'][:8]}"
     id_of: dict[str, str] = {}
     lines = ["graph LR"]
     for code, color in sorted(_PATHOLOGY_COLORS.items()):
@@ -748,7 +748,7 @@ def mermaid_symbol_graph(data: dict) -> str:
         nfid = r["fid"]
         if nfid not in id_of:
             id_of[nfid] = f"s{i}"
-            name = str(r["name"]) if r["name"] else f"漂移 {nfid[:8]}"
+            name = str(r["name"]) if r["name"] else f"drifted {nfid[:8]}"
             lines.append(f'    {id_of[nfid]}["{name.replace(chr(34), chr(39))}"]')
             i += 1
     for r in data["ins"]:
@@ -766,7 +766,7 @@ def _page_shell(title: str, crumb: str, body: str) -> str:
     crumb 为预构建 HTML（含互链），title 转义）。"""
     parts = [
         "<!DOCTYPE html>",
-        '<html lang="zh">',
+        '<html lang="en">',
         "<head>",
         '<meta charset="utf-8">',
         f"<title>{html_mod.escape(title)}</title>",
@@ -804,32 +804,32 @@ def _module_page_html(repo_name: str, data: dict, selected: dict[str, str]) -> s
     出链 ../report.html、../symbols/{fid}.html。"""
     esc = html_mod.escape
     m = data["module"]
-    src_label = "structure（curated）" if m["source"] == "structure" else "目录聚合（fallback）"
+    src_label = "structure (curated)" if m["source"] == "structure" else "directory fallback"
     crumb = f'<a href="../report.html">report</a> / modules / {esc(m["module_id"])}'
-    meta = [f"来源：{esc(src_label)}"]
+    meta = [f"Source: {src_label}"]
     if m["layer"]:
-        meta.append(f"层：{esc(m['layer'])}")
-    meta.append(f"符号：{len(m['fids'])}")
-    meta.append(f"findings（按文件命中）：{data['findings_total']}")
+        meta.append(f"Layer: {esc(m['layer'])}")
+    meta.append(f"Symbols: {len(m['fids'])}")
+    meta.append(f"findings (by file): {data['findings_total']}")
     parts = [f'<p class="meta">{" | ".join(meta)}</p>']
     if m["responsibility"]:
         parts.append(f"<p>{esc(m['responsibility'])}</p>")
     if data["drifted"]:
-        parts.append(f'<p class="meta">fid 可能已漂移：{len(data["drifted"])} 个（不在 symbols 表）。</p>')
-    parts.append("<h2>模块内符号图</h2>")
+        parts.append(f'<p class="meta">{len(data["drifted"])} fid(s) may have drifted (not in symbols table).</p>')
+    parts.append("<h2>Module symbol graph</h2>")
     if data["graph_fids"]:
         if len(m["fids"]) > MODULE_GRAPH_NODES_CAP:
             parts.append(
-                f'<p class="meta">图示度数 top {len(data["graph_fids"])} / 共 {len(m["fids"])} 符号（截断）。</p>'
+                f'<p class="meta">Showing top {len(data["graph_fids"])} of {len(m["fids"])} symbols by degree (truncated).</p>'
             )
         parts.append(f'<pre class="mermaid">\n{html_mod.escape(mermaid_module_graph(data))}</pre>')
     else:
-        parts.append('<p class="meta">该模块无可绘图符号。</p>')
-    parts.append("<h2>符号表</h2>")
+        parts.append('<p class="meta">No graphable symbols in this module.</p>')
+    parts.append("<h2>Symbols</h2>")
     if data["top_table"]:
         if len(m["fids"]) > MODULE_SYMBOLS_TABLE_CAP:
             parts.append(
-                f'<p class="meta">示前 {len(data["top_table"])} / 共 {len(m["fids"])} 符号（按度数截断）。</p>'
+                f'<p class="meta">Showing {len(data["top_table"])} of {len(m["fids"])} symbols (truncated by degree).</p>'
             )
         rows_html = []
         for f in data["top_table"]:
@@ -843,22 +843,22 @@ def _module_page_html(repo_name: str, data: dict, selected: dict[str, str]) -> s
                 qn = esc(row["qualified_name"])
                 loc = f'{esc(row["file_path"])}:{row["start_line"] or "?"}'
             else:
-                name_html = esc(f"漂移 {f[:12]}…")
+                name_html = esc(f"drifted {f[:12]}…")
                 qn = "—"
                 loc = "—"
             badges = "".join(_pathology_badge(r["pathology"]) for r in data["anchored"].get(f, []))
             rows_html.append(f"<tr><td>{name_html}{badges}</td><td>{qn}</td><td>{loc}</td><td>{deg}</td></tr>")
         parts.append(
-            "<table><tr><th>符号</th><th>qualified_name</th><th>位置</th><th>度数</th></tr>"
+            "<table><tr><th>Symbol</th><th>qualified_name</th><th>Location</th><th>Degree</th></tr>"
             + "".join(rows_html) + "</table>"
         )
     else:
-        parts.append('<p class="meta">该模块无符号。</p>')
+        parts.append('<p class="meta">No symbols in this module.</p>')
     parts.append("<h2>findings</h2>")
     if data["findings_rows"]:
         if data["findings_total"] > len(data["findings_rows"]):
             parts.append(
-                f'<p class="meta">示前 {len(data["findings_rows"])} / 共 {data["findings_total"]} 条（截断）。</p>'
+                f'<p class="meta">Showing {len(data["findings_rows"])} of {data["findings_total"]} findings (truncated).</p>'
             )
         frows = []
         for r in data["findings_rows"]:
@@ -866,17 +866,17 @@ def _module_page_html(repo_name: str, data: dict, selected: dict[str, str]) -> s
             loc = f"{esc(fp)}:{r['start_line'] or '?'}"
             anchor = ""
             if r["anchor_fid"] and r["anchor_fid"] in selected:
-                anchor = f' → <a href="../symbols/{esc(r["anchor_fid"])}.html">符号页</a>'
+                anchor = f' → <a href="../symbols/{esc(r["anchor_fid"])}.html">symbol page</a>'
             frows.append(
                 f'<tr><td>{_pathology_badge(r["pathology"])}</td><td>{esc(r["kind"] or "")}</td>'
                 f"<td>{loc}</td><td>{esc(r['source'] or '')}</td><td>{anchor}</td></tr>"
             )
         parts.append(
-            "<table><tr><th>病理</th><th>kind</th><th>位置</th><th>source</th><th>符号页</th></tr>"
+            "<table><tr><th>Pathology</th><th>kind</th><th>Location</th><th>source</th><th>Symbol page</th></tr>"
             + "".join(frows) + "</table>"
         )
     else:
-        parts.append('<p class="meta">无 findings。</p>')
+        parts.append('<p class="meta">No findings.</p>')
     return _page_shell(f"{m['name']} - {repo_name}", crumb, "\n".join(parts))
 
 
@@ -887,8 +887,8 @@ def _symbol_page_html(repo_name: str, data: dict, selected: dict[str, str],
     esc = html_mod.escape
     row = data["row"]
     fid = data["fid"]
-    title = str(row["qualified_name"]) if row is not None else f"漂移符号 {fid[:16]}…"
-    mod_id = page_to_module_id.get(data["module_page"], "模块")
+    title = str(row["qualified_name"]) if row is not None else f"drifted symbol {fid[:16]}…"
+    mod_id = page_to_module_id.get(data["module_page"], "module")
     crumb = (
         f'<a href="../report.html">report</a> / '
         f'<a href="../modules/{esc(data["module_page"])}">{esc(mod_id)}</a> / {esc(title)}'
@@ -898,33 +898,33 @@ def _symbol_page_html(repo_name: str, data: dict, selected: dict[str, str],
         loc = f"{esc(row['file_path'])}:{row['start_line'] or '?'}"
         if row["end_line"]:
             loc = f"{loc}-{row['end_line']}"
-        parts.append(f'<p class="meta">fid：<code>{esc(fid)}</code> | 位置：<code>{loc}</code></p>')
+        parts.append(f'<p class="meta">fid: <code>{esc(fid)}</code> | location: <code>{loc}</code></p>')
     else:
-        parts.append(f'<p class="meta">fid：<code>{esc(fid)}</code>（已漂移：不在 symbols 表）</p>')
+        parts.append(f'<p class="meta">fid: <code>{esc(fid)}</code> (drifted: not in symbols table)</p>')
     if data["snippet"] is not None:
         sn = data["snippet"]
-        note = "（截断）" if sn["truncated"] else ""
-        parts.append("<h2>源码片段</h2>")
-        parts.append(f'<p class="meta">行 {sn["lo"]}-{sn["hi"]}{note}；facts 陈旧时可能错位，以仓内文件为准。</p>')
+        note = " (truncated)" if sn["truncated"] else ""
+        parts.append("<h2>Source snippet</h2>")
+        parts.append(f'<p class="meta">Lines {sn["lo"]}-{sn["hi"]}{note}; may be misaligned when facts are stale - the in-repo file is authoritative.</p>')
         numbered = "\n".join(
             f"{n:>5} | {html_mod.escape(line)}"
             for n, line in zip(range(sn["lo"], sn["hi"] + 1), sn["text"].split("\n"))
         )
         parts.append(f'<pre class="code">{numbered}</pre>')
     else:
-        parts.append('<p class="meta">无源码片段（文件缺失/路径被守卫拒绝/fid 漂移）。</p>')
+        parts.append('<p class="meta">No source snippet (file missing / path rejected by guard / fid drifted).</p>')
     if data["ins"] or data["outs"]:
-        parts.append("<h2>邻域图</h2>")
+        parts.append("<h2>Neighborhood graph</h2>")
         parts.append(f'<pre class="mermaid">\n{html_mod.escape(mermaid_symbol_graph(data))}</pre>')
     else:
-        parts.append('<p class="meta">无出入边。</p>')
+        parts.append('<p class="meta">No incoming or outgoing edges.</p>')
     if data["outs_total"] or data["ins_total"]:
 
         def _neighbor_rows(items: list) -> str:
             out = []
             for r in items:
                 nfid = r["fid"]
-                name = str(r["name"]) if r["name"] else f"漂移 {nfid[:12]}…"
+                name = str(r["name"]) if r["name"] else f"drifted {nfid[:12]}…"
                 name_html = (
                     f'<a href="../symbols/{esc(nfid)}.html">{esc(name)}</a>'
                     if nfid in selected else esc(name)
@@ -933,34 +933,34 @@ def _symbol_page_html(repo_name: str, data: dict, selected: dict[str, str],
                     f"<tr><td>{name_html}</td><td>{esc(r['qualified_name'] or '—')}</td>"
                     f"<td>{esc(r['etype'] or '—')}</td></tr>"
                 )
-            return ("<table><tr><th>符号</th><th>qualified_name</th><th>边类型</th></tr>"
+            return ("<table><tr><th>Symbol</th><th>qualified_name</th><th>Edge type</th></tr>"
                     + "".join(out) + "</table>")
 
-        parts.append("<h2>调用关系</h2>")
+        parts.append("<h2>Call relations</h2>")
         if data["outs"]:
             if data["outs_total"] > len(data["outs"]):
                 parts.append(
-                    f'<p class="meta">出边邻居示前 {len(data["outs"])} / 共 {data["outs_total"]}（截断）。</p>'
+                    f'<p class="meta">Showing {len(data["outs"])} of {data["outs_total"]} out-neighbors (truncated).</p>'
                 )
-            parts.append("<h3>出边（调用/引用）</h3>")
+            parts.append("<h3>Outgoing (calls/references)</h3>")
             parts.append(_neighbor_rows(data["outs"]))
         if data["ins"]:
             if data["ins_total"] > len(data["ins"]):
                 parts.append(
-                    f'<p class="meta">入边邻居示前 {len(data["ins"])} / 共 {data["ins_total"]}（截断）。</p>'
+                    f'<p class="meta">Showing {len(data["ins"])} of {data["ins_total"]} in-neighbors (truncated).</p>'
                 )
-            parts.append("<h3>入边（被调用）</h3>")
+            parts.append("<h3>Incoming (called by)</h3>")
             parts.append(_neighbor_rows(data["ins"]))
     if data["slices"]:
-        parts.append("<h2>所属业务线</h2>")
+        parts.append("<h2>Slices containing this symbol</h2>")
         if len(data["slices"]) >= SYMBOL_PAGE_SLICES_CAP:
-            parts.append(f'<p class="meta">最多示 {SYMBOL_PAGE_SLICES_CAP} 条（可能截断）。</p>')
+            parts.append(f'<p class="meta">At most {SYMBOL_PAGE_SLICES_CAP} shown (may be truncated).</p>')
         items = "".join(
             f'<li><code>{esc(s["slice_id"])}</code> {esc(s["name"])}</li>' for s in data["slices"]
         )
         parts.append(f"<ul>{items}</ul>")
     if data["findings"]:
-        parts.append("<h2>病理 findings</h2>")
+        parts.append("<h2>Pathology findings</h2>")
         frows = []
         for r in data["findings"]:
             fp = str(r["file_path"] or "").replace("\\", "/")
@@ -970,7 +970,7 @@ def _symbol_page_html(repo_name: str, data: dict, selected: dict[str, str],
                 f"<td>{loc}</td><td>{esc(r['source'] or '')}</td></tr>"
             )
         parts.append(
-            "<table><tr><th>病理</th><th>kind</th><th>位置</th><th>source</th></tr>"
+            "<table><tr><th>Pathology</th><th>kind</th><th>Location</th><th>source</th></tr>"
             + "".join(frows) + "</table>"
         )
     return _page_shell(f"{title} - {repo_name}", crumb, "\n".join(parts))
@@ -980,11 +980,11 @@ def _modules_index_section(datas: list[dict], modules_truncated: bool,
                            symbol_pages: int, symbols_truncated: bool) -> dict:
     esc = html_mod.escape
     if not datas:
-        return {"title": "模块页（L1）", "body": "<p>无可渲染模块数据（structure 无 active 且目录聚合为空）。</p>"}
+        return {"title": "Module pages (L1)", "body": "<p>No renderable module data (no active structure and empty directory aggregation).</p>"}
     rows = []
     for d in datas:
         m = d["module"]
-        src = "structure" if m["source"] == "structure" else "目录聚合"
+        src = "structure" if m["source"] == "structure" else "dir fallback"
         rows.append(
             f'<tr><td><a href="modules/{esc(d["page_file"])}">{esc(m["module_id"])}</a></td>'
             f"<td>{esc(m['layer'] or '—')}</td><td>{len(m['fids'])}</td>"
@@ -992,17 +992,17 @@ def _modules_index_section(datas: list[dict], modules_truncated: bool,
         )
     notes = []
     if modules_truncated:
-        notes.append(f"模块页示前 {MODULE_PAGES_CAP} 个（更多模块未出页，截断）")
+        notes.append(f"showing {MODULE_PAGES_CAP} module pages (more modules not rendered, truncated)")
     if symbols_truncated:
-        notes.append(f"符号页全局上限 {SYMBOL_PAGES_GLOBAL_CAP}（按模块序取满即止，截断）")
-    note_html = f'<p class="meta">{"；".join(notes)}。</p>' if notes else ""
+        notes.append(f"symbol pages capped at {SYMBOL_PAGES_GLOBAL_CAP} (filled in module order, truncated)")
+    note_html = f'<p class="meta">{"; ".join(notes)}.</p>' if notes else ""
     body = (
-        "<p>多级颗粒度下钻：L0 架构 → L1 模块页 → L2 符号页（含源码片段）；"
-        f"本批出 {len(datas)} 个模块页、{symbol_pages} 个符号页。</p>" + note_html
-        + "<table><tr><th>模块</th><th>层</th><th>符号数</th><th>findings</th><th>来源</th></tr>"
+        "<p>Multi-level drill-down: L0 architecture → L1 module pages → L2 symbol pages (with source snippets); "
+        f"this run produced {len(datas)} module pages and {symbol_pages} symbol pages.</p>" + note_html
+        + "<table><tr><th>Module</th><th>Layer</th><th>Symbols</th><th>findings</th><th>Source</th></tr>"
         + "".join(rows) + "</table>"
     )
-    return {"title": "模块页（L1）", "body": body}
+    return {"title": "Module pages (L1)", "body": body}
 
 
 def _findings_index_rows(con: sqlite3.Connection) -> tuple[int, list]:
@@ -1016,27 +1016,27 @@ def _findings_index_rows(con: sqlite3.Connection) -> tuple[int, list]:
 
 
 def _findings_index_section(rows: list, total: int, selected: dict[str, str],
-                            file_links: dict[str, str], link_label: str = "详情页") -> dict:
+                            file_links: dict[str, str], link_label: str = "detail page") -> dict:
     esc = html_mod.escape
     if total == 0:
-        return {"title": "病理 findings 索引", "body": "<p>无 findings。</p>"}
+        return {"title": "Pathology findings index", "body": "<p>No findings.</p>"}
     items = []
     for r in rows:
         fp = str(r["file_path"] or "").replace("\\", "/")
         loc = f"<code>{esc(fp)}:{r['start_line'] or '?'}</code>" if fp else "<code>—</code>"
         link = ""
         if r["anchor_fid"] and r["anchor_fid"] in selected:
-            link = f' → <a href="symbols/{esc(r["anchor_fid"])}.html">符号页</a>'
+            link = f' → <a href="symbols/{esc(r["anchor_fid"])}.html">symbol page</a>'
         elif fp:
             href = file_links.get(fp)
             if href:
                 link = f' → <a href="{esc(href)}">{esc(link_label)}</a>'
         items.append(
             f"<li>{_pathology_badge(r['pathology'])} {esc(r['kind'] or '')} {loc}"
-            f"（source: {esc(r['source'] or '?')}）{link}</li>"
+            f" (source: {esc(r['source'] or '?')}) {link}</li>"
         )
-    note = f'<p class="meta">示前 {len(rows)} / 共 {total} 条（截断）。</p>' if total > len(rows) else ""
-    return {"title": "病理 findings 索引", "body": note + "<ul>" + "".join(items) + "</ul>"}
+    note = f'<p class="meta">Showing {len(rows)} of {total} findings (truncated).</p>' if total > len(rows) else ""
+    return {"title": "Pathology findings index", "body": note + "<ul>" + "".join(items) + "</ul>"}
 
 
 def _chain_section(chain: dict) -> dict:
@@ -1046,20 +1046,20 @@ def _chain_section(chain: dict) -> dict:
     counts = chain["counts"]
     rows = "".join(
         f'<li><a href="chain/{esc(c["entry"])}">{esc(c["module_id"])}</a>'
-        f"（{esc(c['kind'])}，{c['n_files']} 文件 / {c['n_syms']} 符号 / {c['n_dirs']} 目录）</li>"
+        f" ({esc(c['kind'])}, {c['n_files']} files / {c['n_syms']} symbols / {c['n_dirs']} dirs)</li>"
         for c in cards
     )
     body = (
-        '<p>模块交互图链（archify 渲染，静态多页互链）：<a href="chain/index.html">'
-        "chain/index.html</a>；图内单击节点选中、再次单击下钻到代码"
-        "（唯一代码视图 = 整文件源码页 + 符号锚点）。</p>"
-        f'<p class="meta">本批 {counts["modules"]} 模块 / {counts["diagrams"]} 图 / '
-        f'{counts["file_pages"]} 代码页 / 共 {counts["pages"]} 页。</p><ul>{rows}</ul>'
+        '<p>Module interaction chain (archify-rendered, static multi-page links): '
+        '<a href="chain/index.html">chain/index.html</a>; click a node in a diagram to select it, '
+        "click again to drill down to code (the only code view = full-file source page + symbol anchors).</p>"
+        f'<p class="meta">{counts["modules"]} modules / {counts["diagrams"]} diagrams / '
+        f'{counts["file_pages"]} code pages / {counts["pages"]} pages total.</p><ul>{rows}</ul>'
     )
     if chain["notes"]:
         notes = "".join(f"<li>{esc(n)}</li>" for n in chain["notes"])
-        body += f'<p class="meta">注记：</p><ul style="color:#666;font-size:.9rem">{notes}</ul>'
-    return {"title": "模块交互图链", "body": body}
+        body += f'<p class="meta">Notes:</p><ul style="color:#666;font-size:.9rem">{notes}</ul>'
+    return {"title": "Module interaction chain", "body": body}
 
 
 # ----------------------------------------------------------------- report
@@ -1071,7 +1071,7 @@ def _report_html(repo: Path, ir_hash: str, git_head: str, sections: list[dict], 
     esc = html_mod.escape
     parts = [
         "<!DOCTYPE html>",
-        '<html lang="zh">',
+        '<html lang="en">',
         "<head>",
         '<meta charset="utf-8">',
         f"<title>vrp report - {esc(repo.name)}</title>",
@@ -1089,12 +1089,13 @@ def _report_html(repo: Path, ir_hash: str, git_head: str, sections: list[dict], 
         "<body>",
         f"<h1>vrp report - {esc(repo.name)}</h1>",
         f'<p class="meta">facts.git_head: <code>{esc(git_head or "(none)")}</code>'
-        f" | IR sha256: <code>{esc(ir_hash[:16])}...</code> | 数据真值 100% 来自 facts.db</p>",
+        f" | IR sha256: <code>{esc(ir_hash[:16])}...</code> | 100% of data truth comes from facts.db</p>",
         _stale_banner_html(staleness),
-        "<h2>数据层</h2>",
-        "<p>本报告为静态产物（无服务端/无前端构建链）；数据层即 <code>.vrp/facts.db</code>（sqlite 单文件，"
-        "可用 Datasette 直读：<code>datasette .vrp/facts.db</code>）；渲染委托 archify/Mermaid，"
-        "archify 缺失时 Mermaid 源内嵌本页（无网环境显示源码）。</p>",
+        "<h2>Data layer</h2>",
+        "<p>This report is a static artifact (no server / no frontend build chain); the data layer is "
+        "<code>.vrp/facts.db</code> (a single sqlite file, readable directly with Datasette: "
+        "<code>datasette .vrp/facts.db</code>); rendering is delegated to archify/Mermaid, and when "
+        "archify is missing the Mermaid source is embedded in this page (shows source offline).</p>",
     ]
     for section in sections:
         parts.append(f"<h2>{esc(section['title'])}</h2>")
@@ -1124,12 +1125,12 @@ def _verdicts_section(verdicts: list[dict]) -> dict:
             f'<td>{html_mod.escape(str(v.get("failed_gate") or ""))}</td></tr>'
         )
     body = (
-        "<p>T4（improvement）放行需人工 CLI <code>vrp transact --confirm</code>；"
-        f"open verdicts 共 {len(open_items)} 条（T4 待放行 {len(t4)} 条），自动回馈进 dossier evidence。</p>"
+        "<p>T4 (improvement) verdicts require manual release via CLI <code>vrp transact --confirm</code>; "
+        f"{len(open_items)} open verdicts ({len(t4)} T4 pending confirmation), automatically fed back into dossier evidence.</p>"
         + ("<table><tr><th>tid</th><th>type</th><th>status</th><th>failed_gate</th></tr>"
-           + "".join(rows) + "</table>" if rows else "<p>无 open verdicts。</p>")
+           + "".join(rows) + "</table>" if rows else "<p>No open verdicts.</p>")
     )
-    return {"title": "verdict 清单（T4 待放行优先）", "body": body}
+    return {"title": "Verdict list (T4 pending first)", "body": body}
 
 
 def _staleness(repo: Path, facts_head: str) -> dict | None:
@@ -1173,16 +1174,16 @@ def _stale_banner_html(staleness: dict | None) -> str:
         return ""
     esc = html_mod.escape
     if staleness["behind"] is not None:
-        detail = f"落后当前 HEAD 约 {staleness['behind']} 个提交"
+        detail = f"about {staleness['behind']} commit(s) behind current HEAD"
     else:
-        detail = "与当前 HEAD 不一致（非简单落后，可能分叉）"
+        detail = "inconsistent with current HEAD (not a simple lag; possibly diverged)"
     return (
         '<div style="background:#fde8e8;border:2px solid #b3261e;padding:.8rem 1rem;'
         'border-radius:6px;margin:1rem 0">'
-        "<strong>⚠ 陈旧报告</strong>：facts.git_head "
-        f'<code>{esc(staleness["facts_head"][:12])}…</code> {detail}'
-        f'（当前 <code>{esc(staleness["head"][:12])}…</code>）——结论可能过期；'
-        "重跑 <code>vrp run</code> 后 <code>vrp report</code> 刷新。</div>"
+        "<strong>⚠ Stale report</strong>: facts.git_head "
+        f'<code>{esc(staleness["facts_head"][:12])}…</code> {detail} '
+        f'(current <code>{esc(staleness["head"][:12])}…</code>) - conclusions may be outdated; '
+        "re-run <code>vrp run</code> then <code>vrp report</code> to refresh.</div>"
     )
 
 
@@ -1374,25 +1375,25 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         _verdicts_section(verdicts),
         modules_section,
         _findings_index_section(findings_rows, findings_total, selected, file_links,
-                                "文件页" if use_chain else "模块页"),
+                                "file page" if use_chain else "module page"),
         {
-            "title": "架构图（L0）",
-            "body": "<p>archify 渲染缺失时 Mermaid 源如下（本页内嵌，联网渲染）：</p>"
+            "title": "Architecture (L0)",
+            "body": "<p>Mermaid source below for when archify rendering is missing (embedded here, renders online):</p>"
                     f'<pre class="mermaid">\n{html_mod.escape(mmd_arch)}</pre>',
         },
     ]
     for name, ir in seq_irs.items():
         mmd = (out / f"slice-{name}.mmd").read_text(encoding="utf-8")
         sections.append({
-            "title": f"业务线：{name}",
+            "title": f"Slice: {name}",
             "body": f'<pre class="mermaid">\n{html_mod.escape(mmd)}</pre>',
         })
     if archify_html:
         links = "".join(f'<li><a href="{html_mod.escape(h)}">{html_mod.escape(h)}</a></li>' for h in archify_html)
-        sections.insert(1, {"title": "archify 渲染产物", "body": f"<ul>{links}</ul>"})
+        sections.insert(1, {"title": "archify render outputs", "body": f"<ul>{links}</ul>"})
     if degraded_reasons:
         items = "".join(f"<li>{html_mod.escape(r)}</li>" for r in degraded_reasons)
-        sections.append({"title": "降级记录（诚实失败）", "body": f"<ul>{items}</ul><p>降级不阻塞（rc=0）。</p>"})
+        sections.append({"title": "Degradation record (honest failure)", "body": f"<ul>{items}</ul><p>Degradation does not block (rc=0).</p>"})
 
     report_path = out / "report.html"
     report_path.write_text(
@@ -1451,7 +1452,7 @@ def render_slice(repo: Path, slice_id: str) -> dict:
         "participants": len(ir["participants"]),
         "messages": len(ir["messages"]),
         "acts": len(ir.get("segments") or []),
-        "note": "mermaid 源可贴 https://mermaid.live 渲染；分幕 rect 对应 acts",
+        "note": "mermaid source can be pasted into https://mermaid.live to render; act rects correspond to acts",
     }
 
 
@@ -1475,5 +1476,5 @@ def render_verdicts(repo: Path) -> dict:
             {k: v.get(k) for k in ("tid", "type", "status", "verdict_at")}
             for v in verdicts
         ],
-        "note": "T4 放行只能人工 CLI vrp transact --confirm；open 项自动回馈 dossier evidence",
+        "note": "T4 release requires manual CLI vrp transact --confirm; open items are automatically fed back into dossier evidence",
     }

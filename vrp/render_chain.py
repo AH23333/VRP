@@ -268,7 +268,7 @@ def s1_module_dataflow(fids: list[str], rows: dict[str, sqlite3.Row],
         r = rows.get(f)
         if r is not None and r["label"] in ("File", "Module"):
             continue  # File/Module 伪符号与列标签冗余，不进节点
-        by_file[r["file_path"] if r is not None and r["file_path"] else "(漂移)"].append(f)
+        by_file[r["file_path"] if r is not None and r["file_path"] else "(drifted)"].append(f)
     files = sorted(by_file)
     stage_of = {fp: i for i, fp in enumerate(files)}
     deg: dict[str, int] = defaultdict(int)
@@ -295,7 +295,7 @@ def s1_module_dataflow(fids: list[str], rows: dict[str, sqlite3.Row],
             nodes.append({
                 "id": nid,
                 "type": "frontend" if entry else ("database" if hub else "backend"),
-                "label": _fit(r["name"] if r is not None else f"漂移 {f[:8]}", 13),
+                "label": _fit(r["name"] if r is not None else f"drifted {f[:8]}", 13),
                 "sublabel": _fit(f"L{r['start_line']}" if r is not None and r["start_line"] else "", 30),
                 "stage": stage_of[fp], "row": j,
             })
@@ -305,7 +305,7 @@ def s1_module_dataflow(fids: list[str], rows: dict[str, sqlite3.Row],
 
     def file_of(fid: str) -> str:
         r = rows.get(fid)
-        return r["file_path"] if r is not None and r["file_path"] else "(漂移)"
+        return r["file_path"] if r is not None and r["file_path"] else "(drifted)"
 
     inter = []
     seen: set[tuple[str, str]] = set()
@@ -404,10 +404,10 @@ def s1_module_dataflow(fids: list[str], rows: dict[str, sqlite3.Row],
                       if rows.get(a) and rows.get(b)
                       and rows[a]["file_path"] == fp and rows[b]["file_path"] == fp)
         stem = fp.split("/")[-1].rsplit(".", 1)[0]
-        stages.append({"label": _fit(f"{stem}·{n}/{intra_n}边", 17)})
+        stages.append({"label": _fit(f"{stem} · {n}/{intra_n} edges", 17)})
     ir = {
         "schema_version": 1, "diagram_type": "dataflow",
-        "meta": {"title": f"{module_id} 模块 · 列=文件（紧凑）", "output": "s1.html",
+        "meta": {"title": f"{module_id} module · columns=files (compact)", "output": "s1.html",
                  "viewBox": [int(width), int(height)]},
         "layout": {"colGap": col_gap},
         "stages": stages, "nodes": nodes, "flows": flows,
@@ -423,7 +423,7 @@ def s2a_overview(fs_view, module_id: str, title: str):
     files_by_dir, subdirs, agg = fs_view
     all_dirs = sorted({d for ds in subdirs.values() for d in ds})
     total = sum(len(v) for v in files_by_dir.values())
-    nodes: list[dict] = [{"id": "root", "label": f"{title} · {total} 文件"}]
+    nodes: list[dict] = [{"id": "root", "label": f"{title} · {total} files"}]
     clicks: dict[str, str] = {}
     id_of_dir: dict[str, str] = {}
     for i, d in enumerate(all_dirs):
@@ -432,13 +432,13 @@ def s2a_overview(fs_view, module_id: str, title: str):
         nodes.append({
             "id": nid,
             "label": _fit(d.split("/")[-1], 16),
-            "sublabel": f"{agg(d)} 文件",
+            "sublabel": f"{agg(d)} files",
             "parent": id_of_dir.get("/".join(d.split("/")[:-1]), "root"),
         })
         clicks[nid] = dir_page_stem(module_id, d) + ".html"
     ir = {
         "schema_version": 1, "diagram_type": "tree",
-        "meta": {"title": f"{title} 目录总览", "output": "s2a.html"},
+        "meta": {"title": f"{title} directory overview", "output": "s2a.html"},
         "layout": {"direction": "right", "gapX": 32, "gapY": 10,
                    "nodeW": 90, "nodeMaxW": 200},
         "nodes": nodes,
@@ -457,19 +457,19 @@ def build_dir_tree(fs_view, module_id: str, dir_path: str, file_page=None):
     files = files_by_dir.get(dir_path, {})
     nodes: list[dict] = [{
         "id": "root",
-        "label": f"{dir_path.split('/')[-1]} · {agg(dir_path)} 文件",
+        "label": f"{dir_path.split('/')[-1]} · {agg(dir_path)} files",
     }]
     clicks: dict[str, str] = {}
     for i, sd in enumerate(subs):
         nid = f"d{i}"
         # 目录计数并入标签保持单行：sublabel 会把共享 rowH 抬高（41→27），巨列表被放大 27%
-        nodes.append({"id": nid, "label": f"{sd.split('/')[-1]} · {agg(sd)} 文件", "parent": "root"})
+        nodes.append({"id": nid, "label": f"{sd.split('/')[-1]} · {agg(sd)} files", "parent": "root"})
         clicks[nid] = dir_page_stem(module_id, sd) + ".html"
     for j, fname in enumerate(sorted(files)):
         nid = f"f{j}"
         n: dict = {"id": nid, "label": fname, "parent": "root"}
         if len(files[fname]) > 1:
-            n["sublabel"] = f"{len(files[fname])} 符号"
+            n["sublabel"] = f"{len(files[fname])} symbols"
         nodes.append(n)
         if file_page is not None:
             target = file_page(dir_path, fname)
@@ -546,7 +546,7 @@ def inject_chrome(html_path: Path, clicks: dict[str, str],
             "var lbl=document.createElement('span');"
             "lbl.style.cssText='overflow:hidden;text-overflow:ellipsis';"
             "var btn=document.createElement('button');btn.type='button';"
-            "btn.textContent='进入 →';"
+            "btn.textContent='Enter →';"
             "btn.style.cssText='border:0;background:#22d3ee;color:#04121f;"
             "padding:6px 14px;border-radius:999px;font:600 13px system-ui,sans-serif;"
             "cursor:pointer;pointer-events:auto';"
@@ -579,7 +579,7 @@ def inject_chrome(html_path: Path, clicks: dict[str, str],
             "border:1px solid #1e293b;color:#e2e8f0;padding:8px 16px;"
             "border-radius:999px;font:12.5px system-ui,sans-serif;z-index:9998;"
             "box-shadow:0 4px 16px rgba(0,0,0,.4)';"
-            "h.textContent='单击节点选中 · 再次单击或点「进入」下钻';"
+            "h.textContent='Click a node to select · click again (or Enter) to drill down';"
             "document.body.appendChild(h);"
             "sessionStorage.setItem('archifyHint','1');"
             "setTimeout(function(){h.remove()},6000);}}catch(e){}\n"
@@ -647,19 +647,19 @@ def build_file_grid(rows: dict[str, sqlite3.Row], ffids: list[str],
         f = entries[0]
         header.append((f, "frontend", f"L{rows[f]['start_line']}"))
     elif entries:
-        regions.append(("入口", entries, "frontend"))
+        regions.append(("entries", entries, "frontend"))
     if len(dispatch) == 1:
         f = dispatch[0]
         header.append((f, "messagebus",
-                       f"L{rows[f]['start_line']} · 引用{refout[f]}"))
+                       f"L{rows[f]['start_line']} · {refout[f]} refs"))
     elif dispatch:
-        regions.append(("分发", dispatch, "messagebus"))
+        regions.append(("dispatch", dispatch, "messagebus"))
     for tok, mem in families:
         regions.append((f"{tok} · {len(mem)}", mem, "backend"))
     if hubs:
-        regions.append((f"共享枢纽 · {len(hubs)}", hubs, "database"))
+        regions.append((f"shared hubs · {len(hubs)}", hubs, "database"))
     if others:
-        regions.append((f"其他 · {len(others)}", others, "backend"))
+        regions.append((f"others · {len(others)}", others, "backend"))
 
     n_cols = max(3, min(8, round(math.sqrt(len(defs) * 1.5))))
     size = [130, 44]
@@ -683,7 +683,7 @@ def build_file_grid(rows: dict[str, sqlite3.Row], ffids: list[str],
     for label, members, ctype in regions:
         ids = []
         for i, f in enumerate(members):
-            sub = (f"L{rows[f]['start_line']} · {indeg[f]}处被调"
+            sub = (f"L{rows[f]['start_line']} · {indeg[f]} callers"
                    if ctype == "database" else f"L{rows[f]['start_line']}")
             ids.append(add_node(f, ctype, sub, r + i // n_cols, i % n_cols))
         if len(members) >= 2:
@@ -693,7 +693,7 @@ def build_file_grid(rows: dict[str, sqlite3.Row], ffids: list[str],
     fpath = rows[defs[0]]["file_path"].replace("\\", "/") if defs else "?"
     ir = {
         "schema_version": 1, "diagram_type": "architecture",
-        "meta": {"title": f"{fpath} 符号角色", "output": "s3.html"},
+        "meta": {"title": f"{fpath} symbol roles", "output": "s3.html"},
         "layout": {"mode": "grid", "cols": n_cols, "origin": [40, 80],
                    "gapX": 24, "gapY": 18, "cellW": 130, "cellH": 44},
         "components": components,
@@ -779,7 +779,7 @@ _FROM_JS = (
     "<script>(function(){var m=/[?&]from=([A-Za-z0-9-]+)/.exec(location.search);"
     "if(!m)return;var c=document.querySelector('.crumbs');if(!c)return;"
     "var a=document.createElement('a');a.className='cb';a.href=m[1]+'.html';"
-    "a.textContent='\\u2190 返回';c.insertBefore(a,c.firstChild);})();</script>")
+    "a.textContent='\\u2190 Back';c.insertBefore(a,c.firstChild);})();</script>")
 
 
 def _path_ok(fp: str) -> bool:
@@ -808,7 +808,7 @@ def _code_page_doc(title: str, h1: str, meta: str, rows_html: list[str],
     act = (f'<a href="{html.escape(action[0], quote=True)}">'
            f'{html.escape(action[1])} &#8594;</a>' if action else "")
     return (
-        '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         f"<title>{html.escape(title)}</title><style>"
         "body{margin:0;background:#020617;color:#cbd5e1;"
         "font:13px/1.6 system-ui,'Segoe UI',sans-serif}"
@@ -898,9 +898,9 @@ def write_file_page(out_dir: Path, lines: list[str], fpath: str,
 
     def rel_bar(fid: str) -> str:
         secs: list[str] = []
-        for label, ids in (("调用", sindex.callees.get(fid, [])),
-                           ("被调", sindex.callers.get(fid, [])),
-                           ("内含", sindex.children.get(fid, []))):
+        for label, ids in (("calls", sindex.callees.get(fid, [])),
+                           ("called by", sindex.callers.get(fid, [])),
+                           ("contains", sindex.children.get(fid, []))):
             chips: list[str] = []
             seen: set[str] = set()
             for x in ids:
@@ -953,13 +953,13 @@ def write_file_page(out_dir: Path, lines: list[str], fpath: str,
         chips = [f'<a class="chip" href="#{html.escape(sindex.anchor[fid], quote=True)}">'
                  f'{html.escape(str(sindex.rows[fid]["name"]))}</a>'
                  for _a, _b, fid in syms]
-        chips_html = ('<div class="chips"><span class="sec">大纲</span>'
+        chips_html = ('<div class="chips"><span class="sec">Outline</span>'
                       + "".join(chips) + "</div>")
-    meta_bits = [f"L1-L{n_lines} · {len(lines)} 行"]
+    meta_bits = [f"L1-L{n_lines} · {len(lines)} lines"]
     if lines_truncated:
-        meta_bits.append(f"超出 {CHAIN_FILE_LINES_CAP} 行截断")
+        meta_bits.append(f"truncated at {CHAIN_FILE_LINES_CAP} lines")
     if syms:
-        meta_bits.append(f"{len(syms)} 符号")
+        meta_bits.append(f"{len(syms)} symbols")
     if notes:
         meta_bits.extend(notes)
     meta = " · ".join(meta_bits)
@@ -1104,21 +1104,21 @@ def _plan_module(module_id: str, fids: list[str], rows: dict[str, sqlite3.Row],
         dir_pages = set()
     single_real = next(iter(real)) if len(real) == 1 else None
     if have_s1:
-        entry_stem, kind = s1_stem, "数据流"
+        entry_stem, kind = s1_stem, "dataflow"
     elif have_s2a:
-        entry_stem, kind = s2a_stem, "目录总览"
+        entry_stem, kind = s2a_stem, "dir overview"
     elif single_real:
-        entry_stem, kind = grid_stem_of(module_id, single_real), "符号网格"
+        entry_stem, kind = grid_stem_of(module_id, single_real), "symbol grid"
     elif dir_pages:
         entry_stem = dir_page_stem(module_id, sorted(dir_pages)[0])
-        kind = "目录"
+        kind = "directory"
     else:
         # 单目录单文件无子目录（目录页冗余被跳过）→ 入口 = 该文件整文件页
         the_file = next(f for d in sorted(files_by_dir) for f in sorted(files_by_dir[d]))
-        entry_stem, kind = file_page_stem_of(the_file), "源码"
+        entry_stem, kind = file_page_stem_of(the_file), "source"
 
     def base_crumbs() -> list[tuple[str | None, str]]:
-        return [("index.html", "首页"), (entry_stem + ".html", module_id)]
+        return [("index.html", "home"), (entry_stem + ".html", module_id)]
 
     def dir_segs(d: str) -> list[tuple[str | None, str]]:
         """目录路径 → 逐段面包屑（有目录页的段可点，末段由渲染层置当前）。"""
@@ -1138,9 +1138,9 @@ def _plan_module(module_id: str, fids: list[str], rows: dict[str, sqlite3.Row],
     if have_s1:
         ir, id_of = s1_module_dataflow(fids, rows, edges, module_id)
         if len(dir_pages) == 1:
-            act = (dir_page_stem(module_id, next(iter(dir_pages))) + ".html", "目录下钻")
+            act = (dir_page_stem(module_id, next(iter(dir_pages))) + ".html", "drill into dirs")
         elif have_s2a:
-            act = (s2a_stem + ".html", "目录下钻")
+            act = (s2a_stem + ".html", "drill into dirs")
         else:
             act = None
         diagrams.append({"name": s1_stem, "dtype": "dataflow", "ir": ir,
@@ -1151,8 +1151,8 @@ def _plan_module(module_id: str, fids: list[str], rows: dict[str, sqlite3.Row],
     if have_s2a:
         ir2a, clicks2a = s2a_overview(fs_view, module_id, module_id)
         crumbs = (base_crumbs() if entry_stem == s2a_stem
-                  else base_crumbs() + [(None, "目录总览")])
-        act = (s1_stem + ".html", "模块数据流") if have_s1 else None
+                  else base_crumbs() + [(None, "directory overview")])
+        act = (s1_stem + ".html", "module dataflow") if have_s1 else None
         diagrams.append({"name": s2a_stem, "dtype": "tree", "ir": ir2a,
                          "crumbs": crumbs, "action": act, "clicks": clicks2a})
 
@@ -1165,7 +1165,7 @@ def _plan_module(module_id: str, fids: list[str], rows: dict[str, sqlite3.Row],
                 if f"{dd}/{f_}" in real
                 else (file_page_stem_of(f"{dd}/{f_}") + ".html")))
         crumbs = base_crumbs() + dir_segs(d)
-        act = (s1_stem + ".html", "模块数据流") if have_s1 else None
+        act = (s1_stem + ".html", "module dataflow") if have_s1 else None
         diagrams.append({"name": dir_page_stem(module_id, d), "dtype": "tree",
                          "ir": ir, "crumbs": crumbs, "action": act, "clicks": clicks})
 
@@ -1181,7 +1181,7 @@ def _plan_module(module_id: str, fids: list[str], rows: dict[str, sqlite3.Row],
         ir, syms = build_file_grid(rows, rf, ee)
         diagrams.append({"name": gstem, "dtype": "architecture", "ir": ir,
                          "crumbs": base_crumbs() + dir_segs(d_) + [(None, fname)],
-                         "action": (s4f_html, "整文件源码"),
+                          "action": (s4f_html, "full file source"),
                          "fid_clicks": {nid: fid for nid, fid in syms.items()}})
 
     # 文件页清单（Pass2 归属去重后写）：真实文件 → 网格段面包屑；其余 → 纯源码
@@ -1192,7 +1192,7 @@ def _plan_module(module_id: str, fids: list[str], rows: dict[str, sqlite3.Row],
             if fpath in real:
                 gstem = grid_stem_of(module_id, fpath)
                 file_crumbs[fpath] = (base_crumbs() + dir_segs(d_)
-                                      + [(gstem + ".html", fname), (None, "源码")])
+                                      + [(gstem + ".html", fname), (None, "source")])
             else:
                 file_crumbs[fpath] = base_crumbs() + dir_segs(d_) + [(None, fname)]
 
@@ -1248,8 +1248,8 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
             notes.append("structure inactive/empty - module chain skipped")
             return result
         if len(mods) > CHAIN_MODULES_CAP:
-            notes.append(f"模块数 {len(mods)} 超上限 {CHAIN_MODULES_CAP}，"
-                         f"仅链前 {CHAIN_MODULES_CAP} 个（截断）")
+            notes.append(f"module count {len(mods)} over cap {CHAIN_MODULES_CAP}, "
+                         f"only first {CHAIN_MODULES_CAP} chained (truncated)")
             mods = mods[:CHAIN_MODULES_CAP]
         plans = []
         for m in mods:
@@ -1257,11 +1257,11 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
                 continue
             fids = [f for f in m.get("symbol_fids", []) if isinstance(f, str)]
             if not fids:
-                notes.append(f"模块 {m.get('module_id')} 无符号 fid，弃链")
+                notes.append(f"module {m.get('module_id')} has no symbol fids, dropped from chain")
                 continue
             plans.append((str(m["module_id"]), fids))
         if not plans:
-            notes.append("无可链模块")
+            notes.append("no chainable modules")
             return result
         all_fids: list[str] = []
         seen: set[str] = set()
@@ -1289,12 +1289,12 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
         for mid, fids, mod_edges in mod_data:
             plan = _plan_module(mid, fids, rows, mod_edges)
             if plan is None:
-                notes.append(f"模块 {mid} 无文件视图，弃链")
+                notes.append(f"module {mid} has no file view, dropped from chain")
                 continue
             est = len(plan["diagrams"])
             if budget + est > CHAIN_DIAGRAMS_GLOBAL_CAP:
-                notes.append(f"模块 {mid} 需 {est} 图，全站图预算 "
-                             f"{CHAIN_DIAGRAMS_GLOBAL_CAP} 剩 {CHAIN_DIAGRAMS_GLOBAL_CAP - budget}，弃链")
+                notes.append(f"module {mid} needs {est} diagrams, site-wide budget "
+                             f"{CHAIN_DIAGRAMS_GLOBAL_CAP} with {CHAIN_DIAGRAMS_GLOBAL_CAP - budget} left, dropped from chain")
                 continue
             mod_staging = staging / f"m{len(ok_plans)}"
             (mod_staging / "ir").mkdir(parents=True, exist_ok=True)
@@ -1305,14 +1305,14 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
                     failed = err
                     break
             if failed is not None:
-                notes.append(f"模块 {mid} 弃链：{failed}")
+                notes.append(f"module {mid} dropped from chain: {failed}")
                 shutil.rmtree(mod_staging, ignore_errors=True)
                 continue
             budget += est
             ok_plans.append((plan, mod_staging))
 
         if not ok_plans:
-            notes.append("所有模块图渲染失败，模块图链降级")
+            notes.append("all module diagrams failed to render, module chain degraded")
             return result
 
         # ---- Pass 2：文件页归属 + 预读源码 + 全局符号索引 + 落盘
@@ -1328,7 +1328,7 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
                     continue
                 if not _path_ok(fpath):
                     lines: list[str] = []
-                    fnote = ["路径被守卫拒绝（绝对/.. /synthetic）"]
+                    fnote = ["path rejected by guard (absolute / .. / synthetic)"]
                 else:
                     try:
                         lines = (repo / fpath).read_text(
@@ -1336,7 +1336,7 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
                         fnote = []
                     except OSError:
                         lines = []
-                        fnote = ["文件缺失或不可读"]
+                        fnote = ["file missing or unreadable"]
                 written[fpath] = lines
                 file_notes[fpath] = fnote
                 file_crumbs_of[fpath] = plan["file_crumbs"][fpath]
@@ -1358,8 +1358,8 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
             del file_crumbs_of[fpath]
             del file_owner[fpath]
         if dropped_files:
-            notes.append(f"{len(dropped_files)} 文件超出每模块文件页上限 "
-                         f"{CHAIN_FILE_PAGES_CAP}，不出代码页（截断）")
+            notes.append(f"{len(dropped_files)} files over per-module file page cap "
+                         f"{CHAIN_FILE_PAGES_CAP}, no code pages emitted (truncated)")
 
         fid_ok: set[str] = set()
         for fpath, lines in written.items():
@@ -1438,11 +1438,11 @@ def write_index(out_dir: Path, cards: list[dict]) -> None:
             f'<a class="card" href="{html.escape(c["entry"], quote=True)}">'
             f'<div class="k">{html.escape(c["kind"])}</div>'
             f'<h2>{html.escape(c["module_id"])}</h2>'
-            f'<div class="s">{c["n_files"]} 文件 · {c["n_syms"]} 符号 · {c["n_dirs"]} 目录</div>'
+            f'<div class="s">{c["n_files"]} files · {c["n_syms"]} symbols · {c["n_dirs"]} dirs</div>'
             "</a>")
     doc = (
-        '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
-        "<title>模块交互图链 · 索引</title><style>"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        "<title>Module interaction chain · index</title><style>"
         "body{margin:0;background:#020617;color:#e2e8f0;"
         "font:14px/1.6 system-ui,'Segoe UI',sans-serif;padding:48px 24px}"
         ".wrap{max-width:1080px;margin:0 auto}"
@@ -1459,9 +1459,9 @@ def write_index(out_dir: Path, cards: list[dict]) -> None:
         "h2{margin:0 0 6px;font:600 16px system-ui,sans-serif;color:#f1f5f9}"
         ".s{color:#94a3b8;font:12px system-ui,sans-serif}"
         "</style></head><body><div class=\"wrap\">"
-        "<h1>模块交互图链</h1>"
-        f'<div class="sub">{len(cards)} 模块 · '
-        f'{sum(c["n_files"] for c in cards)} 文件 · '
-        "单击模块进入图链，图内单击节点选中、再次单击下钻到代码</div>"
+        "<h1>Module interaction chain</h1>"
+        f'<div class="sub">{len(cards)} modules · '
+        f'{sum(c["n_files"] for c in cards)} files · '
+        "click a module to enter its chain; click a node to select, click again to drill down to code</div>"
         '<div class="grid">' + "".join(items) + "</div></div></body></html>")
     (out_dir / "index.html").write_text(doc, encoding="utf-8")

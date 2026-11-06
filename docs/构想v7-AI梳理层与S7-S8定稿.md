@@ -480,9 +480,31 @@ verify/unwind（pnpm workspace，packages/core 41 文件 + packages/dashboard 29
 - 探针 work/probe_r6_*.py（facts 复验/长跑侦察/陈旧 fid 溯源）+ work/agent_longrun.py（长跑主脚本）+ work/agent_longrun_result.json（运行结果）
 - 提交链（本地未 push）：37d1c6f（1/2）→bb7109d（1b）→f83a4b3（1c）→4b79292（T2）→96fca8f（T4）
 
-## 11. R7' 批次增补（预留位，收口待补）
+## 11. R7' 批次增补（2026-11-06 收口：多级颗粒度 + 交互图链 + 英文化）
 
-R7'（渲染层）已实现并提交（7f5e743 多级颗粒度链 / fa6213f archify 交互图链），本节收口记录暂缓——待英文化整改与 R7' 收口文档一并补写（见交接文档暂缓队列）。
+### 11.1 R7'(1) 多级颗粒度 L1/L2（7f5e743）
+
+- **病根**：nav 有 L1/L2 分级数据但渲染 IR 只有三种顶层摘要，分层数据与可视化断链（用户反馈；question 拍板：静态多页 + 主链优先）。
+- **落地**：L1 模块页 `modules/m{i}-{arch_id}.html`（模块内符号图=内嵌 Mermaid 零子进程——N 页×子进程性能不可行，archify 保持 L0 专用 + 符号表度 top + findings 表）；L2 符号页 `symbols/{fid}.html`（源码片段 ±3 行 cap 80 行号对齐 + 邻域图 + 出入邻居 + 所属业务线 + 病理徽章 P1-P9 classDef）；report→modules→symbols 全相对路径互链 + 面包屑回链。
+- **同源与诚实**：模块来源与 L0 IR 同源（structure active 优先层序排序，目录聚合兜底）；符号页选择=每模块度 top 20 ∪ 锚定 findings fids，全局 cap 300 截断诚实标注；路径守卫（战果 #59/#60 同族：绝对/含 `:`/`..`/尖括号 synthetic 全拒）；modules-index IR 进 ir_sha256（复现契约）但不进 archify 循环；无时间戳 + 全链确定性排序，两渲字节级全等。
+- **验证**：快测 +8（主链贯通/互链完整性/目录兜底/cap 诚实/代码片段变体/病理徽章/模块图/复现性）；dogfood vrp 自仓 5 模块页+118 符号页 5.2s、tsa 2+40 页 2.0s（findings 1154 截断标注诚实）。
+
+### 11.2 R7'(2) 模块交互图链 chain/（fa6213f）
+
+- **vrp/render_chain.py**（探针 15 生产化移植）：三段式原子提交——Pass1 逐模块规划+暂存渲染（任一图失败整模块弃链）、Pass2 文件页归属（首个成功模块）+预读源码+全局 SymbolIndex（fid_ok 过滤：只收录「文件页已落盘且起始行≤截断帽」的符号，chips/clicks 天然不指向缺失页/锚点）、Pass3 index 总入口；ok=False 整链清理无半成品。
+- **入口分流（通用规则零特调）**：2-8 文件真实符号→模块 dataflow（列=文件）；多目录→目录总览树；单文件→符号角色网格（角色全由图形状推导：入口/分发/家族/枢纽/其他）；目录页/整文件页兜底（修复探针单目录单文件无真实符号入口断链）。交互铁律：单击选中+底部浮板、再击/按钮/回车进入、`?from=` 代码页「← Back」、sessionStorage 一次性提示。
+- **render.py 集成**：find_archify_mjs 加 vendored 路径（archify vendored 入库零上游改动）；render_report 分流——链成功则 L1/L2 不出、chain-index 进 ir_sha256、findings 链接指向文件页；链意外崩溃 broad except 降级 L1/L2 不阻塞报告。
+- **验证**：快测 +6（happy path/链接锚点 href+M 双源完整性/无 archify/假 mjs 降级/路径守卫/复现性）；dogfood vrp 27 页、tsa 364 页 BFS 全可达断链 0，全产物两渲字节级全等，tsa 全报告 20s。
+
+### 11.3 渲染英文化整改（暂缓队列①，本批收口）
+
+- **原则（定案）**：工具生成的 chrome/标题/注记全英文；数据本身（模块名/符号名/AI 梳理职责）保持原样；代码 docstring/注释保持中文。
+- **范围**：render.py（L1/L2 页/report.html/staleness 横幅/降级注记/MCP note）+ render_chain.py（chain/ 全部页面 chrome/交互 JS/面包屑/index 卡片/IR meta.title 图内标题）+ session.py（session report HTML chrome）；`<html lang>` zh→en；tests 断言同步（陈旧横幅/目录兜底/截断标注）。
+- **判定边界**：chain 卡片 kind 标签、目录聚合兜底 responsibility 等工具生成串→英文；「幕一」等测试 fixture acts 名是数据→不动；快测 430 绿复验。
+
+### 11.4 踩坑对账
+
+R7' 渲染坑由 **#83**（archify validate「schema 不报但渲染炸/报」双层约束四坑，R3' 期入册）覆盖——R7' 复用 `_arch_id`/`_fit_label`/`_layout_components` 清洗层与 meta.output/evidence 契约；R7'(1)/(2) 批次无新增独立坑入册，开发期坑（单目录单文件入口断链、sublabel 抬共享行高 41→27 巨列表放大 27%、pos/size 渲染期必需）均当批修复并记于提交信息与代码注释。
 
 ## 12. F 批次增补（2026-11-06，curate 漂移治理）
 
