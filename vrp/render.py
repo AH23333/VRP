@@ -52,6 +52,26 @@ SNIPPET_CONTEXT = 3
 SNIPPET_MAX_LINES = 80
 SYMBOL_PAGE_SLICES_CAP = 10
 
+# 病理码人话图例（用户产物翻译层：P 码 → vibe 开发者可读的一句话；
+# 覆盖 S2 检测器全集，体检报告与引导节共用）
+PATHOLOGY_LEGEND: dict[str, str] = {
+    "P1": "debug residue - leftover prints, breakpoints or debug switches that should not ship",
+    "P2": "near-duplicate code - almost identical blocks in different places; candidates to unify",
+    "P3": "prototype debris - commented-out or abandoned experiment code",
+    "P4": "dead code / dependency bloat - unused symbols, unreachable code or needless dependencies",
+    "P8": "tautological tests - tests whose assertions can hardly fail",
+    "P9": "layer violation - a dependency that goes against the declared layer rules",
+}
+
+# finding 来源的置信注记（诚实分级：启发式候选 ≠ 已验证死码）
+FINDING_SOURCE_NOTES: dict[str, str] = {
+    "s2-vulture": "heuristic candidates - verify before deleting",
+    "s2-deadcode": "usage-verified dead code",
+    "s2-astgrep": "structural pattern match",
+    "s2-jscpd": "token-level structural similarity",
+    "etl": "derived from the symbol/call graph",
+}
+
 _MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
 
 _ARCHIFY_MJS_REL = ("archify", "bin", "archify.mjs")
@@ -1036,7 +1056,10 @@ def _findings_index_section(rows: list, total: int, selected: dict[str, str],
             f" (source: {esc(r['source'] or '?')}) {link}</li>"
         )
     note = f'<p class="meta">Showing {len(rows)} of {total} findings (truncated).</p>' if total > len(rows) else ""
-    return {"title": "Pathology findings index", "body": note + "<ul>" + "".join(items) + "</ul>"}
+    # 全清单降权：折叠进 details（体检报告是用户主视图，裸清单供审计下钻）
+    return {"title": "Pathology findings index",
+            "body": note + "<details><summary>Full findings index - click to expand</summary>"
+            "<ul>" + "".join(items) + "</ul></details>"}
 
 
 def _chain_section(chain: dict) -> dict:
@@ -1065,6 +1088,202 @@ def _chain_section(chain: dict) -> dict:
 # ----------------------------------------------------------------- report
 
 
+def _active_structure_payload(con: sqlite3.Connection) -> dict | None:
+    """structure active 载荷（overview 节数据源；无/坏 → None）。"""
+    if not _has_table(con, "structure"):
+        return None
+    row = con.execute(
+        "SELECT payload_json FROM structure WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _how_to_read_section() -> dict:
+    """引导节：阅读路径 + P 码图例 + 术语速查（小白第一屏，用户产物定位）。"""
+    esc = html_mod.escape
+    legend_rows = "".join(
+        f"<tr><td><b>{esc(code)}</b></td><td>{esc(desc)}</td></tr>"
+        for code, desc in PATHOLOGY_LEGEND.items()
+    )
+    body = (
+        "<p>This report is how the AI has organized and health-checked your repository. "
+        "Read it in this order:</p>"
+        "<ol>"
+        "<li><b>Project overview</b> - your repo as the AI curated it: modules, layers, "
+        "one-line responsibilities.</li>"
+        "<li><b>Architecture</b> - the same structure as a diagram.</li>"
+        "<li><b>Module interaction chain</b> - click into a module, follow the data flow, "
+        "drill down to real code lines.</li>"
+        "<li><b>Pathology checkup</b> - what the detectors found, in plain language, "
+        "worst first.</li>"
+        "<li><b>Refactor decisions (verdicts)</b> - the audit trail of applied/rejected "
+        "refactors, including anything awaiting your confirmation.</li>"
+        "</ol>"
+        '<details><summary>Pathology codes (P-codes) legend</summary>'
+        f"<table><tr><th>code</th><th>meaning</th></tr>{legend_rows}</table>"
+        "<p class='meta'>P-codes classify what kind of problem a finding is; "
+        "the checkup section below explains each one where it appears.</p></details>"
+        "<details><summary>Glossary</summary><ul>"
+        "<li><b>module</b> - a group of symbols the AI curated as one cohesive unit "
+        "(one card in the chain index).</li>"
+        "<li><b>layer</b> - a declared dependency tier; lower layers should not import "
+        "higher ones.</li>"
+        "<li><b>slice</b> - one business line end-to-end: a chain of steps across modules, "
+        "read as a sequence diagram.</li>"
+        "<li><b>verdict</b> - the receipt of one refactor transaction: what was changed, "
+        "which gates passed/failed, and its current status.</li>"
+        "<li><b>facts.db</b> - the single source of truth (one sqlite file); "
+        "this report is a static, reproducible view of it.</li>"
+        "</ul></details>"
+    )
+    return {"title": "How to read this report", "body": body}
+
+
+def _overview_section(payload: dict | None, n_slices: int, n_verdicts: int) -> dict:
+    """项目总览：AI 梳理产出主呈现（模块职责表 + 层次规则）。
+
+    无 curated structure 时诚实降级（overview 缺席说明），不编造。
+    """
+    esc = html_mod.escape
+    if not payload or not payload.get("modules"):
+        body = (
+            "<p>No curated structure yet - the overview appears once the AI curation "
+            "(structure payload) is stored; until then the Architecture section falls back "
+            "to directory aggregation.</p>"
+        )
+        return {"title": "Project overview", "body": body}
+    layers = [l for l in payload.get("layers", []) if isinstance(l, dict) and l.get("name")]
+    mods = [m for m in payload.get("modules", []) if isinstance(m, dict) and m.get("module_id")]
+    layer_order = {l["name"]: i for i, l in enumerate(layers)}
+    ordered = sorted(mods, key=lambda m: (layer_order.get(m.get("layer", ""), len(layers)),
+                                          str(m["module_id"])))
+    rows = "".join(
+        "<tr>"
+        f"<td>{esc(str(m['module_id']))}</td>"
+        f"<td>{esc(str(m.get('layer') or '—'))}</td>"
+        f"<td>{esc(str(m.get('responsibility') or '—'))}</td>"
+        f"<td>{len([f for f in m.get('symbol_fids', []) if isinstance(f, str)])}</td>"
+        "</tr>"
+        for m in ordered
+    )
+    rules = "".join(
+        f"<li><b>{esc(l['name'])}</b> may depend on: "
+        + (esc(", ".join(d for d in l.get("may_depend_on", []) if isinstance(d, str)))
+           or "<i>(nothing - it is a foundation layer)</i>")
+        + "</li>"
+        for l in layers
+    )
+    body = (
+        f"<p>{len(mods)} modules across {len(layers)} layers"
+        + (f", {n_slices} business slice(s), {n_verdicts} refactor verdict(s)" if n_slices or n_verdicts else "")
+        + ". Each module is one unit the AI curated from your code; "
+        "the responsibility column is the AI's one-line summary of what it does.</p>"
+        f"<table><tr><th>Module</th><th>Layer</th><th>Responsibility (AI-curated)</th>"
+        f"<th>Symbols</th></tr>{rows}</table>"
+        + (f"<h3>Layer rules</h3><ul>{rules}</ul>" if rules else "")
+        + "<p class='meta'>Open the module interaction chain to browse any module in depth.</p>"
+    )
+    return {"title": "Project overview", "body": body}
+
+
+def _pathology_agg(con: sqlite3.Connection) -> tuple[list, dict, dict]:
+    """体检聚合：per code 计数 / per code+source 细分 / per code top 文件。
+
+    三查全 GROUP BY（SQLite 侧聚合，大仓 findings 万级行不落 Python 循环）。
+    """
+    per_code = con.execute(
+        "SELECT pathology, COUNT(*) AS c FROM findings GROUP BY pathology ORDER BY c DESC, pathology"
+    ).fetchall()
+    per_source: dict[str, list] = {}
+    for r in con.execute(
+        "SELECT pathology, source, COUNT(*) AS c FROM findings"
+        " GROUP BY pathology, source ORDER BY pathology, c DESC, source"
+    ):
+        per_source.setdefault(str(r["pathology"]), []).append(r)
+    top_files: dict[str, list] = {}
+    for r in con.execute(
+        "SELECT pathology, file_path, COUNT(*) AS c FROM findings"
+        " WHERE file_path != '' GROUP BY pathology, file_path"
+        " ORDER BY pathology, c DESC, file_path"
+    ):
+        bucket = top_files.setdefault(str(r["pathology"]), [])
+        if len(bucket) < 3:  # 每码 top 3 文件
+            bucket.append(r)
+    return per_code, per_source, top_files
+
+
+def _pathology_checkup_section(per_code: list, per_source: dict, top_files: dict,
+                               file_links: dict[str, str],
+                               link_label: str = "file page") -> dict:
+    """病理体检报告：S 阶段 findings 的用户语言翻译层。
+
+    每码 = 人话定义 + 计数 + 来源细分（启发式来源诚实标注）+ top 文件
+    （可点进代码页核对）——让 vibe 开发者看懂"项目哪里有病、有多重、
+    证据在哪"，而不是 969 条 P 码裸清单。
+    """
+    esc = html_mod.escape
+    if not per_code:
+        return {"title": "Pathology checkup", "body": (
+            "<p>No findings - the detectors found none of the known vibe-coding "
+            "pathologies in this repository.</p>")}
+    parts = [
+        "<p>Counts come straight from the findings table in facts.db. Sources marked as "
+        "<i>heuristic</i> produce candidates, not verdicts - always open the file and "
+        "confirm before acting on them.</p>"
+    ]
+    for r in per_code:
+        code = str(r["pathology"])
+        human = PATHOLOGY_LEGEND.get(code, "unknown pathology code")
+        parts.append(f"<h3>{esc(code)} - {esc(human)}</h3>")
+        src_bits = []
+        for sr in per_source.get(code, []):
+            src = str(sr["source"] or "?")
+            note = FINDING_SOURCE_NOTES.get(src)
+            label = f"{esc(src)}: {sr['c']}" + (f" ({esc(note)})" if note else "")
+            src_bits.append(label)
+        parts.append(f"<p><b>{r['c']} finding(s)</b>"
+                     + (f" - {'; '.join(src_bits)}" if src_bits else "") + "</p>")
+        files = top_files.get(code, [])
+        if files:
+            lis = []
+            for fr in files:
+                fp = str(fr["file_path"]).replace("\\", "/")
+                href = file_links.get(fp)
+                link = (f'<a href="{esc(href)}">{esc(fp)}</a>' if href
+                        else f"<code>{esc(fp)}</code>")
+                lis.append(f"<li>{link}: {fr['c']} finding(s) → {esc(link_label)}</li>")
+            parts.append("<ul>" + "".join(lis) + "</ul>")
+    return {"title": "Pathology checkup", "body": "".join(parts)}
+
+
+def _deep_data_section(deep_links: list[str], archify_html: list[str],
+                       degraded_reasons: list[str]) -> dict:
+    """深层数据节（AI 材料/审计面）：IR/SARIF/Datasette/降级记录归拢折叠——
+    供 AI agent 与审计者下钻，不占 vibe 开发者主视觉。"""
+    esc = html_mod.escape
+    links = "".join(f'<li><a href="{esc(h)}">{esc(h)}</a></li>' for h in deep_links)
+    arch = "".join(f"<li>{esc(h)}</li>" for h in archify_html)
+    deg = "".join(f"<li>{esc(r)}</li>" for r in degraded_reasons)
+    body = (
+        "<details><summary>Deep data (for AI agents & auditing) - click to expand</summary>"
+        "<p>The data layer is <code>.vrp/facts.db</code> (a single sqlite file, readable "
+        "directly with Datasette: <code>datasette .vrp/facts.db</code>); this report is a "
+        "static, reproducible view of it. Raw machine-readable artifacts:</p>"
+        f"<ul>{links}</ul>"
+        + (f"<p>archify render outputs: <ul>{arch}</ul></p>" if arch else "")
+        + ("<p>Degradation record (honest failure, does not block rc=0):"
+           f"<ul>{deg}</ul></p>" if deg else "")
+        + "</details>"
+    )
+    return {"title": "Deep data (for AI agents & auditing)", "body": body}
+
+
 def _report_html(repo: Path, ir_hash: str, git_head: str, sections: list[dict], staleness: dict | None = None) -> str:
     """静态目录页：数据层说明 + 陈旧横幅 + T4/open 清单 + 产物链接；无时间戳保字节级复现
     （陈旧横幅随渲染时仓 HEAD 变化，是复现契约的有意例外——见 _stale_banner_html）。"""
@@ -1091,11 +1310,6 @@ def _report_html(repo: Path, ir_hash: str, git_head: str, sections: list[dict], 
         f'<p class="meta">facts.git_head: <code>{esc(git_head or "(none)")}</code>'
         f" | IR sha256: <code>{esc(ir_hash[:16])}...</code> | 100% of data truth comes from facts.db</p>",
         _stale_banner_html(staleness),
-        "<h2>Data layer</h2>",
-        "<p>This report is a static artifact (no server / no frontend build chain); the data layer is "
-        "<code>.vrp/facts.db</code> (a single sqlite file, readable directly with Datasette: "
-        "<code>datasette .vrp/facts.db</code>); rendering is delegated to archify/Mermaid, and when "
-        "archify is missing the Mermaid source is embedded in this page (shows source offline).</p>",
     ]
     for section in sections:
         parts.append(f"<h2>{esc(section['title'])}</h2>")
@@ -1125,7 +1339,10 @@ def _verdicts_section(verdicts: list[dict]) -> dict:
             f'<td>{html_mod.escape(str(v.get("failed_gate") or ""))}</td></tr>'
         )
     body = (
-        "<p>T4 (improvement) verdicts require manual release via CLI <code>vrp transact --confirm</code>; "
+        "<p>Every refactor attempt through the pipeline leaves a verdict: what was changed, "
+        "which gates passed or failed, and whether it was committed, rolled back, or is "
+        "waiting on you. T4 (improvement) verdicts require manual release via CLI "
+        "<code>vrp transact --confirm</code>; "
         f"{len(open_items)} open verdicts ({len(t4)} T4 pending confirmation), automatically fed back into dossier evidence.</p>"
         + ("<table><tr><th>tid</th><th>type</th><th>status</th><th>failed_gate</th></tr>"
            + "".join(rows) + "</table>" if rows else "<p>No open verdicts.</p>")
@@ -1254,6 +1471,9 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
             symbol_datas = [_symbol_page_data(repo, con, fid, selected[fid]) for fid in sorted(selected)]
             page_to_module_id = {md["page_file"]: md["module"]["module_id"] for md in module_datas}
         findings_total, findings_rows = _findings_index_rows(con)
+        # 用户产物翻译层原料（con 存活期收完）：AI 梳理载荷 + 病理体检聚合
+        structure_payload = _active_structure_payload(con)
+        path_per_code, path_per_source, path_top_files = _pathology_agg(con)
     finally:
         con.close()
 
@@ -1280,7 +1500,10 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
             "kind": "chain-index",
             "modules": [
                 {"module_id": c["module_id"], "entry": c["entry"], "kind": c["kind"],
-                 "n_files": c["n_files"], "n_syms": c["n_syms"], "n_dirs": c["n_dirs"]}
+                 "n_files": c["n_files"], "n_syms": c["n_syms"], "n_dirs": c["n_dirs"],
+                 "responsibility": c.get("responsibility", ""),
+                 "layer": c.get("layer", ""),
+                 "depends_on": c.get("depends_on", [])}
                 for c in chain["cards"]
             ],
             "counts": chain["counts"],
@@ -1371,29 +1594,45 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         modules_section = _chain_section(chain)
     else:
         modules_section = _modules_index_section(module_datas, modules_truncated, len(symbol_datas), symbols_truncated)
+    # 用户产物信息架构：引导 → 总览（AI 梳理）→ 模块链 → 架构 → 体检 →
+    # findings 全清单（折叠）→ 重构决定 → 业务线 → 深层数据（折叠）
+    esc = html_mod.escape
+    arch_link = (f'<a href="html/architecture.html">html/architecture.html</a>'
+                 if "html/architecture.html" in archify_html else "")
+    timeline_link = ('<p class="meta">Visual timeline of all verdicts: '
+                     '<a href="html/timeline.html">html/timeline.html</a></p>'
+                     if "html/timeline.html" in archify_html else "")
     sections = [
-        _verdicts_section(verdicts),
+        _how_to_read_section(),
+        _overview_section(structure_payload, len(seq_irs), len(verdicts)),
         modules_section,
-        _findings_index_section(findings_rows, findings_total, selected, file_links,
-                                "file page" if use_chain else "module page"),
         {
             "title": "Architecture (L0)",
-            "body": "<p>Mermaid source below for when archify rendering is missing (embedded here, renders online):</p>"
-                    f'<pre class="mermaid">\n{html_mod.escape(mmd_arch)}</pre>',
+            "body": ("<p>The same structure as a diagram."
+                     + (f" Rendered view: {arch_link}." if arch_link else "")
+                     + " Mermaid source below renders online if archify rendering is missing:</p>"
+                     + f'<pre class="mermaid">\n{esc(mmd_arch)}</pre>'),
         },
+        _pathology_checkup_section(path_per_code, path_per_source, path_top_files,
+                                   file_links, "file page" if use_chain else "module page"),
+        _findings_index_section(findings_rows, findings_total, selected, file_links,
+                                "file page" if use_chain else "module page"),
+        _verdicts_section(verdicts),
     ]
+    sections[-1] = {**sections[-1], "body": sections[-1]["body"] + timeline_link}
     for name, ir in seq_irs.items():
         mmd = (out / f"slice-{name}.mmd").read_text(encoding="utf-8")
+        rendered = (f' Rendered view: <a href="html/slice-{esc(name)}.html">'
+                    f'html/slice-{esc(name)}.html</a>.'
+                    if f"html/slice-{name}.html" in archify_html else "")
         sections.append({
             "title": f"Slice: {name}",
-            "body": f'<pre class="mermaid">\n{html_mod.escape(mmd)}</pre>',
+            "body": (f"<p>One business line end-to-end.{rendered}</p>"
+                     + f'<pre class="mermaid">\n{esc(mmd)}</pre>'),
         })
-    if archify_html:
-        links = "".join(f'<li><a href="{html_mod.escape(h)}">{html_mod.escape(h)}</a></li>' for h in archify_html)
-        sections.insert(1, {"title": "archify render outputs", "body": f"<ul>{links}</ul>"})
-    if degraded_reasons:
-        items = "".join(f"<li>{html_mod.escape(r)}</li>" for r in degraded_reasons)
-        sections.append({"title": "Degradation record (honest failure)", "body": f"<ul>{items}</ul><p>Degradation does not block (rc=0).</p>"})
+    deep_links = [f"ir/{n}.json" for n in irs] + [
+        f"ir/{'chain-index' if use_chain else 'modules-index'}.json", "findings.sarif"]
+    sections.append(_deep_data_section(deep_links, archify_html, degraded_reasons))
 
     report_path = out / "report.html"
     report_path.write_text(

@@ -138,9 +138,13 @@ def _norm(fp: str) -> str:
     return str(fp).replace("\\", "/")
 
 
-def _load_structure_modules(con: sqlite3.Connection) -> list[dict] | None:
-    """structure active 模块清单（模块交互图链仅源自 curated structure；
-    无 structure/无 active/空 modules → None（调用方降级 L1/L2）。"""
+def _load_structure(con: sqlite3.Connection) -> tuple[list[dict], list[dict]] | None:
+    """structure active (modules, layers)（模块交互图链仅源自 curated structure；
+    无 structure/无 active/空 modules → None（调用方降级 L1/L2））。
+
+    返回 layers 一并透出（index 按层序排序/层徽标）；模块 dict 自带
+    responsibility/layer 等 AI 梳理字段，调用方负责透传到用户产物。
+    """
     row = con.execute(
         "SELECT payload_json FROM structure WHERE status = 'active' ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -153,7 +157,9 @@ def _load_structure_modules(con: sqlite3.Connection) -> list[dict] | None:
     mods = payload.get("modules") if isinstance(payload, dict) else None
     if not mods:
         return None
-    return mods
+    layers = [l for l in (payload.get("layers") if isinstance(payload, dict) else []) or []
+              if isinstance(l, dict) and l.get("name")]
+    return mods, layers
 
 
 def _load_rows_edges(con: sqlite3.Connection, all_fids: list[str]
@@ -1243,10 +1249,11 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
     con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        mods = _load_structure_modules(con)
-        if mods is None:
+        structure = _load_structure(con)
+        if structure is None:
             notes.append("structure inactive/empty - module chain skipped")
             return result
+        mods, layers = structure
         if len(mods) > CHAIN_MODULES_CAP:
             notes.append(f"module count {len(mods)} over cap {CHAIN_MODULES_CAP}, "
                          f"only first {CHAIN_MODULES_CAP} chained (truncated)")
@@ -1259,23 +1266,31 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
             if not fids:
                 notes.append(f"module {m.get('module_id')} has no symbol fids, dropped from chain")
                 continue
-            plans.append((str(m["module_id"]), fids))
+            plans.append((str(m["module_id"]), fids,
+                          str(m.get("responsibility") or ""), str(m.get("layer") or "")))
         if not plans:
             notes.append("no chainable modules")
             return result
         all_fids: list[str] = []
         seen: set[str] = set()
-        for _mid, fids in plans:
+        for _mid, fids, _resp, _layer in plans:
             for f in fids:
                 if f not in seen:
                     seen.add(f)
                     all_fids.append(f)
         rows, edges = _load_rows_edges(con, all_fids)
         mod_data = []
-        for mid, fids in plans:
+        for mid, fids, resp, layer in plans:
             fset = set(fids)
             mod_edges = [(a, b, t) for a, b, t in edges if a in fset and b in fset]
-            mod_data.append((mid, fids, mod_edges))
+            mod_data.append((mid, fids, mod_edges, resp, layer))
+        # 模块间依赖（index 卡片 "depends on"）：全局 edges 跨模块聚合
+        fid_to_mid = {f: mid for mid, fids, _e, _r, _l in mod_data for f in fids}
+        cross_deps: dict[str, set[str]] = defaultdict(set)
+        for a, b, _t in edges:
+            ma, mb = fid_to_mid.get(a), fid_to_mid.get(b)
+            if ma is not None and mb is not None and ma != mb:
+                cross_deps[ma].add(mb)
     finally:
         con.close()
 
@@ -1286,7 +1301,7 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
     try:
         # ---- Pass 1：规划 + 逐模块渲染（模块原子性：任一图失败整模块弃链）
         budget = 0
-        for mid, fids, mod_edges in mod_data:
+        for mid, fids, mod_edges, _resp, _layer in mod_data:
             plan = _plan_module(mid, fids, rows, mod_edges)
             if plan is None:
                 notes.append(f"module {mid} has no file view, dropped from chain")
@@ -1400,6 +1415,7 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
             shutil.rmtree(mod_staging, ignore_errors=True)
 
         # ---- Pass 3：index 总入口
+        meta_of = {mid: (resp, layer) for mid, _fids, _edges, resp, layer in mod_data}
         cards = [{
             "module_id": plan["module_id"],
             "entry": plan["entry_stem"] + ".html",
@@ -1407,8 +1423,11 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
             "n_files": plan["n_files"],
             "n_syms": plan["n_syms"],
             "n_dirs": plan["n_dirs"],
+            "responsibility": meta_of[plan["module_id"]][0],
+            "layer": meta_of[plan["module_id"]][1],
+            "depends_on": sorted(cross_deps.get(plan["module_id"], ())),
         } for plan, _stg in ok_plans]
-        write_index(out_chain, cards)
+        write_index(out_chain, cards, layers)
         n_pages += 1
 
         result.update({
@@ -1430,15 +1449,32 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def write_index(out_dir: Path, cards: list[dict]) -> None:
-    """总入口 index.html：archify 令牌 + 模块卡片（名/类型/规模/入口）。"""
+def write_index(out_dir: Path, cards: list[dict], layers: list[dict] | None = None) -> None:
+    """总入口 index.html：archify 令牌 + 模块卡片。
+
+    用户产物定位（AI 梳理呈现）：卡片显示 AI 梳理职责一句话（responsibility）
+    + 层徽标（layer）+ 模块间依赖（depends_on），按层序（layers 数组序，
+    未知层排最后）排序——vibe 开发者第一眼看到"每块是什么、放哪层、依赖谁"。
+    """
+    layer_names = [l["name"] for l in (layers or []) if isinstance(l, dict) and l.get("name")]
+    rank = {name: i for i, name in enumerate(layer_names)}
+    ordered = sorted(cards, key=lambda c: (rank.get(c.get("layer", ""), len(rank)),
+                                           str(c.get("module_id", ""))))
     items = []
-    for c in cards:
+    for c in ordered:
+        resp = str(c.get("responsibility") or "")
+        resp_html = f'<div class="r">{html.escape(resp)}</div>' if resp else ""
+        layer = str(c.get("layer") or "")
+        lay_html = f'<span class="lay">{html.escape(layer)}</span>' if layer else ""
+        deps = [d for d in c.get("depends_on", []) if d != c.get("module_id")]
+        deps_html = f'<div class="d">depends on: {html.escape(", ".join(deps))}</div>' if deps else ""
         items.append(
             f'<a class="card" href="{html.escape(c["entry"], quote=True)}">'
-            f'<div class="k">{html.escape(c["kind"])}</div>'
+            f'<div class="k">{html.escape(c["kind"])}{lay_html}</div>'
             f'<h2>{html.escape(c["module_id"])}</h2>'
+            f"{resp_html}"
             f'<div class="s">{c["n_files"]} files · {c["n_syms"]} symbols · {c["n_dirs"]} dirs</div>'
+            f"{deps_html}"
             "</a>")
     doc = (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -1453,15 +1489,19 @@ def write_index(out_dir: Path, cards: list[dict]) -> None:
         "border-radius:14px;padding:18px 18px 16px;text-decoration:none;color:#e2e8f0;"
         "transition:border-color .15s}"
         ".card:hover{border-color:#22d3ee}"
-        ".k{display:inline-block;color:#67e8f9;background:rgba(34,211,238,.08);"
-        "border:1px solid rgba(34,211,238,.25);border-radius:999px;padding:2px 10px;"
-        "font:11px system-ui,sans-serif;margin-bottom:10px}"
+        ".k{color:#67e8f9;font:11px system-ui,sans-serif;margin-bottom:10px}"
+        ".lay{display:inline-block;margin-left:8px;color:#c4b5fd;"
+        "background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.3);"
+        "border-radius:999px;padding:1px 8px}"
         "h2{margin:0 0 6px;font:600 16px system-ui,sans-serif;color:#f1f5f9}"
+        ".r{color:#cbd5e1;font:12.5px/1.5 system-ui,sans-serif;margin-bottom:8px}"
         ".s{color:#94a3b8;font:12px system-ui,sans-serif}"
+        ".d{color:#64748b;font:11px system-ui,sans-serif;margin-top:6px}"
         "</style></head><body><div class=\"wrap\">"
         "<h1>Module interaction chain</h1>"
         f'<div class="sub">{len(cards)} modules · '
         f'{sum(c["n_files"] for c in cards)} files · '
-        "click a module to enter its chain; click a node to select, click again to drill down to code</div>"
+        "each card is one AI-curated module (responsibility in its own words); "
+        "click to enter its chain; click a node to select, click again to drill down to code</div>"
         '<div class="grid">' + "".join(items) + "</div></div></body></html>")
     (out_dir / "index.html").write_text(doc, encoding="utf-8")

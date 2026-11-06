@@ -806,3 +806,52 @@ def test_chain_reproducible(tmp_path):
     snap2 = _snapshot(out)
     assert r1["ir_sha256"] == r2["ir_sha256"]
     assert snap1 == snap2
+
+
+def test_report_user_sections(tmp_path, monkeypatch):
+    """report.html 用户信息架构：引导/总览/体检/深层数据 + P 码图例 + findings 折叠。
+
+    用户产物定位锁定：AI 梳理产出（模块职责/层规则）必须进用户主视觉，
+    深层材料（SARIF/Datasette）归拢折叠节。
+    """
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+    render.render_report(repo)
+    t = (repo / ".vrp" / "report" / "report.html").read_text(encoding="utf-8")
+    assert "How to read this report" in t
+    assert "Project overview" in t
+    assert "Responsibility (AI-curated)" in t
+    assert "负责一" in t and "负责二" in t  # AI 梳理职责透传（数据原样）
+    assert "Layer rules" in t
+    assert "Pathology checkup" in t
+    assert "debug residue" in t  # P 码图例人话
+    assert "Full findings index - click to expand" in t  # 裸清单降权折叠
+    assert "Deep data (for AI agents & auditing)" in t
+    assert "findings.sarif" in t  # SARIF 归入深层数据节
+    assert "datasette .vrp/facts.db" in t
+    # 体检节：_seed 的 P1 finding 计入（人话标题 + 来源）
+    assert "P1 - debug residue" in t
+    assert "s2-astgrep" in t
+
+
+def test_chain_index_cards_show_curation(tmp_path):
+    """index 卡片呈现 AI 梳理产出：职责一句话 + 层徽标 + 模块依赖 + 层序排序。"""
+    _need_archify()
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+    render.render_report(repo)
+    chain = repo / ".vrp" / "report" / "chain"
+    idx = (chain / "index.html").read_text(encoding="utf-8")
+    assert "负责一" in idx and "负责二" in idx  # 卡片职责（AI 梳理）
+    assert 'class="lay">domain<' in idx and 'class="lay">service<' in idx
+    assert "depends on: m2" in idx  # fid-b→fid-c 跨模块边聚合
+    # 层序：domain 层的 m1 卡先于 service 层的 m2 卡
+    assert idx.index("<h2>m1</h2>") < idx.index("<h2>m2</h2>")
+    irj = json.loads((repo / ".vrp" / "report" / "ir" / "chain-index.json").read_text(encoding="utf-8"))
+    m1 = next(m for m in irj["modules"] if m["module_id"] == "m1")
+    assert m1["responsibility"] == "负责一"
+    assert m1["layer"] == "domain"
+    assert m1["depends_on"] == ["m2"]
