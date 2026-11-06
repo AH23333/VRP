@@ -11,6 +11,9 @@
 - report.html：目录页 + T4/open 清单 + Mermaid 内嵌（CDN script，无网显源码）
 - R7' 多级颗粒度：report.html（L0）→ modules/m{i}-{arch_id}.html（L1 模块页）
   → symbols/{fid}.html（L2 符号页 + 源码片段），静态多页互链（主链优先）
+- R7'(2) 模块交互图链：archify 可用且链成功 → chain/（index → 模块图链
+  → 整文件源码页+符号锚点，render_chain 三段式原子提交）替代 L1/L2；
+  失败/缺 archify → L1/L2 Mermaid 兜底（降级记录诚实标注）
 - 复现性：report.html 不带时间戳，带 facts.git_head + IR sha256（可溯源）
 - 产物落 <repo>/.vrp/report/（.vrp/ 已进目标仓 info/exclude，#76 纪律）
 
@@ -28,6 +31,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from . import render_chain
 from . import s6_transact
 
 REPORT_DIR = ".vrp/report"
@@ -399,11 +403,14 @@ def _mmd_id(raw: str) -> str:
 
 
 def find_archify_mjs() -> Path | None:
-    """archify.mjs 发现：VRP_ARCHIFY_MJS → vrp 仓 work 沙箱（editable 装态）。"""
+    """archify.mjs 发现：VRP_ARCHIFY_MJS → vrp vendor 收编 → vrp 仓 work 沙箱。"""
     env = os.environ.get("VRP_ARCHIFY_MJS")
     if env:
         path = Path(env)
         return path if path.is_file() else None
+    vendored = Path(__file__).resolve().parent / "vendor" / "archify" / "bin" / "archify.mjs"
+    if vendored.is_file():
+        return vendored
     sandbox = Path(__file__).resolve().parent.parent.joinpath(*_WORK_SANDBOX)
     if sandbox.is_file():
         return sandbox
@@ -1009,7 +1016,7 @@ def _findings_index_rows(con: sqlite3.Connection) -> tuple[int, list]:
 
 
 def _findings_index_section(rows: list, total: int, selected: dict[str, str],
-                            file_to_module: dict[str, str]) -> dict:
+                            file_links: dict[str, str], link_label: str = "详情页") -> dict:
     esc = html_mod.escape
     if total == 0:
         return {"title": "病理 findings 索引", "body": "<p>无 findings。</p>"}
@@ -1021,15 +1028,38 @@ def _findings_index_section(rows: list, total: int, selected: dict[str, str],
         if r["anchor_fid"] and r["anchor_fid"] in selected:
             link = f' → <a href="symbols/{esc(r["anchor_fid"])}.html">符号页</a>'
         elif fp:
-            page = file_to_module.get(fp)
-            if page:
-                link = f' → <a href="modules/{esc(page)}">模块页</a>'
+            href = file_links.get(fp)
+            if href:
+                link = f' → <a href="{esc(href)}">{esc(link_label)}</a>'
         items.append(
             f"<li>{_pathology_badge(r['pathology'])} {esc(r['kind'] or '')} {loc}"
             f"（source: {esc(r['source'] or '?')}）{link}</li>"
         )
     note = f'<p class="meta">示前 {len(rows)} / 共 {total} 条（截断）。</p>' if total > len(rows) else ""
     return {"title": "病理 findings 索引", "body": note + "<ul>" + "".join(items) + "</ul>"}
+
+
+def _chain_section(chain: dict) -> dict:
+    """R7'(2) report.html「模块交互图链」节：chain/index.html + 模块入口清单。"""
+    esc = html_mod.escape
+    cards = chain["cards"]
+    counts = chain["counts"]
+    rows = "".join(
+        f'<li><a href="chain/{esc(c["entry"])}">{esc(c["module_id"])}</a>'
+        f"（{esc(c['kind'])}，{c['n_files']} 文件 / {c['n_syms']} 符号 / {c['n_dirs']} 目录）</li>"
+        for c in cards
+    )
+    body = (
+        '<p>模块交互图链（archify 渲染，静态多页互链）：<a href="chain/index.html">'
+        "chain/index.html</a>；图内单击节点选中、再次单击下钻到代码"
+        "（唯一代码视图 = 整文件源码页 + 符号锚点）。</p>"
+        f'<p class="meta">本批 {counts["modules"]} 模块 / {counts["diagrams"]} 图 / '
+        f'{counts["file_pages"]} 代码页 / 共 {counts["pages"]} 页。</p><ul>{rows}</ul>'
+    )
+    if chain["notes"]:
+        notes = "".join(f"<li>{esc(n)}</li>" for n in chain["notes"])
+        body += f'<p class="meta">注记：</p><ul style="color:#666;font-size:.9rem">{notes}</ul>'
+    return {"title": "模块交互图链", "body": body}
 
 
 # ----------------------------------------------------------------- report
@@ -1159,7 +1189,7 @@ def _stale_banner_html(staleness: dict | None) -> str:
 def _clean_render_out(out: Path) -> None:
     """渲染前清自有产物（R6' 病根四：上轮孤儿混入本轮快照——timeline.html
     渲了没链接即两轮渲染混目录）。只清 render 拥有的名字，外部文件不动。"""
-    for sub in ("ir", "html", "modules", "symbols"):
+    for sub in ("ir", "html", "modules", "symbols", "chain"):
         d = out / sub
         if d.is_dir():
             shutil.rmtree(d)
@@ -1169,9 +1199,17 @@ def _clean_render_out(out: Path) -> None:
 
 
 def render_report(repo: Path, out_dir: Path | None = None) -> dict:
-    """S8 全量报告：IR → archify/Mermaid/SARIF → .vrp/report/report.html。"""
+    """S8 全量报告：IR → archify/Mermaid/SARIF → .vrp/report/report.html。
+
+    R7'(2) 分流：archify 可用且模块交互图链成功 → chain/ 替代 L1/L2
+    （modules/symbols 不出，三段式原子提交见 render_chain）；
+    失败/缺 archify → L1/L2 Mermaid 兜底（降级记录诚实标注）。
+    """
     repo = Path(repo)
     con = _connect_ro(repo)
+    out = Path(out_dir) if out_dir else repo / REPORT_DIR
+    # 链在 con 存活期写入（build_chain 自开只读连接）：先清后建
+    _clean_render_out(out)
     try:
         git_head = _facts_git_head(con)
         arch_ir = build_architecture_ir(repo, con)
@@ -1189,61 +1227,99 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         verdicts = s6_transact.load_verdicts(repo)
         timeline_ir = build_timeline_ir(verdicts) if verdicts else None
         sarif = build_sarif(repo, con, _tool_version())
+        # R7'(2) 模块交互图链：成功替代 L1/L2（数据收集一并跳过）
+        mjs = find_archify_mjs()
+        chain: dict | None = None
+        if mjs is not None:
+            try:
+                chain = render_chain.build_chain(repo, out / "chain", mjs)
+            except Exception as exc:  # 链意外失败不阻塞报告（降级 L1/L2）
+                chain = {"ok": False, "index": None, "cards": [], "file_pages": {},
+                         "counts": {"modules": 0, "diagrams": 0, "file_pages": 0, "pages": 0},
+                         "notes": [f"module chain crashed: {exc}"]}
+        use_chain = bool(chain and chain.get("ok"))
         # R7' L1/L2：模块页/符号页数据（连接存活期收完；Row 关连接后仍可读）
-        modules_all = _iter_modules(con)
-        modules_truncated = len(modules_all) > MODULE_PAGES_CAP
-        module_datas = [_module_page_data(con, i, m) for i, m in enumerate(modules_all[:MODULE_PAGES_CAP])]
-        selected, symbols_truncated = _select_symbol_pages(module_datas)
-        symbol_datas = [_symbol_page_data(repo, con, fid, selected[fid]) for fid in sorted(selected)]
-        page_to_module_id = {md["page_file"]: md["module"]["module_id"] for md in module_datas}
-        file_to_module: dict[str, str] = {}
-        for md in module_datas:
-            for f in md["files"]:
-                file_to_module.setdefault(f.replace("\\", "/"), md["page_file"])
+        module_datas: list[dict] = []
+        symbol_datas: list[dict] = []
+        selected: dict[str, str] = {}
+        modules_truncated = False
+        symbols_truncated = False
+        page_to_module_id: dict[str, str] = {}
+        if not use_chain:
+            modules_all = _iter_modules(con)
+            modules_truncated = len(modules_all) > MODULE_PAGES_CAP
+            module_datas = [_module_page_data(con, i, m) for i, m in enumerate(modules_all[:MODULE_PAGES_CAP])]
+            selected, symbols_truncated = _select_symbol_pages(module_datas)
+            symbol_datas = [_symbol_page_data(repo, con, fid, selected[fid]) for fid in sorted(selected)]
+            page_to_module_id = {md["page_file"]: md["module"]["module_id"] for md in module_datas}
         findings_total, findings_rows = _findings_index_rows(con)
     finally:
         con.close()
 
-    out = Path(out_dir) if out_dir else repo / REPORT_DIR
     staleness = _staleness(repo, git_head)
-    _clean_render_out(out)
     (out / "ir").mkdir(parents=True, exist_ok=True)
     (out / "html").mkdir(parents=True, exist_ok=True)
-    (out / "modules").mkdir(parents=True, exist_ok=True)
-    (out / "symbols").mkdir(parents=True, exist_ok=True)
+    if use_chain:
+        file_links: dict[str, str] = {fp: f"chain/{stem}" for fp, stem in chain["file_pages"].items()}
+    else:
+        (out / "modules").mkdir(parents=True, exist_ok=True)
+        (out / "symbols").mkdir(parents=True, exist_ok=True)
+        file_links = {}
+        for md in module_datas:
+            for f in md["files"]:
+                file_links.setdefault(f.replace("\\", "/"), f"modules/{md['page_file']}")
 
     irs: dict[str, dict] = {"architecture": arch_ir, **{f"slice-{k}": v for k, v in seq_irs.items()}}
     if timeline_ir is not None:  # 空 events 被 archify minItems 拒；无 verdicts 不出 timeline
         irs["timeline"] = timeline_ir
-    # R7' modules-index：进 ir_sha256（复现契约），不进 archify 循环（无 diagram_type）
-    modules_index_ir = {
-        "schema_version": 1,
-        "kind": "modules-index",
-        "modules": [
-            {
-                "page": md["page_file"],
-                "module_id": md["module"]["module_id"],
-                "layer": md["module"]["layer"],
-                "source": md["module"]["source"],
-                "symbols": len(md["module"]["fids"]),
-                "findings": md["findings_total"],
-            }
-            for md in module_datas
-        ],
-        "symbol_pages": sorted(selected),
-        "symbol_pages_truncated": symbols_truncated,
-    }
+    if use_chain:
+        # R7'(2) chain-index：进 ir_sha256（复现契约），不进 archify 循环（无 diagram_type）
+        index_ir = {
+            "schema_version": 1,
+            "kind": "chain-index",
+            "modules": [
+                {"module_id": c["module_id"], "entry": c["entry"], "kind": c["kind"],
+                 "n_files": c["n_files"], "n_syms": c["n_syms"], "n_dirs": c["n_dirs"]}
+                for c in chain["cards"]
+            ],
+            "counts": chain["counts"],
+            "notes": chain["notes"],
+            "file_pages": sorted(chain["file_pages"]),
+        }
+        index_name, index_hash_key = "chain-index", "chain-index"
+    else:
+        # R7' modules-index：进 ir_sha256（复现契约），不进 archify 循环（无 diagram_type）
+        index_ir = {
+            "schema_version": 1,
+            "kind": "modules-index",
+            "modules": [
+                {
+                    "page": md["page_file"],
+                    "module_id": md["module"]["module_id"],
+                    "layer": md["module"]["layer"],
+                    "source": md["module"]["source"],
+                    "symbols": len(md["module"]["fids"]),
+                    "findings": md["findings_total"],
+                }
+                for md in module_datas
+            ],
+            "symbol_pages": sorted(selected),
+            "symbol_pages_truncated": symbols_truncated,
+        }
+        index_name, index_hash_key = "modules-index", "modules-index"
     ir_hash = hashlib.sha256(
-        _dumps_canonical({**irs, "modules-index": modules_index_ir}).encode("utf-8")
+        _dumps_canonical({**irs, index_hash_key: index_ir}).encode("utf-8")
     ).hexdigest()
     for name, ir in irs.items():
         (out / "ir" / f"{name}.json").write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8")
-    (out / "ir" / "modules-index.json").write_text(
-        json.dumps(modules_index_ir, ensure_ascii=False, indent=2), encoding="utf-8"
+    (out / "ir" / f"{index_name}.json").write_text(
+        json.dumps(index_ir, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     (out / "findings.sarif").write_text(json.dumps(sarif, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    artifacts: list[str] = ["ir/architecture.json", "ir/modules-index.json", "findings.sarif"]
+    artifacts: list[str] = [f"ir/architecture.json", f"ir/{index_name}.json", "findings.sarif"]
+    if use_chain:
+        artifacts.append("chain/index.html")
     degraded_reasons: list[str] = []
 
     # Mermaid 源（零依赖，恒出）
@@ -1255,11 +1331,13 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         artifacts.append(f"slice-{name}.mmd")
 
     # archify 工具组（缺失/失败降级 Mermaid-only，不阻塞）
-    mjs = find_archify_mjs()
     archify_html: list[str] = []
     if mjs is None:
-        degraded_reasons.append("archify not found (VRP_ARCHIFY_MJS / work sandbox)")
+        degraded_reasons.append("archify not found (VRP_ARCHIFY_MJS / vendored / work sandbox)")
     else:
+        if not use_chain and chain is not None:
+            reasons = "; ".join(chain.get("notes", [])[:5])
+            degraded_reasons.append(f"module chain degraded to L1/L2 pages: {reasons}")
         for name, ir in irs.items():
             ir_path = out / "ir" / f"{name}.json"
             target = out / "html" / f"{name}.html"
@@ -1277,20 +1355,26 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
             except (subprocess.TimeoutExpired, OSError) as exc:
                 degraded_reasons.append(f"archify error: {name} ({exc})")
 
-    # R7' L1/L2 页写入（静态多页互链；_clean_render_out 已清上轮，与本轮同批落盘）
-    for md in module_datas:
-        (out / "modules" / md["page_file"]).write_text(
-            _module_page_html(repo.name, md, selected), encoding="utf-8", newline="\n"
-        )
-    for sd in symbol_datas:
-        (out / "symbols" / f"{sd['fid']}.html").write_text(
-            _symbol_page_html(repo.name, sd, selected, page_to_module_id), encoding="utf-8", newline="\n"
-        )
+    # R7' L1/L2 页写入（静态多页互链；链成功时不出，chain/ 已替代）
+    if not use_chain:
+        for md in module_datas:
+            (out / "modules" / md["page_file"]).write_text(
+                _module_page_html(repo.name, md, selected), encoding="utf-8", newline="\n"
+            )
+        for sd in symbol_datas:
+            (out / "symbols" / f"{sd['fid']}.html").write_text(
+                _symbol_page_html(repo.name, sd, selected, page_to_module_id), encoding="utf-8", newline="\n"
+            )
 
+    if use_chain:
+        modules_section = _chain_section(chain)
+    else:
+        modules_section = _modules_index_section(module_datas, modules_truncated, len(symbol_datas), symbols_truncated)
     sections = [
         _verdicts_section(verdicts),
-        _modules_index_section(module_datas, modules_truncated, len(symbol_datas), symbols_truncated),
-        _findings_index_section(findings_rows, findings_total, selected, file_to_module),
+        modules_section,
+        _findings_index_section(findings_rows, findings_total, selected, file_links,
+                                "文件页" if use_chain else "模块页"),
         {
             "title": "架构图（L0）",
             "body": "<p>archify 渲染缺失时 Mermaid 源如下（本页内嵌，联网渲染）：</p>"
@@ -1327,6 +1411,13 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
             "sarif_results": len(sarif["runs"][0]["results"]),
             "module_pages": len(module_datas),
             "symbol_pages": len(symbol_datas),
+            "chain_modules": chain["counts"]["modules"] if use_chain else 0,
+            "chain_pages": chain["counts"]["pages"] if use_chain else 0,
+        },
+        "chain": {
+            "ok": use_chain,
+            "index": chain["index"] if use_chain else None,
+            "notes": chain["notes"] if chain is not None else [],
         },
         "ir_sha256": ir_hash,
     }

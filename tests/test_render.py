@@ -1,10 +1,13 @@
 """R3' render 测试：IR 生成 + Mermaid 源 + 报告复现性 + 降级路径。
 
 R6' 增：staleness 横幅（M4 不对称修复）+ 渲染输出清理（孤儿修复）。
+R7' 增：L1/L2 多级下钻；R7'(2) 增：模块交互图链（chain/ 三段式原子提交，
+成功替代 L1/L2，失败降级记录诚实标注）。
 """
 
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -12,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from vrp import render
+from vrp import render_chain
 from vrp import s6_transact
 
 SCHEMA = Path(__file__).parent.parent / "vrp" / "schema" / "facts_schema.sql"
@@ -264,6 +268,8 @@ def test_render_report_real_archify(tmp_path):
     mjs = render.find_archify_mjs()
     if mjs is None:
         pytest.skip("archify sandbox not available")
+    if shutil.which("node") is None:
+        pytest.skip("node not available")
     repo = _mk_repo(tmp_path)
     _seed(repo)
     _mk_verdict(repo)
@@ -274,10 +280,20 @@ def test_render_report_real_archify(tmp_path):
     assert (out / "html" / "architecture.html").is_file()
     assert (out / "html" / "slice-flow.html").is_file()
     assert (out / "html" / "timeline.html").is_file()
+    # R7'(2)：模块交互图链成功 → chain/ 出、L1/L2 不出
+    assert result["chain"]["ok"] is True
+    assert result["counts"]["chain_modules"] == 2
+    assert result["counts"]["chain_pages"] == 4  # index + 2 网格 + 1 代码页
+    assert (out / "chain" / "index.html").is_file()
+    assert not (out / "modules").exists()
+    assert not (out / "symbols").exists()
+    assert (out / "ir" / "chain-index.json").is_file()
+    assert not (out / "ir" / "modules-index.json").exists()
     # R6' 产物完整性不变量：渲出的每个 html 必被 report.html 链接（无孤儿）
     report_text = (out / "report.html").read_text(encoding="utf-8")
     for html_file in (out / "html").glob("*.html"):
         assert f"html/{html_file.name}" in report_text, f"孤儿 html：{html_file.name}"
+    assert 'href="chain/index.html"' in report_text  # L0 → 链入口
 
 
 # ------------------------------------------- R6'：staleness 横幅 + 输出清理
@@ -596,4 +612,146 @@ def test_multilevel_pages_reproducible(tmp_path, monkeypatch):
     snap2 = _snapshot(out)
     assert r1["ir_sha256"] == r2["ir_sha256"]
     assert len(snap1) >= 10  # report + 2 模块页 + 3 符号页 + ir 若干 + sarif + mmd
+    assert snap1 == snap2
+
+
+# ------------------------------------- R7'(2)：模块交互图链（archify 三段式）
+
+
+def _need_archify():
+    if render.find_archify_mjs() is None:
+        pytest.skip("archify not available")
+    if shutil.which("node") is None:
+        pytest.skip("node not available")
+
+
+def test_chain_happy_path(tmp_path):
+    """链成功：chain/ 出、L1/L2 不出、report 链接贯通、chain-index 进 ir。"""
+    _need_archify()
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+    result = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    assert result["chain"]["ok"] is True
+    assert result["degraded"] == []
+    assert result["counts"]["chain_modules"] == 2  # m1 + m2
+    assert result["counts"]["module_pages"] == 0  # L1 不出
+    assert result["counts"]["symbol_pages"] == 0  # L2 不出
+    chain = out / "chain"
+    assert (chain / "index.html").is_file()
+    assert (chain / "s3-m1-x.html").is_file()  # m1 网格（a、b）
+    assert (chain / "s3-m2-x.html").is_file()  # m2 网格（c）
+    assert (chain / "s4f-pkg-x.html").is_file()  # 唯一代码页（共享文件单次写）
+    assert not (out / "modules").exists()
+    assert not (out / "symbols").exists()
+    idx = json.loads((out / "ir" / "chain-index.json").read_text(encoding="utf-8"))
+    assert idx["kind"] == "chain-index"
+    assert [m["module_id"] for m in idx["modules"]] == ["m1", "m2"]
+    assert idx["file_pages"] == ["pkg/x.py"]
+    report = (out / "report.html").read_text(encoding="utf-8")
+    assert 'href="chain/index.html"' in report  # L0 → 链入口
+    assert 'href="chain/s4f-pkg-x.html"' in report  # findings → 文件页
+
+
+def test_chain_link_integrity(tmp_path):
+    """链完整性不变量：href + M（JS 点击图）双源——每个目标文件与锚点必须存在。"""
+    _need_archify()
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+    render.render_report(repo)
+    chain = repo / ".vrp" / "report" / "chain"
+    pages = sorted(chain.glob("*.html"))
+    assert [p.name for p in pages] == [
+        "index.html", "s3-m1-x.html", "s3-m2-x.html", "s4f-pkg-x.html",
+    ]
+    texts = {p.name: p.read_text(encoding="utf-8") for p in pages}
+    # 代码页含全部符号锚点（全局索引：m1 的 a/b + m2 的 c 共存一页）
+    for anchor in ("sym-a", "sym-b", "sym-c"):
+        assert f'id="{anchor}"' in texts["s4f-pkg-x.html"], anchor
+    ids_by_page = {name: set(re.findall(r'id="([^"]+)"', t)) for name, t in texts.items()}
+    for p in pages:
+        hrefs = re.findall(r'href="([^"]+)"', texts[p.name])
+        m = re.search(r"var M=(\{.*?\});var PG", texts[p.name], re.S)
+        if m:  # 注入的点击图（href 之外的第二链接源）
+            hrefs += list(json.loads(m.group(1)).values())
+        assert hrefs, f"{p.name}: 无链接可验"
+        for h in hrefs:
+            if h.startswith(("http://", "https://")):
+                continue
+            file_part, _, frag = h.partition("#")
+            target = p.parent / file_part if file_part else p
+            assert target.exists(), f"{p.name}: 断链 {h}"
+            if frag:
+                assert frag in ids_by_page[target.name], f"{p.name}: 缺锚点 {h}"
+
+
+def test_chain_no_archify(tmp_path, monkeypatch):
+    """无 archify：不出 chain/，counts 归零，L1/L2 兜底不受影响。"""
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    result = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    assert result["chain"]["ok"] is False
+    assert result["counts"]["chain_modules"] == 0
+    assert not (out / "chain").exists()
+    assert result["counts"]["module_pages"] == 2  # L1/L2 照常
+
+
+def test_chain_fake_mjs_degrades_to_l1(tmp_path, monkeypatch):
+    """假 archify（存在但崩）：链失败整体清理 → L1/L2 兜底 + 降级记录。"""
+    fake = tmp_path / "fake.mjs"
+    fake.write_text('throw new Error("boom");', encoding="utf-8")
+    monkeypatch.setenv("VRP_ARCHIFY_MJS", str(fake))
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    result = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    assert result["chain"]["ok"] is False
+    assert not (out / "chain").exists()  # 失败链整体清理（无半成品）
+    assert result["counts"]["chain_modules"] == 0
+    assert result["counts"]["module_pages"] == 2  # L1 兜底
+    assert (out / "modules" / "m0-m1.html").is_file()
+    assert (out / "ir" / "modules-index.json").is_file()
+    assert not (out / "ir" / "chain-index.json").exists()
+    assert any("module chain degraded" in d for d in result["degraded"])
+
+
+def test_chain_path_guard():
+    """路径守卫：绝对/含冒号/.. 逃逸/synthetic 尖括号全拒。"""
+    assert render_chain._path_ok("pkg/x.py")
+    assert render_chain._path_ok("a/b/c.js")
+    assert not render_chain._path_ok("")
+    assert not render_chain._path_ok("C:/abs.py")  # 绝对 + 冒号
+    assert not render_chain._path_ok("/abs.py")
+    assert not render_chain._path_ok("../esc.py")  # .. 逃逸
+    assert not render_chain._path_ok("a/../../b.py")
+    assert not render_chain._path_ok("<synthetic>")  # synthetic 守卫
+    assert not render_chain._path_ok("pkg/x:y.py")  # 冒号（Windows 盘符/流语法）
+
+
+def test_chain_reproducible(tmp_path):
+    """复现契约扩展到链：两次渲染全产物（含 chain/ 与 archify 图）字节级全等。"""
+    _need_archify()
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+
+    def _snapshot(root: Path) -> dict:
+        return {
+            str(p.relative_to(root)).replace("\\", "/"): p.read_bytes()
+            for p in sorted(root.rglob("*"))
+            if p.is_file() and p.suffix in (".html", ".json", ".mmd", ".sarif")
+        }
+
+    r1 = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    snap1 = _snapshot(out)
+    assert any(k.startswith("chain/") for k in snap1)  # 链产物确实在快照内
+    r2 = render.render_report(repo)
+    snap2 = _snapshot(out)
+    assert r1["ir_sha256"] == r2["ir_sha256"]
     assert snap1 == snap2
