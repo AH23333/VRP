@@ -89,7 +89,7 @@ def nav_search(repo: Path, query: str, limit: int = SEARCH_DEFAULT_LIMIT) -> dic
         "query": query.strip(),
         "count": len(results),
         "results": results,
-        "note": "fid 句柄供 nav_symbol 下钻；跨事务（promote-etl）后 fid 失效需重查",
+        "note": "fid handles drill down via nav_symbol; fids go stale across transactions (promote-etl), re-query then",
     }
 
 
@@ -138,8 +138,8 @@ def _architecture_dir_fallback(con: sqlite3.Connection) -> dict:
         "total_symbols": sum(sym_by_file.values()),
         "total_findings": sum(find_by_file.values()),
         "modules": modules,
-        "note": "structure 无 active 行（curate 验收入库后填充），目录聚合兜底；"
-        "module 下钻句柄 = file_path（nav_module）",
+        "note": "no active structure row (filled by curate ingest); dir-aggregation fallback; "
+        "module drill-down handle = file_path (nav_module)",
     }
 
 
@@ -198,8 +198,8 @@ def _architecture_from_structure(con: sqlite3.Connection) -> dict:
         "unassigned_symbols": con.execute(
             "SELECT COUNT(*) FROM symbols WHERE file_path != '' AND file_path NOT GLOB '<*' AND file_path NOT GLOB '>*'"
         ).fetchone()[0] - len(fid_to_mod),
-        "note": "structure 为 AI 梳理固化产物（curate 验收入库）；module_edges 为实测模块间边（fid 归属聚合）；"
-        "sample_fids/nav_search 供 nav_symbol 下钻",
+        "note": "structure is AI-curated and ingested via curate; module_edges are measured inter-module edges (fid-ownership aggregation); "
+        "sample_fids/nav_search drill down via nav_symbol",
     }
 
 
@@ -249,7 +249,7 @@ def nav_module(repo: Path, module_id: str, limit: int = MODULE_SYMBOL_CAP) -> di
         "findings_by_pathology": by_path,
         "edges_out": counts["edges_out"],
         "edges_in": counts["edges_in"],
-        "note": "fid 句柄供 nav_symbol 下钻",
+        "note": "fid handles drill down via nav_symbol",
     }
 
 
@@ -310,8 +310,8 @@ def nav_symbol(repo: Path, fid: str) -> dict:
         "callees": callees,
         "findings": findings,
         "slices": slices,
-        "note": "callers/callees 的 fid 句柄可继续 nav_symbol 下钻（全链可查）；"
-        "slices = 含此符号的业务线（nav_slice 下钻）",
+        "note": "caller/callee fid handles keep drilling via nav_symbol (full chain reachable); "
+        "slices = business lines containing this symbol (nav_slice)",
     }
 
 
@@ -376,7 +376,7 @@ def _neighbors(repo: Path, fid: str, limit: int, direction: str) -> dict:
         "neighbors": [dict(r) for r in rows[:limit]],
         "count": min(len(rows), limit),
         "truncated": truncated,
-        "note": "超 limit 截断（truncated=true 时调大 limit）；fid 句柄供 nav_symbol 下钻",
+        "note": "truncated=true means cut at limit, raise limit for more; fid handles drill down via nav_symbol",
     }
 
 
@@ -422,7 +422,7 @@ def nav_slice(repo: Path, slice_id: str) -> dict:
         "created_at": created_at,
         "steps": steps,
         "acts": acts,
-        "note": "status=stale 表示符号/边已漂移（复验失效）；step.fid 句柄供 nav_symbol 下钻",
+        "note": "status=stale means symbols/edges drifted (re-validation failed); step.fid handles drill down via nav_symbol",
     }
 
 
@@ -479,8 +479,8 @@ def nav_path(
                 "hops": None,
                 "max_hops": max_hops,
                 "nodes_searched": nodes_searched,
-                "note": f"max_hops={max_hops} 内不可达（方向 edges src→dst）；"
-                f"可调大 max_hops（上限 {PATH_MAX_HOPS}）或反向 nav_path(to, from) 查反向耦合",
+                "note": f"unreachable within max_hops={max_hops} (edges src→dst direction); "
+                f"raise max_hops (cap {PATH_MAX_HOPS}) or run nav_path(to, from) for reverse coupling",
             }
         depth = target["depth"]
         chain = [to_fid]
@@ -534,9 +534,9 @@ def nav_path(
         "nodes_searched": nodes_searched,
         "path": path,
         "hops_detail": hops_detail,
-        "note": "最短耦合路径（edges src→dst 方向）；hops_detail 透传 confidence——"
-        "低置信边需 nav_symbol 下钻核实或读源码确认；同长最短路径可能不止一条，"
-        "本接口确定性选一（fid 字典序最小）",
+        "note": "shortest coupling path (edges src→dst); hops_detail carries confidence per hop — "
+        "verify low-confidence edges via nav_symbol or source; ties broken deterministically "
+        "(lexicographically smallest fid)",
     }
 
 
@@ -580,5 +580,5 @@ def query_facts(repo: Path, sql: str, params: str = "", max_rows: int = QUERY_MA
         "rows": [dict(zip(cols, r)) for r in rows],
         "rowcount": len(rows),
         "truncated": truncated,
-        "note": "mode=ro 只读；超 max_rows 截断（truncated=true 时加 WHERE/LIMIT 收窄）",
+        "note": "read-only mode; truncated=true means cut at max_rows, narrow with WHERE/LIMIT",
     }

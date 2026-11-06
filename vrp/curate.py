@@ -39,31 +39,31 @@ def _err(code: str, detail: str, **loc) -> dict:
 def _validate_one_slice(con: sqlite3.Connection, raw: object) -> list[dict]:
     errors: list[dict] = []
     if not isinstance(raw, dict):
-        return [_err("SLICE_SCHEMA", "slice 必须是 JSON 对象")]
+        return [_err("SLICE_SCHEMA", "slice must be a JSON object")]
     slice_id = raw.get("slice_id")
     if not isinstance(slice_id, str) or not slice_id.strip():
-        return [_err("SLICE_SCHEMA", "slice_id 必须是非空字符串")]
+        return [_err("SLICE_SCHEMA", "slice_id must be a non-empty string")]
     for field, code in (("name", "SLICE_EMPTY_NAME"), ("summary", "SLICE_EMPTY_SUMMARY")):
         value = raw.get(field)
         if not isinstance(value, str) or not value.strip():
-            errors.append(_err(code, f"{field} 必须是非空字符串", slice_id=slice_id))
+            errors.append(_err(code, f"{field} must be a non-empty string", slice_id=slice_id))
     steps = raw.get("steps")
     if not isinstance(steps, list) or not steps:
-        errors.append(_err("SLICE_SCHEMA", "steps 必须是非空数组", slice_id=slice_id))
+        errors.append(_err("SLICE_SCHEMA", "steps must be a non-empty array", slice_id=slice_id))
         return errors
     fids: list[str] = []
     for i, step in enumerate(steps):
         if not isinstance(step, dict) or not isinstance(step.get("fid"), str) or not step["fid"]:
-            errors.append(_err("SLICE_SCHEMA", f"steps[{i}] 必须是含非空 fid 的对象", slice_id=slice_id, step=i))
+            errors.append(_err("SLICE_SCHEMA", f"steps[{i}] must be an object with a non-empty fid", slice_id=slice_id, step=i))
             fids.append("")
             continue
         fid = step["fid"]
         fids.append(fid)
         role = step.get("role", "process")
         if role not in SLICE_ROLES:
-            errors.append(_err("SLICE_SCHEMA", f"steps[{i}].role 非法: {role!r}", slice_id=slice_id, step=i))
+            errors.append(_err("SLICE_SCHEMA", f"steps[{i}].role invalid: {role!r}", slice_id=slice_id, step=i))
         if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is None:
-            errors.append(_err("SLICE_UNKNOWN_FID", f"steps[{i}].fid 不在 facts.db symbols", slice_id=slice_id, step=i))
+            errors.append(_err("SLICE_UNKNOWN_FID", f"steps[{i}].fid not found in facts.db symbols", slice_id=slice_id, step=i))
     for i in range(len(fids) - 1):
         a, b = fids[i], fids[i + 1]
         if not a or not b:
@@ -75,29 +75,29 @@ def _validate_one_slice(con: sqlite3.Connection, raw: object) -> list[dict]:
         ).fetchone()
         if row is None:
             errors.append(
-                _err("SLICE_MISSING_EDGE", f"steps[{i}]→steps[{i + 1}] 之间无边（{'+'.join(SLICE_EDGE_TYPES)} 任一方向）",
+                _err("SLICE_MISSING_EDGE", f"no edge between steps[{i}] and steps[{i + 1}] ({'+'.join(SLICE_EDGE_TYPES)} in either direction)",
                      slice_id=slice_id, step=i)
             )
     acts = raw.get("acts")
     if acts is not None:
         if not isinstance(acts, list) or not acts:
-            errors.append(_err("SLICE_ACT_BOUNDS", "acts 存在时必须是非空数组", slice_id=slice_id))
+            errors.append(_err("SLICE_ACT_BOUNDS", "acts must be a non-empty array when present", slice_id=slice_id))
         else:
             prev_to = -1
             for i, act in enumerate(acts):
                 if not isinstance(act, dict) or not isinstance(act.get("name"), str) or not act["name"].strip():
-                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] 必须是含非空 name 的对象", slice_id=slice_id))
+                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] must be an object with a non-empty name", slice_id=slice_id))
                     continue
                 lo, hi = act.get("from_step"), act.get("to_step")
                 if not isinstance(lo, int) or not isinstance(hi, int) or not (0 <= lo <= hi < len(steps)):
-                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] 边界非法: [{lo}, {hi}]", slice_id=slice_id))
+                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] invalid bounds: [{lo}, {hi}]", slice_id=slice_id))
                     continue
                 if lo != prev_to + 1:
-                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] 必须无缝衔接前一幕（期望 from_step={prev_to + 1}）",
+                    errors.append(_err("SLICE_ACT_BOUNDS", f"acts[{i}] must follow the previous act without gaps (expected from_step={prev_to + 1})",
                                        slice_id=slice_id))
                 prev_to = hi
             if prev_to != len(steps) - 1:
-                errors.append(_err("SLICE_ACT_BOUNDS", f"acts 必须覆盖全部 steps（末幕 to_step 应为 {len(steps) - 1}）",
+                errors.append(_err("SLICE_ACT_BOUNDS", f"acts must cover all steps (last act to_step should be {len(steps) - 1})",
                                    slice_id=slice_id))
     return errors
 
@@ -105,33 +105,33 @@ def _validate_one_slice(con: sqlite3.Connection, raw: object) -> list[dict]:
 def _validate_structure(con: sqlite3.Connection, raw: object) -> list[dict]:
     errors: list[dict] = []
     if not isinstance(raw, dict):
-        return [_err("STRUCT_SCHEMA", "structure 必须是 JSON 对象")]
+        return [_err("STRUCT_SCHEMA", "structure must be a JSON object")]
     modules = raw.get("modules")
     if not isinstance(modules, list) or not modules:
-        return [_err("STRUCT_SCHEMA", "modules 必须是非空数组")]
+        return [_err("STRUCT_SCHEMA", "modules must be a non-empty array")]
     layers = raw.get("layers")
     if not isinstance(layers, list) or not layers:
-        return errors + [_err("STRUCT_SCHEMA", "layers 必须是非空数组")]
+        return errors + [_err("STRUCT_SCHEMA", "layers must be a non-empty array")]
     layer_names: list[str] = []
     deps: dict[str, list[str]] = {}
     for i, layer in enumerate(layers):
         if not isinstance(layer, dict) or not isinstance(layer.get("name"), str) or not layer["name"].strip():
-            errors.append(_err("STRUCT_SCHEMA", f"layers[{i}] 必须是含非空 name 的对象"))
+            errors.append(_err("STRUCT_SCHEMA", f"layers[{i}] must be an object with a non-empty name"))
             continue
         name = layer["name"]
         if name in deps:
-            errors.append(_err("STRUCT_SCHEMA", f"层名重复: {name}", layer=name))
+            errors.append(_err("STRUCT_SCHEMA", f"duplicate layer name: {name}", layer=name))
             continue
         layer_names.append(name)
         may = layer.get("may_depend_on", [])
         if not isinstance(may, list) or any(not isinstance(x, str) for x in may):
-            errors.append(_err("STRUCT_SCHEMA", f"layers[{name}].may_depend_on 必须是字符串数组", layer=name))
+            errors.append(_err("STRUCT_SCHEMA", f"layers[{name}].may_depend_on must be an array of strings", layer=name))
             continue
         deps[name] = may
     for name, may in deps.items():
         for target in may:
             if target not in deps:
-                errors.append(_err("STRUCT_UNKNOWN_LAYER", f"层 {name} 依赖不存在的层: {target}", layer=name))
+                errors.append(_err("STRUCT_UNKNOWN_LAYER", f"layer {name} depends on unknown layer: {target}", layer=name))
     # 层依赖 DAG 检查（白灰黑 DFS）
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {name: WHITE for name in deps}
@@ -154,47 +154,47 @@ def _validate_structure(con: sqlite3.Connection, raw: object) -> list[dict]:
         if color[name] == WHITE:
             cycle = has_cycle(name)
             if cycle:
-                errors.append(_err("STRUCT_LAYER_CYCLE", f"may_depend_on 有环: {cycle}"))
+                errors.append(_err("STRUCT_LAYER_CYCLE", f"may_depend_on contains a cycle: {cycle}"))
                 break
     seen_fid: dict[str, str] = {}
     for i, mod in enumerate(modules):
         if not isinstance(mod, dict):
-            errors.append(_err("STRUCT_SCHEMA", f"modules[{i}] 必须是 JSON 对象"))
+            errors.append(_err("STRUCT_SCHEMA", f"modules[{i}] must be a JSON object"))
             continue
         mid = mod.get("module_id") if isinstance(mod.get("module_id"), str) else f"modules[{i}]"
         for field, code in (("name", "STRUCT_EMPTY_NAME"), ("responsibility", "STRUCT_EMPTY_RESPONSIBILITY"),
                             ("module_id", "STRUCT_SCHEMA")):
             value = mod.get(field)
             if not isinstance(value, str) or not value.strip():
-                errors.append(_err(code, f"{field} 必须是非空字符串", module=mid))
+                errors.append(_err(code, f"{field} must be a non-empty string", module=mid))
         layer = mod.get("layer")
         if not isinstance(layer, str) or not layer.strip():
-            errors.append(_err("STRUCT_SCHEMA", "layer 必须是非空字符串", module=mid))
+            errors.append(_err("STRUCT_SCHEMA", "layer must be a non-empty string", module=mid))
         elif layer not in deps:
-            errors.append(_err("STRUCT_UNKNOWN_LAYER", f"module.layer 不在 layers: {layer}", module=mid))
+            errors.append(_err("STRUCT_UNKNOWN_LAYER", f"module.layer not in layers: {layer}", module=mid))
         fids = mod.get("symbol_fids")
         if not isinstance(fids, list) or not fids or any(not isinstance(x, str) or not x for x in fids):
-            errors.append(_err("STRUCT_SCHEMA", "symbol_fids 必须是非空字符串数组", module=mid))
+            errors.append(_err("STRUCT_SCHEMA", "symbol_fids must be a non-empty array of strings", module=mid))
             continue
         for fid in fids:
             if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is None:
-                errors.append(_err("STRUCT_UNKNOWN_FID", f"fid 不在 facts.db symbols", module=mid, fid=fid))
+                errors.append(_err("STRUCT_UNKNOWN_FID", "fid not found in facts.db symbols", module=mid, fid=fid))
             if fid in seen_fid:
-                errors.append(_err("STRUCT_FID_OVERLAP", f"fid 同属 {seen_fid[fid]} 与 {mid}", module=mid, fid=fid))
+                errors.append(_err("STRUCT_FID_OVERLAP", f"fid belongs to both {seen_fid[fid]} and {mid}", module=mid, fid=fid))
             else:
                 seen_fid[fid] = mid
     rules = raw.get("rules")
     if rules is not None:
         if not isinstance(rules, list) or any(not isinstance(r, dict) for r in rules):
-            errors.append(_err("STRUCT_SCHEMA", "rules 存在时必须是对象数组"))
+            errors.append(_err("STRUCT_SCHEMA", "rules must be an array of objects when present"))
         else:
             for i, rule in enumerate(rules):
                 if not isinstance(rule.get("rule"), str) or not rule["rule"].strip():
-                    errors.append(_err("STRUCT_SCHEMA", f"rules[{i}].rule 必须是非空字符串"))
+                    errors.append(_err("STRUCT_SCHEMA", f"rules[{i}].rule must be a non-empty string"))
                 for field in ("from_layer", "to_layer"):
                     value = rule.get(field)
                     if value is not None and (not isinstance(value, str) or value not in deps):
-                        errors.append(_err("STRUCT_RULE_LAYER", f"rules[{i}].{field} 不在 layers: {value!r}"))
+                        errors.append(_err("STRUCT_RULE_LAYER", f"rules[{i}].{field} not in layers: {value!r}"))
     return errors
 
 
@@ -305,11 +305,11 @@ def _curate_file(con: sqlite3.Connection, path: Path, kind: str) -> dict:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        entry["errors"].append(_err("FILE_NOT_JSON", f"无法读取/解析: {exc}"))
+        entry["errors"].append(_err("FILE_NOT_JSON", f"cannot read/parse: {exc}"))
         return entry
     if kind == "slices":
         if not isinstance(raw, list):
-            entry["errors"].append(_err("FILE_WRONG_SHAPE", "slices.json 必须是 JSON 数组"))
+            entry["errors"].append(_err("FILE_WRONG_SHAPE", "slices.json must be a JSON array"))
             return entry
         for item in raw:
             errors = _validate_one_slice(con, item)
@@ -341,11 +341,11 @@ def curate_payload(con: sqlite3.Connection, kind: str, payload_json: str) -> dic
         raw = json.loads(payload_json)
     except json.JSONDecodeError as exc:
         return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": 1,
-                "errors": [_err("FILE_NOT_JSON", f"payload 不是合法 JSON: {exc}")]}
+                "errors": [_err("FILE_NOT_JSON", f"payload is not valid JSON: {exc}")]}
     if kind == "slices":
         if not isinstance(raw, list):
             return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": 1,
-                    "errors": [_err("FILE_WRONG_SHAPE", "slices payload 必须是 JSON 数组")]}
+                    "errors": [_err("FILE_WRONG_SHAPE", "slices payload must be a JSON array")]}
         errors: list[dict] = []
         for item in raw:
             errors.extend(_validate_one_slice(con, item))
@@ -361,7 +361,7 @@ def curate_payload(con: sqlite3.Connection, kind: str, payload_json: str) -> dic
         _ingest_structure(con, raw)
         return {"kind": kind, "status": "accepted", "accepted": 1, "rejected": 0, "errors": [],
                 "stale": _revalidate_ingested(con)}
-    raise SystemExit(f"kind 必须是 slices 或 structure: {kind}")
+    raise SystemExit(f"kind must be slices or structure: {kind}")
 
 
 def list_slices(con: sqlite3.Connection) -> list[dict]:
@@ -412,7 +412,7 @@ def reject(con: sqlite3.Connection, kind: str, target_id: str, note: str = "") -
     else:
         raise SystemExit(f"kind 必须是 slice 或 structure: {kind}")
     if cur.rowcount == 0:
-        raise SystemExit(f"未找到可否决的工件: {kind} {target_id}")
+        raise SystemExit(f"no rejectable artifact found: {kind} {target_id}")
     con.execute(
         "INSERT INTO decisions (kind, target_id, decision, note, created_at) VALUES (?, ?, 'reject', ?, ?)",
         (kind, target_id, note, _now()),

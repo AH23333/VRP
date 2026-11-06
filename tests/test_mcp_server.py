@@ -483,7 +483,7 @@ def test_enforce_over_mcp(tmp_path, monkeypatch):
     canned = (
         "Contracts: 0 kept, 1 broken.\n\n"
         "Broken contracts\n----------------\n\n"
-        "layer: domain 不许 import service\n--\n\n"
+        "layer: domain must not import service\n--\n\n"
         "domain is not allowed to import service:\n\n"
         "-   pkg.calc -> pkg.calc (l.1)\n"
     )

@@ -185,7 +185,7 @@ def build_contracts(payload: dict, containers: dict[str, list[str]]) -> dict:
         contracts.append(
             {
                 "id": f"layer-{a}-{b}",
-                "name": f"layer: {a} 不许 import {b}",
+                "name": f"layer: {a} must not import {b}",
                 "source_layer": a,
                 "forbidden_layer": b,
                 "source_modules": source,

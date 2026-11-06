@@ -19,7 +19,7 @@ Contracts
 Analyzed 5 files, 1 dependencies.
 ---------------------------------
 
-layer: core 不许 import interface BROKEN
+layer: core must not import interface BROKEN
 
 Contracts: 0 kept, 1 broken.
 
@@ -28,7 +28,7 @@ Contracts: 0 kept, 1 broken.
 Broken contracts
 ----------------
 
-layer: core 不许 import interface
+layer: core must not import interface
 -------------------------------
 
 pkgcore.s0 is not allowed to import pkgiface.cli:
@@ -172,7 +172,7 @@ def test_build_contracts_dedup_and_unenforced():
 def test_build_config_shape():
     contracts = [
         {
-            "name": "layer: core 不许 import interface",
+            "name": "layer: core must not import interface",
             "source_modules": ["pkgcore.s0"],
             "forbidden_modules": ["pkgiface.cli"],
         }
@@ -182,7 +182,7 @@ def test_build_config_shape():
     assert "root_packages =" in text
     assert "    pkgcore" in text and "    pkgiface" in text
     assert "[importlinter:contract:contract-0]" in text
-    assert "name = layer: core 不许 import interface" in text
+    assert "name = layer: core must not import interface" in text
     assert "type = forbidden" in text
     assert "source_modules =" in text and "    pkgcore.s0" in text
     assert "forbidden_modules =" in text and "    pkgiface.cli" in text
@@ -192,7 +192,7 @@ def test_parse_broken_canned_probe_output():
     violations = s7_enforce.parse_broken(CANNED_BROKEN)
     assert violations == [
         {
-            "contract": "layer: core 不许 import interface",
+            "contract": "layer: core must not import interface",
             "importer": "pkgcore.s0",
             "imported": "pkgiface.cli",
             "line": 2,
@@ -210,7 +210,7 @@ Contracts
 Analyzed 1012 files, 3112 dependencies.
 ---------------------------------------
 
-layer: core 不许 import interface BROKEN
+layer: core must not import interface BROKEN
 
 Contracts: 0 kept, 1 broken.
 
@@ -219,7 +219,7 @@ Contracts: 0 kept, 1 broken.
 Broken contracts
 ----------------
 
-layer: core 不许 import interface
+layer: core must not import interface
 -------------------------------
 
 tree_sitter_analyzer.core is not allowed to import tree_sitter_analyzer.api:
@@ -239,7 +239,7 @@ def test_parse_broken_dedups_aggregate_and_detail_groups():
     violations = s7_enforce.parse_broken(CANNED_TSA_BROKEN)
     assert violations == [
         {
-            "contract": "layer: core 不许 import interface",
+            "contract": "layer: core must not import interface",
             "importer": "tree_sitter_analyzer.core.query_service",
             "imported": "tree_sitter_analyzer.api",
             "line": 320,

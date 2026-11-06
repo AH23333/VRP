@@ -565,7 +565,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "session",
-        help="R3.5': trust-mode session (begin/end/report; initial vs final delivery, 构想v7 §3.3)",
+        help="R3.5': trust-mode session (begin/end/report; initial vs final delivery, design doc v7 §3.3)",
     )
     p.add_argument("repo")
     p.add_argument("action", choices=["begin", "end", "report"])

@@ -30,7 +30,7 @@ CANNED_TS_JSON = json.dumps(
                 "dependencies": [
                     {
                         "resolved": "src/iface/b.ts",
-                        "rules": [{"severity": "error", "name": "layer: core 不许 import interface"}],
+                        "rules": [{"severity": "error", "name": "layer: core must not import interface"}],
                     }
                 ],
             },
@@ -119,7 +119,7 @@ def test_derive_ts_containers(tmp_path):
 def test_build_config_shape():
     contracts = [
         {
-            "name": "layer: core 不许 import interface",
+            "name": "layer: core must not import interface",
             "source_modules": ["src/core", "src/deep.dir"],
             "forbidden_modules": ["src/iface"],
         }
@@ -127,7 +127,7 @@ def test_build_config_shape():
     text = s7_enforce_ts.build_config(contracts)
     assert "module.exports" in text
     assert "forbidden: [" in text and 'severity: "error"' in text
-    assert '"layer: core 不许 import interface"' in text  # 中文契约名 JSON 转义可回读
+    assert '"layer: core must not import interface"' in text  # 中文契约名 JSON 转义可回读
     assert '"^(?:src/core|src/deep\\.dir)(?:/|$)"' in text  # regex 转义 + 前缀边界
     assert '"^(?:src/iface)(?:/|$)"' in text
 
@@ -138,7 +138,7 @@ def test_parse_violations_error_only_and_dedup():
     violations, summary = s7_enforce_ts.parse_violations(json.dumps(dup))
     assert violations == [
         {
-            "contract": "layer: core 不许 import interface",
+            "contract": "layer: core must not import interface",
             "importer": "src/core/a.ts",
             "imported": "src/iface/b.ts",
             "line": None,

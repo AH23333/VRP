@@ -31,16 +31,16 @@ except ModuleNotFoundError:  # optional extra guard
 
 _VERSION = "0.1.1"
 _INSTRUCTIONS = (
-    "vrp 重构循环：nav_search 定位 -> nav_module/nav_symbol 下钻核实 -> "
-    "tx_preview 自查 diff -> tx_run 执行 -> tx_verdicts 读回执；"
-    "失败读 failed_codes 修正后重试（每事务 <=3 次）。"
-    "梳理环节：curate_submit 提交 slices/structure（确定性验证，拒绝读收据修正重提），"
-    "nav_slice 按业务线下钻；"
-    "执法环节：curate_structure 入库后 enforce 跑架构执法（P9 findings，幂等）。"
-    "汇报环节：render_verdicts/render_slice 出决策点快材料，render_report 出全量静态报告；"
-    "全信任模式（构想v7 §3.3）：session_begin 开场 -> 多轮循环 -> session_end -> "
-    "session_report 交付初末对比（计数 diff + 双 L0 图并排 + verdict 时间线）。"
-    "生产规则见 docs/契约/事务契约.md 与 docs/契约/梳理工件契约.md。"
+    "vrp restructuring loop: nav_search to locate -> nav_module/nav_symbol to drill down and verify -> "
+    "tx_preview to self-review the diff -> tx_run to execute -> tx_verdicts to read receipts; "
+    "on failure read failed_codes, fix and retry (<=3 attempts per transaction). "
+    "Curation: curate_submit to submit slices/structure (deterministic validation; on rejection read the receipt, fix, resubmit), "
+    "nav_slice to drill down by business line; "
+    "Enforcement: once curate_structure is ingested, enforce runs architecture enforcement (P9 findings, idempotent). "
+    "Reporting: render_verdicts/render_slice produce decision-point briefing material, render_report produces the full static report; "
+    "Trust mode (design doc v7 §3.3): session_begin -> multi-round loop -> session_end -> "
+    "session_report delivers initial-vs-final comparison (count diff + side-by-side L0 graphs + verdict timeline). "
+    "Production rules: docs/契约/事务契约.md and docs/契约/梳理工件契约.md."
 )
 
 
@@ -235,164 +235,165 @@ def build_server(repo: Path) -> "MCPServer":
     server.add_tool(
         _guard(nav_search),
         name="nav_search",
-        description="符号搜索（AI 入口）：name/qualified_name 匹配，精确命中优先；返回 fid 句柄供下钻",
+        description="Symbol search (AI entry point): name/qualified_name matching, exact matches first; returns fid handles for drill-down",
     )
     server.add_tool(
         _guard(nav_architecture),
         name="nav_architecture",
-        description="L0 全局地图：目录级聚合（文件数/符号数/病理数），下钻句柄=module_id(file_path)；"
-        "structure 表（R2' curate 入库）存在时优先",
+        description="L0 global map: directory-level aggregation (files/symbols/pathology counts), drill-down handle = module_id (file_path); "
+        "prefers the structure table (R2' curate ingest) when present",
     )
     server.add_tool(
         _guard(nav_module),
         name="nav_module",
-        description="L1 文件级下钻：module_id=file_path，返回符号清单+病理摘要+fid 句柄；"
-        "先 nav_search / nav_architecture 拿路径",
+        description="L1 file-level drill-down: module_id = file_path; returns symbol list + pathology summary + fid handles; "
+        "get paths first via nav_search / nav_architecture",
     )
     server.add_tool(
         _guard(nav_symbol),
         name="nav_symbol",
-        description="L2 符号级下钻：签名/行号/callers/callees/关联病理；"
-        "caller/callee 的 fid 可继续下钻（全链可查防浅层）",
+        description="L2 symbol-level drill-down: signature/lines/callers/callees/related findings; "
+        "caller/callee fids keep drilling (full chain reachable, no shallow stops)",
     )
     server.add_tool(
         _guard(query_facts),
         name="query_facts",
-        description="轻量 SQL 直查 facts.db（只读 SELECT/WITH，单语句）；params 为 JSON 数组字符串做位置绑定；"
-        "schema 见 vrp/schema/facts_schema.sql（五视图 v_hotspots/v_cycles/v_dead_code/v_dup_clusters/v_coupling）",
+        description="Lightweight SQL over facts.db (read-only SELECT/WITH, single statement); params is a JSON array string bound positionally; "
+        "schema in vrp/schema/facts_schema.sql (five views: v_hotspots/v_cycles/v_dead_code/v_dup_clusters/v_coupling)",
     )
     server.add_tool(
         _guard(nav_callers),
         name="nav_callers",
-        description="完整调用者列表（分页 limit，nav_symbol 内置 cap 20 的补充）；"
-        "truncated=true 时调大 limit；fid 句柄供 nav_symbol 下钻",
+        description="Full caller list (paginated limit; complements nav_symbol's built-in cap of 20); "
+        "truncated=true means raise limit; fid handles drill down via nav_symbol",
     )
     server.add_tool(
         _guard(nav_callees),
         name="nav_callees",
-        description="完整被调用者列表（分页 limit，nav_symbol 内置 cap 20 的补充）；"
-        "truncated=true 时调大 limit；fid 句柄供 nav_symbol 下钻",
+        description="Full callee list (paginated limit; complements nav_symbol's built-in cap of 20); "
+        "truncated=true means raise limit; fid handles drill down via nav_symbol",
     )
     server.add_tool(
         _guard(nav_slice),
         name="nav_slice",
-        description="业务线视角：steps（附符号摘要+fid 句柄）+ acts（分幕）；"
-        "slices 由 curate_submit 验收入库；status=stale 表示符号/边已漂移",
+        description="Business-line view: steps (with symbol summaries + fid handles) + acts; "
+        "slices are ingested via curate_submit; status=stale means symbols/edges drifted",
     )
     server.add_tool(
         _guard(nav_path),
         name="nav_path",
-        description="耦合路径查找：from→to 沿 edges（src→dst）最短路径（WITH RECURSIVE BFS）；"
-        "hops_detail 透传每跳 type/evidence/confidence——低置信边需下钻核实；"
-        "不可达时 found=false（可调大 max_hops 上限 10 或反向查询）",
+        description="Coupling path lookup: shortest from→to path along edges (src→dst) (WITH RECURSIVE BFS); "
+        "hops_detail carries per-hop type/evidence/confidence — verify low-confidence edges by drilling down; "
+        "found=false when unreachable (raise max_hops up to 10 or query the reverse direction)",
     )
     server.add_tool(
         _guard(curate_submit),
         name="curate_submit",
-        description="提交 AI 梳理工件验收入库：kind=slices（JSON 数组）|structure（JSON 对象），"
-        "payload_json 为工件原文；确定性验证全过才入库，拒绝出收据（errors 逐条含稳定码）；"
-        "schema 见 docs/契约/梳理工件契约.md",
+        description="Submit AI-curated artifacts for deterministic validation and ingest: kind=slices (JSON array) | structure (JSON object), "
+        "payload_json is the artifact verbatim; ingested only if all validation passes, otherwise rejected with a receipt (errors each carry a stable code); "
+        "default output language for curated content: English; "
+        "schema in docs/契约/梳理工件契约.md",
     )
     server.add_tool(
         _guard(curate_slices),
         name="curate_slices",
-        description="列已入库业务线（slice_id/name/status/steps 计数）；"
-        "status=active 可用，stale=符号漂移待复梳理，rejected=用户否决",
+        description="List ingested business lines (slice_id/name/status/step counts); "
+        "status=active is usable, stale=drifted and awaiting re-curation, rejected=user veto",
     )
     server.add_tool(
         _guard(curate_structure),
         name="curate_structure",
-        description="读已入库整体结构（modules/layers/rules 原文+status）；"
-        "structure 是 S7 架构执法（远期）与 L0 地图的原料",
+        description="Read the ingested overall structure (modules/layers/rules verbatim + status); "
+        "structure feeds S7 architecture enforcement and the L0 map",
     )
     server.add_tool(
         _guard(curate_reject),
         name="curate_reject",
-        description="用户否决已入库工件（kind=slice|structure，target_id=slice_id 或 'structure'）："
-        "status→rejected + decisions 留痕；否决是保守方向，agent 可代转达用户决定",
+        description="User vetoes an ingested artifact (kind=slice|structure, target_id=slice_id or 'structure'): "
+        "status→rejected + decision logged; veto is the conservative direction, the agent may relay the user's decision",
     )
     server.add_tool(
         _guard(curate_receipt),
         name="curate_receipt",
-        description="读最近一次 curate 收据（.vrp/curate-receipt.json）："
-        "被拒时按 errors 码逐条修正工件后重提",
+        description="Read the latest curate receipt (.vrp/curate-receipt.json): "
+        "when rejected, fix the artifact per error codes and resubmit",
     )
     server.add_tool(
         _guard(drift_report),
         name="drift_report",
-        description="统一漂移查询面（只读）：active/stale 梳理工件逐条 fresh/missing_fids/"
-        "missing_edges + 重定位候选——fid_ledger 身份史反查 qn 再正查现行 fid，"
-        "唯一候选直接给 remap 映射（F1 读出辅助），qn 消亡走同文件域补位；"
-        "按 remap 重梳理工件后 curate_submit 再入库（重验不旁路）；"
-        "summary.active_but_drifted 非空 = 复验链有洞，须上报",
+        description="Unified drift query surface (read-only): per-artifact fresh/missing_fids/missing_edges for active/stale artifacts "
+        "+ relocation candidates — fid_ledger identity history maps old fid to qualified_name, then re-resolves to the current fid; "
+        "a unique candidate yields a direct remap (F1 read-out aid); when the qualified_name is gone, same-file candidates fill in; "
+        "re-curate with the remap and curate_submit again (full re-validation, no bypass); "
+        "non-empty summary.active_but_drifted = a hole in the revalidation chain, must be reported",
     )
     server.add_tool(
         _guard(tx_preview),
         name="tx_preview",
-        description="事务提交前自查：per-edit unified diff + difftastic 结构信号；"
-        "无闸门不改树不写 verdict；前置失败=目标缺失/已存在（G0 会拒的预检）",
+        description="Pre-submit self-review: per-edit unified diff + difftastic structural signals; "
+        "runs no gates, touches no tree, writes no verdict; precondition failure = target missing/already exists (a G0 pre-check)",
     )
     server.add_tool(
         _guard(tx_submit),
         name="tx_submit",
-        description="事务落盘 .vrp/transactions/<id>.json（schema 强校验，不执行）；"
-        "大重构拆事务序列供 CLI 批处理（vrp transact-batch）",
+        description="Persist the transaction to .vrp/transactions/<id>.json (strict schema validation, no execution); "
+        "split large refactors into transaction sequences for CLI batching (vrp transact-batch)",
     )
     server.add_tool(
         _guard(tx_run),
         name="tx_run",
-        description="执行事务：T1-T3 直接跑闸门（G0-G5）出 verdict；"
-        "T4 一律返回 needs_confirmation——放行只能人工 CLI `vrp transact --confirm`，agent 不可绕过；"
-        "执行前建议先 tx_preview 自查 diff",
+        description="Execute a transaction: T1-T3 run the gates directly (G0-G5) and emit a verdict; "
+        "T4 always returns needs_confirmation — release only via manual CLI `vrp transact --confirm`, never by the agent; "
+        "tx_preview the diff first",
     )
     server.add_tool(
         _guard(tx_verdicts),
         name="tx_verdicts",
-        description="读事务回执（repair receipt）：tid 给单条全文，不给列全部；"
-        "open（非 committed）项自动回馈进 dossier evidence 节",
+        description="Read transaction receipts: tid returns one full record, no listing; "
+        "open (non-committed) items feed back into the dossier evidence section automatically",
     )
     server.add_tool(
         _guard(render_verdicts),
         name="render_verdicts",
-        description="T4 决策点快材料：verdict 时间线 + open/T4 清单；"
-        "T4 放行只能人工 CLI vrp transact --confirm",
+        description="T4 decision-point briefing: verdict timeline + open/T4 list; "
+        "T4 release only via manual CLI vrp transact --confirm",
     )
     server.add_tool(
         _guard(render_slice),
         name="render_slice",
-        description="单业务线快材料：Mermaid 时序源（steps/acts），可贴 mermaid.live 渲染；"
-        "slice_id 从 curate_slices 拿",
+        description="Single business-line briefing: Mermaid sequence source (steps/acts), paste into mermaid.live to render; "
+        "get slice_id from curate_slices",
     )
     server.add_tool(
         _guard(render_report),
         name="render_report",
-        description="S8 全量静态报告 -> .vrp/report/（report.html + IR + SARIF + Mermaid；"
-        "archify 缺失自动降级 Mermaid-only）；报告无时间戳，带 facts.git_head 可溯源",
+        description="S8 full static report -> .vrp/report/ (report.html + IR + SARIF + Mermaid; "
+        "auto-degrades to Mermaid-only when archify is missing); no timestamps, traceable via facts.git_head",
     )
     server.add_tool(
         _guard(session_begin),
         name="session_begin",
-        description="全信任模式开场（构想v7 §3.3）：facts.db 快照 + 会话元数据；"
-        "同一 repo 同时只允许一个活动会话；之后多轮重构零打扰直至 session_end",
+        description="Trust-mode opening (design doc v7 §3.3): facts.db snapshot + session metadata; "
+        "only one active session per repo at a time; subsequent refactor rounds run undisturbed until session_end",
     )
     server.add_tool(
         _guard(session_end),
         name="session_end",
-        description="全信任模式收场：末态快照 + ended_at + 初末计数 diff"
-        "（节点/边/病理/xcheck 四组）；之后 session_report 出交付",
+        description="Trust-mode closing: final snapshot + ended_at + initial-vs-final count diff "
+        "(nodes/edges/pathology/xcheck); session_report then delivers the output",
     )
     server.add_tool(
         _guard(session_report),
         name="session_report",
-        description="全信任模式交付：初末计数 diff + 双 L0 架构图并排（archify，缺失降级 Mermaid）"
-        "+ 会话窗口内 verdict 时间线 -> 会话目录 report.html；session_id 缺省取最近已结束会话",
+        description="Trust-mode delivery: initial-vs-final count diff + side-by-side L0 architecture graphs (archify, Mermaid fallback) "
+        "+ verdict timeline within the session window -> report.html in the session directory; session_id defaults to the latest ended session",
     )
     server.add_tool(
         _guard(enforce),
         name="enforce",
-        description="S7 架构执法（构想v7 §4）：curate 入库的 structure 经 import-linter 执行，"
-        "Broken contracts = P9 findings（source='s7-enforce'，幂等 replace-all）；"
-        "无 structure/非 active 诚实 skipped；违例经 dossier 进重构目标——AI 理解，工具执法",
+        description="S7 architecture enforcement (design doc v7 §4): runs the curate-ingested structure through import-linter; "
+        "broken contracts = P9 findings (source='s7-enforce', idempotent replace-all); "
+        "honestly skipped when no structure or not active; violations enter refactor targets via the dossier — AI understands, tools enforce",
     )
     return server
 
