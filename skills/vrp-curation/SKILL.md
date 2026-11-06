@@ -1,65 +1,80 @@
 ---
 name: vrp-curation
-description: vrp 梳理生产指南——AI 产出 slices/structure 工件、经 curate 验收入库的操作协议。当需要梳理业务线（slices）、整体结构（structure）、处理 curate 收据拒绝码时使用。
+description: vrp curation production guide - how the AI produces slices/structure artifacts, submits them through curate validation, handles rejection codes, and re-curates drifted artifacts. Use when curating business lines (slices), the overall structure (structure), or processing curate receipts.
 ---
 
-# vrp-curation：梳理生产指南
+# vrp-curation: curation production guide
 
-VRP 主流程②环（AI 梳理）操作协议。前置阅读：`docs/契约/梳理工件契约.md`（schema 权威）。
+Operation protocol for the VRP main-flow curation loop. Prerequisite reading: `docs/契约/梳理工件契约.md` (schema authority).
 
-## 定位
+## Purpose
 
-把 AI 对代码库的理解**结构化沉淀**为可验证数据：
-- **线（slices）**：业务脉络——步骤序列，每步锚定真实符号，相邻步骤必须有真实调用边
-- **面（structure）**：整体结构——模块划分 + 层序 DAG + 架构规则（S7 执法原料）
+Persist the AI's understanding of the codebase as **verifiable data**:
+- **slices** (lines): business threads - step sequences, each step anchored to a real symbol, adjacent steps joined by real call edges
+- **structure** (surface): overall shape - module partition + layer DAG + architecture rules (the raw material for S7 enforcement)
 
-验证是**确定性的**（机器验，全过才入库）；**价值判断**留给用户（`--reject` 否决留痕）。
-你（AI）生产，curate 验收，用户拍板。
+Validation is **deterministic** (machine-checked; everything passes or nothing ingests); **value judgments belong to the user** (rejections are logged). You (the AI) produce, curate validates, the user decides.
 
-## 生产流程（六步）
+**Default output language is English** for curated content (module `name`/`responsibility`, slice `name`/`summary`, act names), unless the user explicitly requests another language - the user-facing report renders this content verbatim.
+
+## Production flow (six steps)
 
 ```
-1. 取材     dossier / nav_search 定位目标业务
-2. 核实     nav_callers / nav_callees 找真实相邻符号（不许跨跳、不许虚构 fid）
-3. 产出     按 §1.1/§2.1 schema 写 slices.json / structure.json
-4. 提交     curate_submit(kind, payload_json) 或落 .vrp/ai/ 后 vrp curate <repo>
-5. 读收据   accepted → 完成；rejected → 读 errors[].code 逐条修正后整体重提
-6. 下钻     nav_slice(slice_id) 复核入库结果
+1. Gather      dossier / nav_search to locate the target business
+2. Verify      nav_callers / nav_callees for genuinely adjacent symbols
+               (no skipping ahead, no invented fids)
+3. Produce     write slices.json / structure.json per the contract schema
+4. Submit      curate_submit(kind, payload_json), or drop into .vrp/ai/
+               and run `vrp curate <repo>`
+5. Read receipt accepted -> done; rejected -> fix per errors[].code,
+               resubmit the whole file
+6. Drill down  nav_slice(slice_id) to double-check the ingested result
 ```
 
-## 验证红线（被拒的常见原因）
+After a structure is ingested, run `enforce()` (S7): broken layer contracts become P9 findings - report them to the user and fold them into refactor targets.
 
-| 你犯的错 | 收据码 |
+## Validation red lines (common rejection causes)
+
+| Mistake | Receipt code |
 |---|---|
-| steps 相邻符号间没有真实边（跨跳/想当然） | `SLICE_MISSING_EDGE` |
-| fid 过期（事务提交后没重新 nav_search） | `SLICE_UNKNOWN_FID` |
-| 同一符号分给两个模块 | `STRUCT_FID_OVERLAP` |
-| 层依赖成环 | `STRUCT_LAYER_CYCLE` |
-| module.layer / rule 层引用不在 layers | `STRUCT_UNKNOWN_LAYER` / `STRUCT_RULE_LAYER` |
-| acts 分幕不衔接/不覆盖全程 | `SLICE_ACT_BOUNDS` |
+| no real edge between adjacent steps (skipping/wishful thinking) | `SLICE_MISSING_EDGE` |
+| stale fid (transactions landed, no fresh nav_search) | `SLICE_UNKNOWN_FID` |
+| same symbol assigned to two modules | `STRUCT_FID_OVERLAP` |
+| layer dependency cycle | `STRUCT_LAYER_CYCLE` |
+| module.layer / rule references a layer not in layers | `STRUCT_UNKNOWN_LAYER` / `STRUCT_RULE_LAYER` |
+| acts do not join seamlessly / do not cover all steps | `SLICE_ACT_BOUNDS` |
 
-## 规则
+## Rules
 
-1. **fid 只能来自 nav 族查询**——虚构的 fid 一定过不了存在性验证
-2. **相邻必须有边**：`CALLS`/`CALL_REFERENCE`/`HTTP_CALLS` 任一方向；先 nav_callers/nav_callees 核实再写 steps
-3. **原子性**：一个文件里任何一条不过，整个文件都拒——修完再整体重提
-4. **幂等**：同 slice_id 重提交覆盖旧版；structure 单行覆盖——大胆改版重提
-5. **诚实**：业务线画不出真实边就缩短范围；不许为了凑步骤硬编
-6. 用户否决（status=rejected）是终态——不许重提同 id 对抗用户决定；换 slice_id 重新梳理需用户明示
+1. **fids come only from nav-family queries** - invented fids never pass existence validation
+2. **Adjacent steps need a real edge**: `CALLS`/`CALL_REFERENCE`/`HTTP_CALLS` in either direction; verify with nav_callers/nav_callees before writing steps
+3. **Atomicity**: one bad entry rejects the whole file - fix everything, then resubmit the file
+4. **Idempotent**: resubmitting the same slice_id overwrites; structure is single-row overwrite - iterate boldly
+5. **Honesty**: if a business line cannot be drawn with real edges, shorten its scope; never pad steps to force a shape
+6. A user rejection (status=rejected) is final - never resubmit the same id against the user's decision; re-curating under a new slice_id requires explicit user consent
 
-## 拒绝码速查
+## Drift and remap
 
-slices：`SLICE_SCHEMA` / `SLICE_EMPTY_NAME` / `SLICE_EMPTY_SUMMARY` / `SLICE_UNKNOWN_FID` / `SLICE_MISSING_EDGE` / `SLICE_ACT_BOUNDS`
-structure：`STRUCT_SCHEMA` / `STRUCT_EMPTY_NAME` / `STRUCT_EMPTY_RESPONSIBILITY` / `STRUCT_UNKNOWN_FID` / `STRUCT_FID_OVERLAP` / `STRUCT_LAYER_CYCLE` / `STRUCT_UNKNOWN_LAYER` / `STRUCT_RULE_LAYER`
-文件级：`FILE_NOT_JSON` / `FILE_WRONG_SHAPE`
+Transactions invalidate fids. `drift_report()` (read-only) lists per-artifact `fresh`/`missing_fids`/`missing_edges` plus relocation candidates from the fid ledger:
+- Unique qualified_name candidate -> direct `remap` (old fid -> new fid): apply it, re-curate, `curate_submit` again (full re-validation, no bypass)
+- Qualified_name gone (renamed/deleted) -> same-file candidates are listed (capped) for judgment
+- Artifacts marked `stale` are re-validation failures - re-curate before relying on them
 
-## 工具面
+## Rejection code quick reference
 
-| 工具 | 用途 |
+slices: `SLICE_SCHEMA` / `SLICE_EMPTY_NAME` / `SLICE_EMPTY_SUMMARY` / `SLICE_UNKNOWN_FID` / `SLICE_MISSING_EDGE` / `SLICE_ACT_BOUNDS`
+structure: `STRUCT_SCHEMA` / `STRUCT_EMPTY_NAME` / `STRUCT_EMPTY_RESPONSIBILITY` / `STRUCT_UNKNOWN_FID` / `STRUCT_FID_OVERLAP` / `STRUCT_LAYER_CYCLE` / `STRUCT_UNKNOWN_LAYER` / `STRUCT_RULE_LAYER`
+file level: `FILE_NOT_JSON` / `FILE_WRONG_SHAPE`
+
+## Tool surface
+
+| Tool | Use |
 |---|---|
-| `curate_submit(kind, payload_json)` | 提交验证入库（kind=slices/structure） |
-| `curate_slices()` / `curate_structure()` | 读已入库工件与状态 |
-| `curate_receipt()` | 读最近验收收据 |
-| `curate_reject(kind, target_id, note)` | 代转达用户否决（保守方向允许 agent 转） |
-| `nav_slice(slice_id)` | 业务线下钻核对 |
-| CLI `vrp curate <repo>` / `--reject <id> --note ...` | 人工入口 |
+| `curate_submit(kind, payload_json)` | submit for validation and ingest (kind=slices/structure) |
+| `curate_slices()` / `curate_structure()` | read ingested artifacts and status |
+| `curate_receipt()` | read the latest validation receipt |
+| `curate_reject(kind, target_id, note)` | relay a user rejection (conservative direction, agent may relay) |
+| `drift_report()` | unified drift query (fresh/missing/remap candidates, read-only) |
+| `nav_slice(slice_id)` | drill down into an ingested business line |
+| `enforce()` | S7 architecture enforcement over the ingested structure (P9 findings) |
+| CLI `vrp curate <repo>` / `--reject <id> --note ...` | manual entry points |

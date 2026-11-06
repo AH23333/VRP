@@ -1,68 +1,81 @@
 ---
 name: vrp-loop
-description: 用 vrp MCP 工具执行 AI 重构循环：导航定位→下钻核实→事务生产→preview 自查→执行→读回执→失败修正重试（≤3 次/事务）。适用任何接入了 vrp MCP server 的 agent。
+description: AI restructuring loop over the vrp MCP tools - navigate, verify, produce transactions, preview, run, read verdicts, fix-and-retry (max 3 per transaction). Use for any agent connected to a vrp MCP server (`vrp mcp <repo>`).
 ---
 
-# vrp-loop：AI 重构循环协议 v1
+# vrp-loop: AI restructuring loop protocol v2
 
-## 前置
+## Prerequisites
 
-- MCP server 已接入（`vrp mcp <repo>`，stdio，per-repo 绑定；`pip install vrp[mcp]`）
-- 事实层已建好（facts.db 存在；若 nav_* 报 facts.db missing，先请用户跑 `vrp run <repo>`）
-- 事务契约：`docs/契约/事务契约.md`（schema/G 码/生产指南——生产前必读）
+- MCP server connected (`vrp mcp <repo>`, stdio, per-repo binding; `pip install vrp[mcp]`)
+- Fact layer built (facts.db exists; if nav_* reports facts.db missing, ask the user to run `vrp run <repo>` first)
+- Transaction contract: `docs/契约/事务契约.md` (schema / gate codes / production guide - read before producing)
 
-## 循环 8 步（构想v7 §1.5）
+## The 8-step loop
 
-1. **定位**：`nav_search(query)` 拿候选符号（fid 句柄 + file_path）
-   - 全局地图先看 `nav_architecture()`（目录聚合：符号数/病理数分布）
-2. **下钻核实**：`nav_module(module_id=file_path)` → `nav_symbol(fid)`
-   - **全链下钻**：callers/callees 的 fid 继续下钻，直到确认影响面闭合
-   - 不读裸代码文件——认知来自分层接口（`query_facts`/dossier 补充）
-3. **生产事务**：按契约组装 tx_json（`{"id","type","summary","declared_moves","edits"}`）
-   - **最小事务**：一个事务一个意图；edits 全文覆写（先取现文件内容再产全文）
-   - T1 的 declared_moves 必须完备（以 nav_symbol/query_facts 查到的 qualified_name 为准，勿凭记忆）
-4. **preview 自查**：`tx_preview(tx_json)` 读 unified diff——确认改动面 = 声明意图
-5. **执行**：`tx_run(tx_json)`
-   - T4 会返回 needs_confirmation——**不要重试**，整理 diff 摘要请用户人工放行（CLI `vrp transact --confirm`）
-6. **读回执**：`tx_verdicts()`；失败读 `failed_gate` + `failed_codes`
-7. **修正重试**：按失败码修 tx_json 重新 preview→run；**同一事务 ≤3 次重试**，3 次不过换思路或放弃该目标并向用户说明
-8. **回归**：目标批次完成后请用户跑 `vrp run <repo>` 重建事实层 + `vrp dossier` 复核病理变化（open verdict 会自动出现在 dossier evidence 节）
+1. **Locate**: `nav_search(query)` for candidate symbols (fid handles + file_path)
+   - For the global map first call `nav_architecture()` (prefers the AI-curated structure; directory aggregation fallback)
+2. **Drill down and verify**: `nav_module(module_id=file_path)` -> `nav_symbol(fid)`
+   - **Full-chain drilling**: keep drilling caller/callee fids until the blast radius is closed
+   - Do not read raw source as a source of cognition - use the layered interfaces (`query_facts`, dossier)
+3. **Produce the transaction**: assemble tx_json per the contract (`{"id","type","summary","declared_moves","edits"}`)
+   - **Minimal transactions**: one intent per transaction; edits are full-file overwrites (fetch current content first)
+   - T1 declared_moves must be complete (base them on nav_symbol/query_facts qualified_names, never memory)
+4. **Preview**: `tx_preview(tx_json)` - read the unified diff, confirm the change surface matches the declared intent
+5. **Run**: `tx_run(tx_json)`
+   - T4 returns needs_confirmation - **do not retry**; summarize the diff and hand it to the user for manual release (CLI `vrp transact --confirm`)
+6. **Read the verdict**: `tx_verdicts()`; on failure read `failed_gate` + `failed_codes`
+7. **Fix and retry**: repair tx_json per the failure codes, preview -> run again; **max 3 retries per transaction** - after 3 failures change approach or drop the target and tell the user why
+8. **Regression**: when the batch is done, ask the user to run `vrp run <repo>` to rebuild the fact layer + `vrp dossier` to re-check pathology (open verdicts feed into the dossier evidence section automatically)
 
-## 失败码速查（详见契约 §4）
+## Enforcement loop (S7)
 
-| 码 | 含义 | 修正方向 |
+Once a structure is ingested (`curate_submit` kind=structure), run `enforce()`:
+- Broken layer contracts become P9 findings (idempotent replace-all) - feed them back into the loop as refactor targets
+- Honestly skipped when no structure or status is not active
+
+## Drift handling
+
+Curated artifacts go stale as transactions land. `drift_report()` (read-only) reports per-artifact `fresh` / `missing_fids` / `missing_edges` plus relocation candidates from the fid ledger:
+- A unique qualified_name candidate yields a direct `remap` (old fid -> new fid); re-curate with the remap and `curate_submit` again (full re-validation, no bypass)
+- Non-empty `summary.active_but_drifted` means a hole in the revalidation chain - report it to the user immediately
+
+## Failure code quick reference (contract §4)
+
+| Code | Meaning | Fix direction |
 |---|---|---|
-| `gate/G0/apply-edits` | 目标缺失/已存在 | 核对 file 路径与 op；先 nav_module 看现状 |
-| `gate/G1/parse-errors` | 编辑引入语法错误 | 重产全文 content |
-| `gate/G2/static-check` | lint/typecheck 挂 | 读 detail 修 lint |
-| `gate/G3/test` | 测试挂 | 读 detail.failed 测试名；判断是事务错还是测试需更新 |
-| `gate/G4/undeclared-change` | T1 有未声明符号变更 | 补 declared_moves 或拆事务 |
-| `gate/G4/dangling-reference` | T2 删了仍被引用的符号 | 缩小删除范围 |
-| `gate/G4/edge-mismatch` | T1 使用边不保 | 漏改调用方；nav_symbol callees 核实 |
-| `gate/G4/verify-broken` | code-atlas verify_changes BROKEN | 结构性破坏，重新设计 |
-| `gate/G4/structural-change` | 未声明内容变化（difftastic） | 撤偷改或如实声明换档位 |
-| `gate/G5/deadcode-increase` | T2/T4 引入新死码 | 删除新增的死路径 |
+| `gate/G0/apply-edits` | target missing/already exists | check file path and op; nav_module for current state |
+| `gate/G1/parse-errors` | edit introduced syntax errors | regenerate full content |
+| `gate/G2/static-check` | lint/typecheck failed | read detail, fix lint |
+| `gate/G3/test` | tests failed | read detail.failed test names; transaction bug or stale test? |
+| `gate/G4/undeclared-change` | T1 has undeclared symbol changes | complete declared_moves or split the transaction |
+| `gate/G4/dangling-reference` | T2 removed a still-referenced symbol | shrink the deletion scope |
+| `gate/G4/edge-mismatch` | T1 usage edges not preserved | missed a caller; verify via nav_symbol callees |
+| `gate/G4/verify-broken` | code-atlas verify_changes BROKEN | structural breakage, redesign |
+| `gate/G4/structural-change` | undeclared content change (difftastic) | revert the sneak edit or declare it honestly and change tier |
+| `gate/G5/deadcode-increase` | T2/T4 introduced new dead code | delete the new dead paths |
 
-## 信任分级（§3.3：全监督 / 全信任）
+## Trust modes (design doc v7 §3.3)
 
-| 级别 | 模式 | 交付物 |
+| Mode | Behavior | Deliverable |
 |---|---|---|
-| 全监督（默认） | 每轮决策点拍板（curate reject / T4 confirm / render 材料） | 逐轮 verdict + 材料 |
-| 全信任 | 多轮重构期间零打扰 | 初末态可视化对比 |
+| Supervised (default) | user approves each decision point (curate reject / T4 confirm / render material) | per-round verdicts + briefing material |
+| Trust | zero interruptions across multi-round refactors | initial-vs-final comparison |
 
-**全信任模式流程**：`session_begin(note)` 开场 → 正常跑循环 8 步（多轮零打扰）→ `session_end(note)` 收场 → `session_report()` 交付（初末计数 diff 四组 + 双 L0 架构图并排 + 会话窗口内 verdict 时间线，落会话目录 report.html）。
-- T4 安全闸不因全信任放开：`tx_run` 仍恒返 needs_confirmation——全信任期间避免产 T4，或把 T4 留到 session_end 后转人工
-- 初末对比是"并排+计数"诚实版，不做图 diff（fid 内容敏感，重构后必变）
+**Trust-mode flow**: `session_begin(note)` -> run the 8-step loop as usual (multiple rounds, uninterrupted) -> `session_end(note)` -> `session_report()` (count diff over four groups + side-by-side L0 graphs + verdict timeline within the window, written to the session directory report.html).
+- The T4 safety gate does not open in trust mode: `tx_run` still always returns needs_confirmation - avoid T4 during the session, or leave T4 for manual handling after session_end
+- Initial-vs-final comparison is the honest "side-by-side + counts" version; no graph diff (fid content is sensitive and always changes after refactors)
 
-## 红线
+## Red lines
 
-- **不读裸代码**当认知来源（接口拿不到再用 query_facts）
-- **不放行 T4**（needs_confirmation 即停，转人工）
-- **重试 ≤3 次**/事务
-- **不虚构 fid/qualified_name**（接口查不到就是不存在的处理路径）
+- **Never read raw source as cognition** (only fall back to query_facts when interfaces cannot answer)
+- **Never release T4** (needs_confirmation means stop and hand over to a human)
+- **Max 3 retries** per transaction
+- **Never invent fids/qualified_names** (if the interfaces cannot find it, it does not exist)
+- **Default output language is English** for everything you produce through vrp (curated artifacts, summaries, responsibilities), unless the user explicitly requests another language
 
-## 关联
+## Related
 
-- ②环梳理（业务线/结构沉淀）走 `skills/vrp-curation/`（curate_submit 验收入库 → nav_slice 下钻）
-- ④环汇报（静态报告/决策点材料）走 render 三件：`render_verdicts()`（T4 清单）/`render_slice(slice_id)`（业务线 Mermaid 源）/`render_report()`（全量报告落 `.vrp/report/`）
-- 事务 schema 权威：`docs/契约/事务契约.md`；梳理工件 schema 权威：`docs/契约/梳理工件契约.md`
+- Curation loop (slices/structure) -> `skills/vrp-curation/` (curate_submit validation -> nav_slice drill-down -> drift remap)
+- Reporting loop -> render tools: `render_verdicts()` (T4 briefing), `render_slice(slice_id)` (business-line Mermaid source), `render_report()` (full static report at `.vrp/report/` - the user-facing product: how-to-read guide, AI-curated overview, pathology checkup in plain language, deep data folded for agents)
+- Transaction schema authority: `docs/契约/事务契约.md`; curated-artifact schema authority: `docs/契约/梳理工件契约.md`
