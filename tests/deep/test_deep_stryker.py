@@ -13,27 +13,17 @@ The fixture repo lives under work/ (D drive) because vitest+typescript
 node_modules are heavy; teardown removes the whole fixture and its cache db.
 """
 import json
-import os
 import shutil
 import sqlite3
-import stat
 import subprocess
 
 import pytest
 
-from tests.deep.conftest import CBM_CACHE, ROOT, git, run_vrp
+from tests.deep.conftest import CBM_CACHE, ROOT, git, rmtree_retry, run_vrp
 
 pytestmark = pytest.mark.deep
 
 SHIM = ROOT / "work" / "stryker" / "node_modules" / ".bin" / "stryker.cmd"
-
-
-def _rmtree(path):
-    def _clear_readonly(func, target, _exc):
-        os.chmod(target, stat.S_IWRITE)
-        func(target)
-
-    shutil.rmtree(path, onexc=_clear_readonly)
 
 
 @pytest.fixture(scope="session")
@@ -42,7 +32,7 @@ def stryker_repo():
         pytest.skip("work/stryker sandbox not installed")
     repo = ROOT / "work" / "_deep_stryker"
     if repo.exists():
-        _rmtree(repo)
+        rmtree_retry(repo)
     (repo / "src").mkdir(parents=True)
     (repo / "test").mkdir()
     (repo / "src" / "mathfun.ts").write_text(
@@ -114,7 +104,7 @@ def stryker_repo():
     yield repo
     if cache_db.exists():
         cache_db.unlink()
-    _rmtree(repo)
+    rmtree_retry(repo)
 
 
 def test_stryker_e2e(stryker_repo):

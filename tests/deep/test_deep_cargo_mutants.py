@@ -1,4 +1,4 @@
-"""Deep E2E: mutate-run dispatches Rust targets to real cargo-mutants 27.1.0.
+﻿"""Deep E2E: mutate-run dispatches Rust targets to real cargo-mutants 27.1.0.
 
 Fixture ground truth (probe-measured on cargo-mutants 27.1.0, Windows,
 work/rust-calc-probe): src/lib.rs (add/greet/mul) yields 12 mutants - 8
@@ -14,25 +14,14 @@ own scratch copy by default (no --in-place), so the fixture never grows a
 target/ dir and the git tree stays clean.
 """
 import json
-import os
-import shutil
 import sqlite3
-import stat
 
 import pytest
 
-from tests.deep.conftest import CBM_CACHE, ROOT, git, run_vrp
+from tests.deep.conftest import CBM_CACHE, ROOT, git, rmtree_retry, run_vrp
 from vrp.s2_cargo_mutants import find_cargo_mutants
 
 pytestmark = pytest.mark.deep
-
-
-def _rmtree(path):
-    def _clear_readonly(func, target, _exc):
-        os.chmod(target, stat.S_IWRITE)
-        func(target)
-
-    shutil.rmtree(path, onexc=_clear_readonly)
 
 
 @pytest.fixture(scope="session")
@@ -41,7 +30,7 @@ def cargo_repo():
         pytest.skip("cargo-mutants not installed")
     repo = ROOT / "work" / "_deep_cargo_mutants"
     if repo.exists():
-        _rmtree(repo)
+        rmtree_retry(repo)
     (repo / "src").mkdir(parents=True)
     (repo / "tests").mkdir()
     (repo / "src" / "lib.rs").write_text(
@@ -98,7 +87,7 @@ def cargo_repo():
     yield repo
     if cache_db.exists():
         cache_db.unlink()
-    _rmtree(repo)
+    rmtree_retry(repo)
 
 
 def test_cargo_mutants_e2e(cargo_repo):

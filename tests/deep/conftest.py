@@ -1,8 +1,10 @@
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,30 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 CBM_CACHE = Path(r"D:\cbm-cache")
 VERIFY_DIR = ROOT / "verify"
+
+
+def rmtree_retry(path, attempts=6, delay=5.0):
+    """批量删除 Windows 退避重试（dogfood 2026-11-06 实证）：
+
+    stryker fixture teardown 删刚被 npm/stryker 写热的 node_modules 时，
+    实时 AV 扫描（SYSTEM 进程，非管理员 handle64 不可见）在删除中途抓走
+    目录句柄——子项全删光、顶层目录 WinError 32，失败瞬间 handle64 查无
+    用户态持有者；onexc 立即重试必输竞速。有界退避重试覆盖扫描窗口；
+    下轮 setup 的 if repo.exists(): rmtree 兜底自愈。
+    """
+
+    def _clear_readonly(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    for attempt in range(1, attempts + 1):
+        try:
+            shutil.rmtree(path, onexc=_clear_readonly)
+            return
+        except PermissionError:
+            if attempt == attempts:
+                raise
+            time.sleep(delay * attempt)
 
 
 def run_vrp(args, cwd, expect_rc=0, timeout=3600):
