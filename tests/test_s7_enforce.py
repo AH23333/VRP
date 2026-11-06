@@ -188,6 +188,61 @@ def test_build_config_shape():
     assert "forbidden_modules =" in text and "    pkgiface.cli" in text
 
 
+def test_enforceable_container_shapes(tmp_path):
+    repo = tmp_path
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "noinit").mkdir()  # 顶层无 __init__.py：命名空间包，import-linter 可执法
+    (repo / "root_helper.py").write_text("", encoding="utf-8")  # 根级 .py：模块非包
+    (repo / "bench-agent").mkdir()  # 连字符目录：非法标识符组件
+    assert s7_enforce._enforceable_container(repo, "pkg.sub.mod")
+    assert s7_enforce._enforceable_container(repo, "pkg")  # __init__.py 本身
+    assert s7_enforce._enforceable_container(repo, "noinit.mod")  # 命名空间包
+    assert not s7_enforce._enforceable_container(repo, "root_helper")
+    assert not s7_enforce._enforceable_container(repo, "bench-agent.run")
+    assert not s7_enforce._enforceable_container(repo, "missing_top.mod")  # 顶层不存在
+
+
+def test_filter_contracts_unenforceable_containers(tmp_path):
+    repo = tmp_path
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    contracts = [
+        {
+            "id": "c1",
+            "name": "layer: core must not import interface",
+            "source_modules": ["pkg.s0", "root_helper"],
+            "forbidden_modules": ["pkg.other", "noinit.mod"],
+        },
+        {
+            "id": "c2",
+            "name": "layer: core must not import outer",
+            "source_modules": ["bench-agent.run"],
+            "forbidden_modules": ["pkg.other"],
+        },
+    ]
+    kept, dropped = s7_enforce._filter_contracts(repo, contracts)
+    assert [c["id"] for c in kept] == ["c1"]
+    assert kept[0]["source_modules"] == ["pkg.s0"]
+    assert kept[0]["forbidden_modules"] == ["pkg.other"]
+    assert dropped == ["bench-agent.run", "noinit.mod", "root_helper"]
+
+
+def test_filter_contracts_all_dropped(tmp_path):
+    repo = tmp_path
+    contracts = [
+        {
+            "id": "c1",
+            "name": "layer: a must not import b",
+            "source_modules": ["root_helper"],
+            "forbidden_modules": ["bench-agent.run"],
+        }
+    ]
+    kept, dropped = s7_enforce._filter_contracts(repo, contracts)
+    assert kept == []
+    assert dropped == ["bench-agent.run", "root_helper"]
+
+
 def test_parse_broken_canned_probe_output():
     violations = s7_enforce.parse_broken(CANNED_BROKEN)
     assert violations == [
@@ -244,6 +299,74 @@ def test_parse_broken_dedups_aggregate_and_detail_groups():
             "imported": "tree_sitter_analyzer.api",
             "line": 320,
         }
+    ]
+
+
+# tsa 冒烟真实输出形态（2026-11-06，COLUMNS 钉宽后不折行）：多链/多头行号多值/
+# 链尾边行/同边跨契约
+CANNED_MULTI_CHAIN_BROKEN = """
+---------
+Contracts
+---------
+
+Analyzed 1139 files, 3325 dependencies.
+---------------------------------------
+
+layer: analysis must not import infrastructure BROKEN
+layer: benchmark must not import analysis BROKEN
+
+Contracts: 0 kept, 2 broken.
+
+
+----------------
+Broken contracts
+----------------
+
+layer: analysis must not import infrastructure
+----------------------------------------------
+
+t1.a is not allowed to import t1.w:
+
+-   t1.a -> t1.b (l.13)
+    t1.b -> t1.c (l.245)
+    t1.c -> t1.w (l.154, l.203)
+
+-   t1.a -> t1.d (l.14, l.224)
+    t1.d -> t1.w (l.234)
+
+
+layer: benchmark must not import analysis
+-----------------------------------------
+
+t2.h is not allowed to import t1.a:
+
+-   t2.h -> t1.n (l.51)
+    t1.n -> t1.a (l.330)
+
+
+layer: benchmark must not import infrastructure
+-----------------------------------------------
+
+t2.h is not allowed to import t1.w:
+
+-   t2.h -> t1.n (l.51)
+    t1.n -> t1.w (l.203)
+
+-   t2.h -> t1.s (l.52)
+    t1.s -> t1.w (l.234)
+
+"""
+
+
+def test_parse_broken_multi_chain_tsa_style():
+    """多链真实输出：契约归属不污染、多头行号取首、同边跨契约不去重。"""
+    violations = s7_enforce.parse_broken(CANNED_MULTI_CHAIN_BROKEN)
+    assert violations == [
+        {"contract": "layer: analysis must not import infrastructure", "importer": "t1.a", "imported": "t1.b", "line": 13},
+        {"contract": "layer: analysis must not import infrastructure", "importer": "t1.a", "imported": "t1.d", "line": 14},
+        {"contract": "layer: benchmark must not import analysis", "importer": "t2.h", "imported": "t1.n", "line": 51},
+        {"contract": "layer: benchmark must not import infrastructure", "importer": "t2.h", "imported": "t1.n", "line": 51},
+        {"contract": "layer: benchmark must not import infrastructure", "importer": "t2.h", "imported": "t1.s", "line": 52},
     ]
 
 
@@ -330,6 +453,96 @@ def test_run_not_enforceable_single_layer(tmp_path):
         con.close()
     assert out["status"] == "not-enforceable"
     assert "no derivable contracts" in out["reason"]
+
+
+# 结构含不可执法容器（tsa 冒烟实证形态）：core 层合法包 + interface 层混入根级 .py
+MIXED_STRUCTURE = json.dumps(
+    {
+        "modules": [
+            {"module_id": "core-mod", "name": "核心", "responsibility": "算", "symbol_fids": ["f1"], "layer": "core"},
+            {"module_id": "iface-mod", "name": "接口", "responsibility": "面", "symbol_fids": ["f2"], "layer": "interface"},
+            {"module_id": "helper-mod", "name": "助手", "responsibility": "辅", "symbol_fids": ["f3"], "layer": "interface"},
+        ],
+        "layers": [
+            {"name": "core", "may_depend_on": []},
+            {"name": "interface", "may_depend_on": ["core"]},
+        ],
+    },
+    ensure_ascii=False,
+)
+
+# 全部容器不可执法：两层符号全落根级 .py / 连字符目录
+ROOT_ONLY_STRUCTURE = json.dumps(
+    {
+        "modules": [
+            {"module_id": "core-mod", "name": "核心", "responsibility": "算", "symbol_fids": ["f1"], "layer": "core"},
+            {"module_id": "iface-mod", "name": "接口", "responsibility": "面", "symbol_fids": ["f2"], "layer": "interface"},
+        ],
+        "layers": [
+            {"name": "core", "may_depend_on": []},
+            {"name": "interface", "may_depend_on": ["core"]},
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+def _add_symbol(repo: Path, fid: str, qualified: str, name: str, file_path: str):
+    con = _con(repo)
+    try:
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            f" VALUES ('{fid}', 'p', '{qualified}', 'Function', '{name}', '{file_path}', 1, 2, 'h')"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_run_partial_filter_mock(tmp_path, monkeypatch):
+    """混入不可执法容器：契约保留、非法容器剔除并诚实上报。"""
+    repo = _mk_repo(tmp_path, structure=MIXED_STRUCTURE)
+    _add_symbol(repo, "f3", "root_helper.h", "h", "root_helper.py")
+    (repo / "root_helper.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(s7_enforce, "find_import_linter", lambda: "fake-lint-imports")
+    monkeypatch.setattr(s7_enforce, "_execute", _mock_exec(0, ""))
+    con = _con(repo)
+    try:
+        out = s7_enforce.run(repo, con)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["contracts"] == 1
+    assert out["unenforced_containers"] == ["root_helper"]
+
+
+def test_run_not_enforceable_all_containers_unenforceable(tmp_path, monkeypatch):
+    """全部容器不可执法：不再误报 enforcer-failed，诚实分类 not-enforceable。"""
+    repo = _mk_repo(tmp_path, structure=ROOT_ONLY_STRUCTURE)
+    # 覆盖 _mk_repo 默认符号路径：两层全部落根级 .py / 连字符目录
+    con = _con(repo)
+    try:
+        con.execute("UPDATE symbols SET file_path = 'root_helper.py', qualified_name = 'root_helper.a' WHERE fid = 'f1'")
+        con.execute("UPDATE symbols SET file_path = 'bench-agent/run.py', qualified_name = 'bench_agent.b' WHERE fid = 'f2'")
+        con.commit()
+    finally:
+        con.close()
+    (repo / "root_helper.py").write_text("", encoding="utf-8")
+    (repo / "bench-agent").mkdir()
+    (repo / "bench-agent" / "run.py").write_text("", encoding="utf-8")
+    # 即使执法器存在也不应被调用——过滤后已无契约
+    monkeypatch.setattr(
+        s7_enforce, "find_import_linter", lambda: pytest.fail("must not reach enforcer")
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce.run(repo, con)
+    finally:
+        con.close()
+    assert out["status"] == "not-enforceable"
+    assert "all containers unenforceable" in out["reason"]
+    assert out["contracts"] == 0
+    assert out["unenforced_containers"] == ["bench-agent.run", "root_helper"]
 
 
 def test_run_violation_mock(tmp_path, monkeypatch):
@@ -472,6 +685,8 @@ def test_execute_pins_pythonutf8_for_child(tmp_path, monkeypatch):
     assert rc == 0
     assert "kept" in out
     assert captured["env"]["PYTHONUTF8"] == "1"
+    # tsa 冒烟实证：click 非 tty 下 80 列折行 → parse_broken 漏解析；必须钉大 COLUMNS
+    assert captured["env"]["COLUMNS"] == "100000"
 
 
 def test_cli_enforce_wiring(tmp_path, monkeypatch, capsys):

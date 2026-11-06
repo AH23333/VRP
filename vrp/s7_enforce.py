@@ -45,7 +45,8 @@ DEFAULT_TIMEOUT = 600
 
 _RULE_TEXT = re.compile(r"^\s*(.+?)\s*(?:不许|不能|禁止|must\s+not)\s*import\s*(.+?)\s*$")
 _STATS = re.compile(r"Contracts:\s+(\d+)\s+kept,\s+(\d+)\s+broken")
-_VIOLATION = re.compile(r"^-\s+(\S+)\s+->\s+(\S+)\s+\(l\.(\d+)\)$")
+_VIOLATION = re.compile(r"^-\s+(\S+)\s+->\s+(\S+)\s+\(l\.(\d+)[^)]*\)$")
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def find_import_linter() -> str | None:
@@ -195,6 +196,49 @@ def build_contracts(payload: dict, containers: dict[str, list[str]]) -> dict:
     return {"contracts": contracts, "unenforced_rules": unenforced_rules, "unenforced_layers": unenforced_layers}
 
 
+def _enforceable_container(repo: Path, dotted: str) -> bool:
+    """容器可被 import-linter 执法判定（真实冒烟实证）：
+
+    root_packages 必须是可导入的包——顶层组件必须是目录（根级 .py 模块如
+    _verify_workflow_structure_helpers.py 会让 lint-imports 直接 config error
+    "'X' is a module, not a package"）；连字符目录（benchmarks/agent-tasks/）
+    不是合法标识符组件，同样不可执法。无 __init__.py 的顶层目录是命名空间包，
+    import-linter 可正常执法，不做剔除。
+    """
+    parts = dotted.split(".")
+    if not all(_IDENT.match(p) for p in parts):
+        return False
+    return (repo / parts[0]).is_dir()
+
+
+def _filter_contracts(
+    repo: Path, contracts: list[dict]
+) -> tuple[list[dict], list[str]]:
+    """契约过滤：source/forbidden 各自剔除不可执法容器，单侧清空的契约丢弃。
+
+    返回 (剩余契约, 被剔除容器排序去重清单)——诚实上报 unenforced_containers。
+    """
+    dropped: set[str] = set()
+    kept_contracts: list[dict] = []
+    for contract in contracts:
+        source = []
+        for m in contract["source_modules"]:
+            if _enforceable_container(repo, m):
+                source.append(m)
+            else:
+                dropped.add(m)
+        forbidden = []
+        for m in contract["forbidden_modules"]:
+            if _enforceable_container(repo, m):
+                forbidden.append(m)
+            else:
+                dropped.add(m)
+        if not source or not forbidden:
+            continue
+        kept_contracts.append({**contract, "source_modules": source, "forbidden_modules": forbidden})
+    return kept_contracts, sorted(dropped)
+
+
 def build_config(contracts: list[dict], root_packages: list[str]) -> str:
     lines = ["[importlinter]", "root_packages ="]
     lines += [f"    {pkg}" for pkg in root_packages]
@@ -214,16 +258,21 @@ def build_config(contracts: list[dict], root_packages: list[str]) -> str:
 
 
 def parse_broken(stdout: str) -> list[dict]:
-    """Broken contracts 块 → 违例列表（按 (importer, imported, line) 去重保首）。
+    """Broken contracts 块 → 违例列表（按 (contract, importer, imported, line) 去重保首）。
 
     tsa dogfood 实证（work/probe_r4_tsa_raw.py，2026-11-05）：forbidden 契约
     同一条链列两遍——(容器,被禁模块) 聚合组在前、(模块,被禁模块) 明细组在后，
     且描述行 ~70 字符折行，折行片段无冒号尾（"X is not allowed to import"），
     不能当契约名；去重保首（首现于聚合组，契约名归属正确），描述片段按
     "is not allowed to import" 子串识别跳过。
+
+    tsa 冒烟实证（2026-11-06，多链真实输出）：(1) 头行行号可多值 "(l.14, l.224)"
+    ——正则允许多值取首个；(2) 链尾/链中边行（"a -> b (l.N)"）含 " -> "，绝不能
+    落进契约名兜底分支污染 current_contract；(3) 同一条直接 import 边可同时违反
+    两个契约——去重键必须含契约维度。
     """
     violations: list[dict] = []
-    seen: set[tuple[str, str, int]] = set()
+    seen: set[tuple[str | None, str, str, int]] = set()
     current_contract: str | None = None
     in_block = False
     for line in stdout.splitlines():
@@ -235,7 +284,7 @@ def parse_broken(stdout: str) -> list[dict]:
             continue
         m = _VIOLATION.match(stripped)
         if m:
-            key = (m.group(1), m.group(2), int(m.group(3)))
+            key = (current_contract, m.group(1), m.group(2), int(m.group(3)))
             if key not in seen:
                 seen.add(key)
                 violations.append(
@@ -247,6 +296,8 @@ def parse_broken(stdout: str) -> list[dict]:
                     }
                 )
             continue
+        if " -> " in stripped:
+            continue  # 链中/链尾边行：不是违例头，也绝不能当契约名
         if stripped.endswith(":") or set(stripped) <= {"-"}:
             continue  # 描述行 / 破折线
         if "is not allowed to import" in stripped:
@@ -261,6 +312,11 @@ def _execute(bin_path: str, repo: Path, config: Path, timeout: int):
     child env 钉 PYTHONUTF8=1：lint-imports 以 locale 编码（中文 Windows=GBK）
     读 UTF-8 的 importlinter.ini（契约名含中文）→ UnicodeDecodeError rc=1 无
     broken 块（R6' agent 长跑在 vrp 自仓实证）。
+
+    child env 钉 COLUMNS=100000：click 在非 tty 下按 80 列折行输出（tsa 冒烟
+    实证），长点分名把 "X is not allowed to import Y:" 折成两行 → parse_broken
+    全部漏解析 → broken 契约 0 违例 0 入 P9。os.get_terminal_size 优先读
+    COLUMNS，钉大值即不折行。
     """
     try:
         proc = subprocess.run(
@@ -271,7 +327,7 @@ def _execute(bin_path: str, repo: Path, config: Path, timeout: int):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
-            env={**os.environ, "PYTHONUTF8": "1"},
+            env={**os.environ, "PYTHONUTF8": "1", "COLUMNS": "100000"},
         )
     except subprocess.TimeoutExpired:
         return None
@@ -414,6 +470,21 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
             **summary,
             "status": "not-enforceable",
             "reason": "no derivable contracts (single layer, fully-connected DAG, or layers without containers)",
+        }
+    # 容器可执法性过滤（真实冒烟实证）：根级 .py 模块/连字符目录/非包顶层会让
+    # lint-imports config error——过滤后诚实上报，无剩余契约则 not-enforceable
+    contracts, unenforced_containers = _filter_contracts(repo, contracts)
+    summary["contracts"] = len(contracts)
+    if unenforced_containers:
+        summary["unenforced_containers"] = unenforced_containers
+    if not contracts:
+        return {
+            **summary,
+            "status": "not-enforceable",
+            "reason": (
+                "all containers unenforceable by import-linter "
+                "(root-level .py modules, non-identifier dirs, or non-package tops)"
+            ),
         }
     bin_path = find_import_linter()
     if not bin_path:
