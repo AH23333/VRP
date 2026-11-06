@@ -70,6 +70,7 @@ file level: `FILE_NOT_JSON` / `FILE_WRONG_SHAPE`
 
 | Tool | Use |
 |---|---|
+| `dossier(task, budget, skip_external)` | S5 intake briefing over facts.db (task-typed budgets T1-T4; default skip_external=True = fast, deterministic) |
 | `curate_submit(kind, payload_json)` | submit for validation and ingest (kind=slices/structure) |
 | `curate_slices()` / `curate_structure()` | read ingested artifacts and status |
 | `curate_receipt()` | read the latest validation receipt |

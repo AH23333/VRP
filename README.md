@@ -80,7 +80,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `enforce` | S7 架构执法（构想v7 §4/§8.2/§9）：structure(active) → 层 DAG+rules 生成 forbidden 契约 → 按语言路由执行——.py→import-linter（VRP_IMPORT_LINTER_BIN 覆盖）；.ts/.tsx/.js/.jsx/.mjs/.cjs→dependency-cruiser（typescript 5.9.3 钉版沙箱，VRP_DEPCRUISE_BIN 覆盖）；混语言诚实 not-enforceable；配置运行后清理；Broken contracts = P9 findings（`source='s7-enforce'`，幂等 replace-all）；无 structure/非 active 诚实 skipped |
 | `report` | S8 静态报告：三 IR（architecture/sequence/timeline）→ archify validate+render（缺失降级 Mermaid-only）→ `.vrp/report/`（report.html 无时间戳字节级复现+SARIF 2.1.0）；R7' 多级颗粒度（构想v7 §11）：archify 模块交互图链成功 → `chain/` 静态多页互链（dataflow/目录树/符号网格/整文件源码页=唯一代码视图，三段式原子提交失败降级）替代 L1/L2；失败/缺失 → L1 模块页（modules/）+ L2 符号页（symbols/）互链兜底；渲染 chrome 全英文，数据（模块名/AI 梳理职责）原样 |
 | `session` | 全信任模式（构想v7 §3.3）：begin/end 出初末 facts.db 快照（sqlite backup 安全复制），report 出初末计数 diff（四组）+ 双 L0 架构图并排 + 会话窗口 verdict 时间线；不做图 diff（诚实版） |
-| `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/curate_*/tx_*/render_*/session_*/enforce/query_facts/drift_report 二十六件） |
+| `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；nav_*/curate_*/tx_*/render_*/session_*/enforce/query_facts/drift_report/dossier 二十七件） |
 
 ## 重构事务与闸门
 

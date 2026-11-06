@@ -21,6 +21,7 @@ from . import nav, s6_transact
 from . import curate as curate_mod
 from . import etl as etl_mod
 from . import render as render_mod
+from . import s5_dossier
 from . import s7_enforce
 from . import session as session_mod
 
@@ -34,7 +35,7 @@ _INSTRUCTIONS = (
     "vrp restructuring loop: nav_search to locate -> nav_module/nav_symbol to drill down and verify -> "
     "tx_preview to self-review the diff -> tx_run to execute -> tx_verdicts to read receipts; "
     "on failure read failed_codes, fix and retry (<=3 attempts per transaction). "
-    "Curation: curate_submit to submit slices/structure (deterministic validation; on rejection read the receipt, fix, resubmit), "
+    "Curation: dossier (task-typed intake briefing) then curate_submit to submit slices/structure (deterministic validation; on rejection read the receipt, fix, resubmit), "
     "nav_slice to drill down by business line; "
     "Enforcement: once curate_structure is ingested, enforce runs architecture enforcement (P9 findings, idempotent). "
     "Reporting: render_verdicts/render_slice produce decision-point briefing material, render_report produces the full static report; "
@@ -159,6 +160,18 @@ def build_server(repo: Path) -> "MCPServer":
             return _dumps(curate_mod.drift_report(con))
         finally:
             con.close()
+
+    def dossier(task: str = "T4", budget: int = 32000, skip_external: bool = True) -> str:
+        facts = repo / ".vrp" / "facts.db"
+        if not facts.exists():
+            raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts}")
+        con = _open_facts_rw(repo)  # M4 freshness：build_dossier 写 dossier_views
+        con.close()
+        return _dumps(
+            s5_dossier.build_dossier(
+                repo, facts, repo.name, budget=budget, task=task, skip_external=skip_external
+            )
+        )
 
     def tx_preview(tx_json: str) -> str:
         tmp = _write_temp(tx_json)
@@ -326,6 +339,15 @@ def build_server(repo: Path) -> "MCPServer":
         "a unique candidate yields a direct remap (F1 read-out aid); when the qualified_name is gone, same-file candidates fill in; "
         "re-curate with the remap and curate_submit again (full re-validation, no bypass); "
         "non-empty summary.active_but_drifted = a hole in the revalidation chain, must be reported",
+    )
+    server.add_tool(
+        _guard(dossier),
+        name="dossier",
+        description="S5 intake dossier: task-typed briefing over facts.db (task=T1|T2|T3|T4 budget profiles; "
+        "sections: architecture/repomap/sql_views/evidence/summary) — the intake material for curation and refactor planning; "
+        "default skip_external=True = fast and deterministic (external sections honestly marked skipped); "
+        "skip_external=False opts into external tooling (repo_map_brief/raw_pack, slow, up to 180s); "
+        "writes .vrp/dossier.json and dossier_views; facts.db must be fresh (M4)",
     )
     server.add_tool(
         _guard(tx_preview),

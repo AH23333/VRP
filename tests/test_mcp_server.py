@@ -27,6 +27,7 @@ TOOL_NAMES = {
     "curate_reject",
     "curate_receipt",
     "drift_report",
+    "dossier",
     "tx_preview",
     "tx_submit",
     "tx_run",
@@ -174,6 +175,38 @@ def test_error_json_not_crash(tmp_path):
     assert "only SELECT/WITH" in out["bad_sql"]["error"]
     assert "error" in out["unknown_fid"]
     assert "unknown fid" in out["unknown_fid"]["error"]
+
+
+def test_dossier_over_mcp(tmp_path):
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        good = await _call(session, "dossier", {"task": "T2"})
+        bad = await _call(session, "dossier", {"task": "T9"})
+        return {"good": good, "bad": bad}
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    good, bad = out["good"], out["bad"]
+    assert good["task"] == "T2"
+    assert set(good["views"]) == {
+        "architecture", "repo_map_brief", "repomap", "sql_views", "evidence", "summary", "raw_pack",
+    }
+    # skip_external 默认 True：外部节诚实标注 skipped
+    assert good["views"]["architecture"]["status"] == "skipped"
+    assert good["views"]["repo_map_brief"]["status"] == "skipped"
+    assert good["views"]["raw_pack"]["status"] == "skipped"
+    # DB 内生节正常产出
+    assert good["views"]["sql_views"]
+    assert good["views"]["summary"]["counts"]["symbols"] == 2
+    # 产物落盘 + dossier_views 七节落库
+    assert (repo / ".vrp" / "dossier.json").exists()
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        assert con.execute("SELECT COUNT(*) FROM dossier_views").fetchone()[0] == 7
+    finally:
+        con.close()
+    # 未知 task -> error JSON（不炸 server）
+    assert "unknown task" in bad["error"]
 
 
 def test_tx_preview_submit_verdicts(tmp_path):
