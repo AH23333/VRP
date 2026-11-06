@@ -528,13 +528,15 @@ F1（载荷 fid 随内容轮换，消费方各自重实现恢复）/ F2（漂移
 - 契约文档《梳理工件契约》§0/§3 重写 + 新 §4（漂移查询面与重定位）；README 快速开始/CLI 表/MCP 件数三处
 - 提交链（本地未 push）：2281c60（功能本体：代码+测试+契约+README）→ 本节（docs 收口）
 
-## 13. G 批次设计（2026-11-06，内置 LLM 梳理循环——设计稿待批）
+## 13. G 批次（2026-11-06，内置 LLM 梳理循环——已批并实施）
+
+> 状态：设计已批（用户 2026-11-06，同批拍板：全自动+落盘留痕、**TUI 砍**）；G1-G3 已实施（§13.9）。
 
 ### 13.0 裁决修订（用户 2026-11-06）
 
 - **§0.3「vrp 内置 LLM 循环明确排除」修订为「内置薄驱动器，仅 curate 数据面」**：r3 排除的是内置 LLM 驱动**重构**循环；本批用户拍板的是「用户配置 API 后直接使用」的零 agent 路径——内置循环只做**梳理**（curate 工件生产+验收入库），重构事务面（tx/T4/工作树写）永不出现在内置循环。§0.1 裁决 2「LLM 调用不进 `vrp run`」**不变**：`curate-auto` 是独立交互域命令，管道确定性可复现红线不动。
 - **自动化程度（用户拍板）**：全自动+落盘留痕——无人工确认环节，prompt/响应/工件/回执全落 `.vrp/auto/` 可复查；curate 本就不碰代码树，风险面小。
-- **TUI 后置/可砍**：report.html 已覆盖人类消费面，CLI 已覆盖驱动面。
+- **TUI 砍（用户拍板）**：report.html 已覆盖人类消费面，CLI 已覆盖驱动面。
 
 ### 13.1 定位
 
@@ -598,10 +600,19 @@ MCP+skills（§1.4）服务**有 agent 环境的用户**；内置循环服务**�
 
 ### 13.7 明确不做
 
-通用 agent/工具调用框架；多轮对话状态；流式输出；LLM 驱动事务（tx/T4 面永不出现在内置循环）；provider 插件系统；TUI（后置/可砍）；进 `vrp run`（§0.1 裁决 2 不变）。
+通用 agent/工具调用框架；多轮对话状态；流式输出；LLM 驱动事务（tx/T4 面永不出现在内置循环）；provider 插件系统；TUI（已砍）；进 `vrp run`（§0.1 裁决 2 不变）。
 
 ### 13.8 实施切分
 
 - **G1**：config 层 + LLM client（urllib POST、超时/传输重试/错误诚实）+ 单测
 - **G2**：循环本体+留痕+CLI 接线+mock E2E，快测全绿
-- **G3**：《梳理工件契约》增§5（内置循环）+ README + skills 交叉引用 + deep 冒烟 + dogfood 实录
+- **G3**：《梳理工件契约》增§6（内置循环）+ README + skills 交叉引用 + dogfood 实录
+
+### 13.9 实施记实（2026-11-06）
+
+- **G1**（`vrp/llm_client.py`）：`LlmConfig`（内存 key + echo 掩码）/`load_config`（缺键诚实报错+最小示例；**utf-8-sig 容错读取**——dogfood 抓到 PS 5.1/记事本写 BOM 配置即崩，真 Windows 用户必踩，改用 utf-8-sig）/`chat`（urllib POST，429/5xx 退避 ≤2 不消耗验证额度，4xx/网络错诚实抛）/`extract_json`（D8 围栏剥离+首尾括号提取，失败计一次尝试）
+- **G2**（`vrp/auto_curate.py` + cli.py 接线）：`run_auto_curate` 六步（dossier skip_external=True → slices → structure（材料含本轮已入库 slices）→ enforce → drift → summary）；`_produce_artifact` 验证重试 ≤3（拒收回执/解析失败均计），request_error 即工件失败；slices 失败→structure skipped、enforce/drift 照跑（库态报告）、rc=1；留痕 `.vrp/auto/run-<UTC>/`（config.echo 脱敏/steps 全量/summary）+ `log.jsonl` 追加；prompt 内嵌协议常量（D1/D7：curated 默认英文红线句+只用材料中 fid+拒收码速查进上下文）
+- **G3**：契约《梳理工件契约》新 §6（配置/六步与重试/留痕与 rc/红线）；README 快速开始+CLI 表 `curate-auto` 行；skills/vrp-curation 头部零 agent 路径注记；本节收口
+- **测试**：tests/test_auto_curate.py **31 例**——config 单元 12（缺文件/inline+脱敏/env 引用/参数化 7 拒/坏 JSON/BOM 容错）、chat 传输 5（429 退避成功/401 不重试/3 次耗尽/网络错/坏响应形）、extract_json 6（围栏/语言标注/前后散文/数组/非法）、E2E 7（happy path 含留痕全清单+key 零落盘扫描+prompt 红线句断言/拒收→回执驱动→第 2 次 accepted/3 拒中止（03- 文件不存在+enforce/drift 仍落盘）/structure 失败 rc=1/解析失败计尝试/缺 config/缺 facts.db）、红线 1（双模块源码无 s6_transact/tx_run 引用）
+- **dogfood（vrp 自仓）**：无 config → 诚实拒+最小示例 rc=1 ✓；M4 闸正确触发（facts.db 落后 HEAD 硬拒，重跑 etl 过）✓；伪 config（127.0.0.1:9）→ 连接诚实拒，留痕树完整（request+error 落盘，key 零出现），enforce 诚实 skip（本轮 etl 复验把旧 ai-layer structure 标 stale——F2 钩子顺带佐证）✓
+- **真实 LLM 冒烟**：待用户配置真实 key 后跑（`vrp curate-auto <repo>`）；deep 冒烟（skipif 无 `VRP_LLM_API_KEY`）留作下批可选

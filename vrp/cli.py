@@ -13,6 +13,7 @@ from . import __version__
 from . import etl as etl_mod
 from . import curate as curate_mod
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
+from . import auto_curate
 from . import session as session_mod
 
 
@@ -217,6 +218,24 @@ def cmd_dossier(args) -> int:
         {k: dossier[k] for k in ("generated_at", "project", "budget", "task", "out")},
     )
     return 0
+
+
+def cmd_auto_curate(args) -> int:
+    repo = _repo_arg(args.repo)
+    try:
+        summary = auto_curate.run_auto_curate(
+            repo,
+            task=args.task,
+            budget=args.budget,
+            model_override=args.model,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    _print_step(
+        "auto-curate",
+        {k: summary[k] for k in ("run_id", "task", "model", "slices", "structure", "enforce", "rc")},
+    )
+    return summary["rc"]
 
 
 def cmd_transact(args) -> int:
@@ -494,6 +513,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip external tool calls (CBM get_architecture, code-atlas repo_map, repomix)",
     )
     p.set_defaults(func=cmd_dossier)
+
+    p = sub.add_parser(
+        "curate-auto",
+        help="built-in LLM curation loop (zero-agent path; config in .vrp/config.json)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--budget", type=int, default=32000, help="dossier char budget")
+    p.add_argument(
+        "--task",
+        choices=sorted(s5_dossier.TASK_PROFILES),
+        default=s5_dossier.DEFAULT_TASK,
+        help="dossier task profile (T1-T4)",
+    )
+    p.add_argument("--model", default="", help="override config llm.model for this run")
+    p.set_defaults(func=cmd_auto_curate)
 
     p = sub.add_parser(
         "transact",

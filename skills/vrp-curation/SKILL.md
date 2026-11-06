@@ -7,6 +7,8 @@ description: vrp curation production guide - how the AI produces slices/structur
 
 Operation protocol for the VRP main-flow curation loop. Prerequisite reading: `docs/契约/梳理工件契约.md` (schema authority).
 
+> Zero-agent alternative: `vrp curate-auto <repo>` runs the same six-step flow with a configured LLM (`.vrp/config.json`, contract §6) - this skill documents the agent path over MCP/CLI.
+
 ## Purpose
 
 Persist the AI's understanding of the codebase as **verifiable data**:
