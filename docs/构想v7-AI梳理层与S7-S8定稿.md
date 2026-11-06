@@ -527,3 +527,81 @@ F1（载荷 fid 随内容轮换，消费方各自重实现恢复）/ F2（漂移
 - 快测 +14（test_drift.py 12：drift 单元×9 + MCP 补验 + etl 钩子全周期 E2E + 无漂移零误伤；MCP/CLI 接线 2）→ **430 绿 121s**；test_etl_preserve OWNED_TABLES 契约+ledger 回灌改写；test_mcp_server TOOL_NAMES 26 件+drift over MCP+CLI 接线
 - 契约文档《梳理工件契约》§0/§3 重写 + 新 §4（漂移查询面与重定位）；README 快速开始/CLI 表/MCP 件数三处
 - 提交链（本地未 push）：2281c60（功能本体：代码+测试+契约+README）→ 本节（docs 收口）
+
+## 13. G 批次设计（2026-11-06，内置 LLM 梳理循环——设计稿待批）
+
+### 13.0 裁决修订（用户 2026-11-06）
+
+- **§0.3「vrp 内置 LLM 循环明确排除」修订为「内置薄驱动器，仅 curate 数据面」**：r3 排除的是内置 LLM 驱动**重构**循环；本批用户拍板的是「用户配置 API 后直接使用」的零 agent 路径——内置循环只做**梳理**（curate 工件生产+验收入库），重构事务面（tx/T4/工作树写）永不出现在内置循环。§0.1 裁决 2「LLM 调用不进 `vrp run`」**不变**：`curate-auto` 是独立交互域命令，管道确定性可复现红线不动。
+- **自动化程度（用户拍板）**：全自动+落盘留痕——无人工确认环节，prompt/响应/工件/回执全落 `.vrp/auto/` 可复查；curate 本就不碰代码树，风险面小。
+- **TUI 后置/可砍**：report.html 已覆盖人类消费面，CLI 已覆盖驱动面。
+
+### 13.1 定位
+
+MCP+skills（§1.4）服务**有 agent 环境的用户**；内置循环服务**只有 API key 的用户**。两者共用同一套底层模块（s5_dossier/curate/s7_enforce）与同一验证器——内置循环不是 agent 框架，是把「外部 agent」换成约两百行薄驱动器。
+
+### 13.2 决策记录
+
+| # | 决策点 | 裁决 | 理由 |
+|---|---|---|---|
+| D1 | 工具调用协议 | **无 function calling——校验器即工具**：LLM 每步直接产出工件 JSON → `curate_submit` 确定性校验 → 拒收回执带稳定码 → 回执驱动重试（≤3/工件，skills 红线同款） | curate 契约本来就是确定性 JSON 校验，天然防幻觉；不需要 agent 框架/工具调用协议 |
+| D2 | LLM 协议 | **OpenAI-compatible 单协议**（`POST {base_url}/chat/completions`） | 一个协议覆盖 OpenAI/DeepSeek/GLM/Qwen/本地 vLLM/Ollama-compat；不做 provider 插件系统 |
+| D3 | 依赖 | **stdlib `urllib` 实现，不建 optional extra，直接进核心** | urllib 是标准库，零依赖红线不破（对比：mcp extra 因 mcp 包是第三方） |
+| D4 | 信任边界 | **循环只走 curate 数据面**：模块不 import s6/tx 面，物理不可达重构事务；curated 内容默认英文红线写进 prompt（全局默认英文指令延续） | LLM 输出只能变成 facts.db 里的梳理数据，永远碰不到代码 |
+| D5 | 留痕 | **全自动+全留痕**：`.vrp/auto/run-<UTC>/` 保存脱敏配置回显/每步材料/响应原文/工件/回执/summary；key 任何形态不落盘（测试扫描锁） | 用户拍板；可复查性替代人工确认环节 |
+| D6 | 对话模型 | **无状态单发**：每次调用携带完整上下文（材料+现有工件+历史回执），不做多轮会话状态 | 状态less 可复现、可重放；多轮状态增加复杂度无增益 |
+| D7 | prompt 来源 | **协议 prompt 内嵌为 vrp 模块常量**（精简版：输出契约+默认英文红线+回执语义），skills 保持完整协议文档，互引注释防漂移；测试断言 prompt 含红线关键句 | skills/ 目录不随 pip 包分发；全文复制 skill 会造成双份协议漂移 |
+| D8 | 解析容错 | **响应剥离**：markdown 围栏剥离+首个 `{`/`[` 到末 `}`/`]` 提取；解析失败计一次尝试（等同拒收，消耗重试额度） | 各家 json_mode 支持不一，不依赖 `response_format`，防御性提取最大化兼容 |
+
+### 13.3 配置层
+
+- 文件：`<repo>/.vrp/config.json`（仅 repo 级；密钥走环境变量引用）：
+```json
+{
+  "llm": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key_env": "VRP_LLM_API_KEY",
+    "model": "gpt-4.1",
+    "timeout": 180,
+    "max_output_tokens": 16384
+  }
+}
+```
+- `api_key_env` 优先（引用环境变量）；`api_key` 明文键允许（私有仓便利）但留痕一律脱敏、README 不推荐
+- 必填三键：`base_url`/`model`/（`api_key_env` 或 `api_key` 之一）；缺键诚实报错并给出最小配置示例；无 config 文件→诚实拒绝（不猜默认 provider）
+
+### 13.4 循环协议（六步，对齐 vrp-curation skill）
+
+1. **取材**：`build_dossier(task, skip_external=True)`——材料进 prompt（快速+确定性，与 MCP 面默认一致）
+2. **slices**：单发产出 slices JSON → `curate_submit(kind=slices)` → 拒收则回执进上下文重试 ≤3
+3. **structure**：单发（材料含已 accepted slices）→ `curate_submit(kind=structure)` → 重试 ≤3
+4. **enforce**：`s7_enforce.run`（P9 findings 计数进 summary；库无 active structure 诚实 skip）
+5. **drift_report**：读出存档进 summary
+6. **汇总**：`summary.json` + rc
+
+- **中止语义**：slices 3 次拒收→中止（structure 材料质量依赖 slices，继续会产出无上下文的劣质工件），rc=1；structure 3 次拒收→enforce 照跑（库态决定），drift 落盘，rc=1
+- **重试双层**：验证拒收 ≤3/工件（D1）；HTTP 传输层 429/5xx 退避重试 ≤2 另计（不消耗验证重试额度）
+- **M4 新鲜度**：与 CLI curate 同闸（`_open_facts_rw`）
+
+### 13.5 接口与留痕
+
+- CLI：`vrp curate-auto <repo> [--task T4] [--budget 32000] [--model <override>]`；rc=0=全部 accepted，rc=1=有工件 3 次拒收或配置缺失
+- 留痕目录 `.vrp/auto/run-<UTC时间戳>/`：`config.echo.json`（脱敏）、`steps/`（每步 request/response.raw/artifact/回执）、`summary.json`；跨 run 追加索引 `.vrp/auto/log.jsonl`（每 run 一行）
+- **MCP 不加工具**：内置循环是 CLI 用户面；agent 用户有自己的循环，防止面重复
+
+### 13.6 测试策略
+
+- 单元：config 解析/校验/脱敏；prompt 装配；响应剥离（围栏/前后杂文本）；重试计数边界
+- E2E mock：注入 fake 传输函数——happy path 全绿 rc=0；拒收→回执驱动→第 2 次 accepted；3 次拒收→中止 rc=1；429→退避重试成功
+- 红线断言：prompt 含默认英文红线关键句；循环模块无 s6/tx import；扫描 run 留痕目录断言 key 零出现
+- deep（可选）：真实 LLM 冒烟（skipif 无 `VRP_LLM_API_KEY`）
+
+### 13.7 明确不做
+
+通用 agent/工具调用框架；多轮对话状态；流式输出；LLM 驱动事务（tx/T4 面永不出现在内置循环）；provider 插件系统；TUI（后置/可砍）；进 `vrp run`（§0.1 裁决 2 不变）。
+
+### 13.8 实施切分
+
+- **G1**：config 层 + LLM client（urllib POST、超时/传输重试/错误诚实）+ 单测
+- **G2**：循环本体+留痕+CLI 接线+mock E2E，快测全绿
+- **G3**：《梳理工件契约》增§5（内置循环）+ README + skills 交叉引用 + deep 冒烟 + dogfood 实录
