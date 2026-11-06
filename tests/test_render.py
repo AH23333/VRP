@@ -687,6 +687,57 @@ def test_chain_link_integrity(tmp_path):
                 assert frag in ids_by_page[target.name], f"{p.name}: 缺锚点 {h}"
 
 
+def test_chain_dataflow_fid_clicks_direction(tmp_path):
+    """S1 dataflow 节点下钻方向：M 键 = IR 节点 id（nid），值 = 文件页锚点。
+
+    回归锁定（fa6213f 起存量 bug）：fid_clicks 若按 {fid: nid} 存，
+    build_chain 消费按 {nid: fid} 解包得 clicks 空 → s1 页 JS 不注入、
+    节点不可点；且链链接完整性测试对 M 缺失静默跳过（if m:），不设
+    本测试则方向反转无红灯。
+    """
+    _need_archify()
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    for fid, name, fpath, start in (
+            ("fid-a", "a", "pkg/x.py", 1), ("fid-c", "c", "pkg/y.py", 1)):
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            " VALUES (?, 'p', ?, 'Function', ?, ?, ?, ?, 'h')",
+            (fid, f"pkg.{name}", name, fpath, start, start + 2),
+        )
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES ('fid-a', 'fid-c', 'CALLS', 'structural')")
+    con.execute(
+        "INSERT INTO structure (payload_json, status) VALUES (?, 'active')",
+        (json.dumps({
+            "modules": [{"module_id": "m1", "name": "甲", "responsibility": "负责一",
+                          "symbol_fids": ["fid-a", "fid-c"], "layer": "domain"}],
+            "layers": [{"name": "domain", "may_depend_on": []}],
+        }),),
+    )
+    con.commit()
+    con.close()
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "x.py").write_text("def a():\n    return 1\n", encoding="utf-8")
+    (repo / "pkg" / "y.py").write_text("def c():\n    return 3\n", encoding="utf-8")
+    render.render_report(repo)
+    chain = repo / ".vrp" / "report" / "chain"
+    page = chain / "s1-m1-dataflow.html"
+    assert page.is_file()  # 2 文件真实符号 → s1 dataflow 入口
+    text = page.read_text(encoding="utf-8")
+    m = re.search(r"var M=(\{.*?\});var PG", text, re.S)
+    assert m, "s1 dataflow 页缺节点点击 JS（fid_clicks 方向反转回归）"
+    clicks = json.loads(m.group(1))
+    ir = json.loads((chain / "ir" / "s1-m1-dataflow.json").read_text(encoding="utf-8"))
+    node_ids = {n["id"] for n in ir["nodes"]}
+    assert clicks, "M 为空：节点下钻全部丢失"
+    assert set(clicks) <= node_ids, f"M 键须为 IR 节点 id 而非 fid: {sorted(clicks)}"
+    for href in clicks.values():
+        file_part, _, frag = href.partition("#")
+        target = chain / file_part
+        assert target.is_file(), f"断链 {href}"
+        assert f'id="{frag}"' in target.read_text(encoding="utf-8"), f"缺锚点 {href}"
+
+
 def test_chain_no_archify(tmp_path, monkeypatch):
     """无 archify：不出 chain/，counts 归零，L1/L2 兜底不受影响。"""
     monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)

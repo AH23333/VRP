@@ -1145,7 +1145,7 @@ def _plan_module(module_id: str, fids: list[str], rows: dict[str, sqlite3.Row],
             act = None
         diagrams.append({"name": s1_stem, "dtype": "dataflow", "ir": ir,
                          "crumbs": base_crumbs(), "action": act,
-                         "fid_clicks": dict(id_of)})
+                         "fid_clicks": {nid: fid for fid, nid in id_of.items()}})
 
     # S2a 目录总览（多目录）：节点 → 目录页；动作 → 模块数据流
     if have_s2a:
