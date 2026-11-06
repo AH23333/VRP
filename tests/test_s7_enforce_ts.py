@@ -122,7 +122,12 @@ def test_build_config_shape():
             "name": "layer: core must not import interface",
             "source_modules": ["src/core", "src/deep.dir"],
             "forbidden_modules": ["src/iface"],
-        }
+        },
+        {
+            "name": "layer: core must not import app",
+            "source_modules": ["src/core"],
+            "forbidden_modules": ["src/app"],
+        },
     ]
     text = s7_enforce_ts.build_config(contracts)
     assert "module.exports" in text
@@ -130,6 +135,9 @@ def test_build_config_shape():
     assert '"layer: core must not import interface"' in text  # 中文契约名 JSON 转义可回读
     assert '"^(?:src/core|src/deep\\.dir)(?:/|$)"' in text  # regex 转义 + 前缀边界
     assert '"^(?:src/iface)(?:/|$)"' in text
+    # 多契约逗号分隔回归（真实冒烟实证：漏逗号 → Node SyntaxError → depcruise rc=1）
+    assert "    }\n    {\n" not in text.replace(",\n", "\n") or "},\n" in text
+    assert text.count("},\n    {") == len(contracts) - 1  # 每对相邻规则恰好一个逗号
 
 
 def test_parse_violations_error_only_and_dedup():

@@ -119,7 +119,9 @@ def build_config(contracts: list[dict]) -> str:
             "    }"
             % (json.dumps(contract["name"], ensure_ascii=False), src, dst)
         )
-    return "module.exports = {\n  forbidden: [\n%s\n  ],\n};\n" % "\n".join(rules)
+    # 规则间必须逗号分隔（真实冒烟实证：单规则探针未暴露，42 契约时 Node
+    # SyntaxError: Unexpected token '{' → depcruise rc=1 enforcer-failed）
+    return "module.exports = {\n  forbidden: [\n%s\n  ],\n};\n" % ",\n".join(rules)
 
 
 def _execute(bin_path: Path, repo: Path, config: str, targets: list[str], timeout: int):

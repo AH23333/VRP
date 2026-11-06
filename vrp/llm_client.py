@@ -44,6 +44,7 @@ class LlmConfig:
         timeout: int,
         max_output_tokens: int,
         api_key_source: str,
+        thinking: str | None = None,
     ) -> None:
         self.base_url = base_url
         self.model = model
@@ -51,6 +52,7 @@ class LlmConfig:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
         self.api_key_source = api_key_source
+        self.thinking = thinking
 
     def echo(self) -> dict:
         """脱敏回显（留痕用）：key 永远只出现掩码。"""
@@ -59,6 +61,7 @@ class LlmConfig:
             "model": self.model,
             "timeout": self.timeout,
             "max_output_tokens": self.max_output_tokens,
+            "thinking": self.thinking,
             "api_key": "***",
             "api_key_source": self.api_key_source,
         }
@@ -105,7 +108,12 @@ def load_config(repo: Path, env: dict | None = None) -> LlmConfig:
         raise ValueError(
             "config llm needs an API key: set 'api_key_env' (recommended) or 'api_key'"
         )
-    return LlmConfig(base_url.rstrip("/"), model, api_key, timeout, max_output_tokens, source)
+    # 思考开关（provider 专属，如智谱 v4 thinking.type；显式配置才发送——
+    # 思考模型 reasoning 可烧光 max_tokens 致 content 空（真实冒烟实证））
+    thinking = llm.get("thinking")
+    if thinking is not None and (not isinstance(thinking, str) or thinking not in ("enabled", "disabled")):
+        raise ValueError("config llm.thinking must be 'enabled' or 'disabled' (or omitted)")
+    return LlmConfig(base_url.rstrip("/"), model, api_key, timeout, max_output_tokens, source, thinking)
 
 
 def _post_json(url: str, headers: dict, body: dict, timeout: int) -> tuple[int, str]:
@@ -156,6 +164,8 @@ def chat(
         "messages": messages,
         "max_tokens": config.max_output_tokens,
     }
+    if config.thinking:
+        body["thinking"] = {"type": config.thinking}
     last = ""
     for attempt in range(TRANSPORT_RETRIES + 1):
         try:

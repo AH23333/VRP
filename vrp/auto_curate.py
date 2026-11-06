@@ -28,6 +28,10 @@ from .llm_client import extract_json, load_config
 
 MAX_ATTEMPTS = 3
 DEFAULT_ENFORCE_TIMEOUT = 600
+MATERIAL_SYMBOLS_CAP = 200
+MATERIAL_EDGES_CAP = 200
+MATERIAL_CHAINS_CAP = 20
+MATERIAL_CHAIN_MAX_LEN = 5
 
 _PROMPT_PREAMBLE = (
     "You are the curation AI of the vrp restructuring pipeline.\n"
@@ -38,15 +42,20 @@ _PROMPT_PREAMBLE = (
 )
 
 _SLICES_CONTRACT = (
-    "Produce a JSON array of business-line slices. Each slice:\n"
+    "Produce a JSON array of business-line slices (quality over quantity: 2-4 slices, each 2-4 steps). "
+    "Each slice:\n"
     '{"slice_id": "<unique str>", "name": "<str>", "summary": "<one-line str>", '
     '"steps": [{"fid": "<real fid from material>", "role": "entry|process|branch|persist|respond", '
     '"note": "<optional str>"}], "acts": [{"name": "<str>", "from_step": <int>, "to_step": <int>}]}\n'
-    "acts is optional. Validation is deterministic: every steps[].fid must exist in symbols; "
-    "CONSECUTIVE steps must have a real edge between them in facts.db (any direction: "
-    "CALLS / CALL_REFERENCE / HTTP_CALLS) - no skipping hops; slice_id / name / summary non-empty; "
-    "acts (when present) must partition all steps monotonically and seamlessly "
-    "(first from_step=0, last to_step=len-1, adjacent act to_step+1=next from_step).\n"
+    "acts is optional. Validation is deterministic and STRICT:\n"
+    "- every steps[].fid must exist in symbols - copy fids verbatim from the Real symbols section\n"
+    "- every CONSECUTIVE step pair (steps[i], steps[i+1]) MUST be a pair that appears verbatim in the "
+    "Real call edges section (either direction) - prefer adopting a Suggested step chain verbatim; "
+    "pairs not present in the edge list WILL be rejected (SLICE_MISSING_EDGE)\n"
+    "- a slice with a SINGLE step is valid when no edge chain is available - "
+    "prefer a short honest slice over an invented chain\n"
+    "- slice_id / name / summary non-empty; acts (when present) must partition all steps "
+    "monotonically and seamlessly (first from_step=0, last to_step=len-1, adjacent act to_step+1=next from_step)\n"
     "Rejection codes you may receive: SLICE_SCHEMA / SLICE_EMPTY_NAME / SLICE_EMPTY_SUMMARY / "
     "SLICE_UNKNOWN_FID / SLICE_MISSING_EDGE / SLICE_ACT_BOUNDS / FILE_WRONG_SHAPE."
 )
@@ -79,11 +88,111 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _materials(dossier: dict, existing_slices: list, existing_structure, accepted_slices=None) -> str:
-    parts = [
-        "## Intake material: dossier (facts.db-derived, task-typed budget)",
-        json.dumps(dossier, ensure_ascii=False, default=str),
+def _symbol_edge_material(con: sqlite3.Connection) -> str:
+    """材料面补强（真实冒烟实证后增）：真实符号表 + 真实边样本。
+
+    无 function calling 的内置循环只能被动吃材料——首燃冒烟证明仅靠 dossier
+    （sql_views 只暴露少数 fid）LLM 必然编造无边链（SLICE_MISSING_EDGE 3 拒）。
+    本节从 facts.db 拉确定性样本：符号（排除 File/Module 伪符号）+ slices
+    验证认可的边类型对；超 cap 诚实标注截断。
+    """
+    symbol_total = con.execute(
+        "SELECT COUNT(*) FROM symbols"
+        " WHERE label NOT IN ('File', 'Module') AND file_path IS NOT NULL AND start_line IS NOT NULL"
+    ).fetchone()[0]
+    symbol_rows = con.execute(
+        "SELECT fid, qualified_name, file_path, start_line FROM symbols"
+        " WHERE label NOT IN ('File', 'Module') AND file_path IS NOT NULL AND start_line IS NOT NULL"
+        " ORDER BY file_path, start_line, qualified_name LIMIT ?",
+        (MATERIAL_SYMBOLS_CAP,),
+    ).fetchall()
+    edge_total = con.execute(
+        "SELECT COUNT(*) FROM edges WHERE type IN ('CALLS', 'CALL_REFERENCE', 'HTTP_CALLS')"
+    ).fetchone()[0]
+    edge_rows = con.execute(
+        "SELECT s1.fid, s1.qualified_name, s2.fid, s2.qualified_name, e.type"
+        " FROM edges e"
+        " JOIN symbols s1 ON s1.fid = e.src_fid"
+        " JOIN symbols s2 ON s2.fid = e.dst_fid"
+        " WHERE e.type IN ('CALLS', 'CALL_REFERENCE', 'HTTP_CALLS')"
+        " ORDER BY s1.file_path, s1.start_line, s2.file_path, s2.start_line LIMIT ?",
+        (MATERIAL_EDGES_CAP,),
+    ).fetchall()
+    lines = [
+        f"## Real symbols ({len(symbol_rows)} of {symbol_total}"
+        + (f", showing first {MATERIAL_SYMBOLS_CAP} in deterministic order" if symbol_total > MATERIAL_SYMBOLS_CAP else "")
+        + "; fid + qualified_name + location)",
+        "Use ONLY fids that appear in this run's material.",
     ]
+    for fid, qn, file_path, start_line in symbol_rows:
+        lines.append(f"{fid} {qn} {file_path}:{start_line}")
+    lines.append("")
+    lines.append(
+        f"## Real call edges ({len(edge_rows)} of {edge_total}"
+        + (f", showing first {MATERIAL_EDGES_CAP} in deterministic order" if edge_total > MATERIAL_EDGES_CAP else "")
+        + "; consecutive slice steps MUST be such a pair)"
+    )
+    edge_map: dict = {}
+    for fid_a, qn_a, fid_b, qn_b, etype in edge_rows:
+        lines.append(f"{fid_a} {qn_a} -> {fid_b} {qn_b} ({etype})")
+        edge_map.setdefault(fid_a, []).append(fid_b)
+    # 真实调用链预计算（真实冒烟实证：弱模型自建长链必违邻接约束——机械链提取交给机器，
+    # 模型只做语义命名/角色/摘要）；确定性 DFS、环安全、cap 截断
+    qn_by_fid = {fid: qn for fid, qn, _fp, _sl in symbol_rows}
+    qn_by_fid.update({fid_a: qn_a for fid_a, qn_a, _b, _c, _t in edge_rows})
+    qn_by_fid.update({fid_b: qn_b for _a, _q, fid_b, qn_b, _t in edge_rows})
+    chains: list = []
+
+    def _dfs(path: list) -> None:
+        if len(chains) >= MATERIAL_CHAINS_CAP:
+            return
+        if len(path) >= 2:
+            chains.append(list(path))
+        if len(path) >= MATERIAL_CHAIN_MAX_LEN:
+            return
+        for dst in edge_map.get(path[-1], []):
+            if dst in path:  # 环安全
+                continue
+            path.append(dst)
+            _dfs(path)
+            path.pop()
+            if len(chains) >= MATERIAL_CHAINS_CAP:
+                return
+
+    for src in list(edge_map):
+        _dfs([src])
+    if chains:
+        lines.append("")
+        lines.append(
+            f"## Suggested step chains ({len(chains)}; real call paths - adopt them verbatim as slice steps, "
+            "assign roles and write name/summary; chaining listed edges yourself is also allowed)"
+        )
+        for chain in chains:
+            lines.append(" -> ".join(f"{fid} {qn_by_fid.get(fid, '')}" for fid in chain))
+    return "\n".join(lines)
+
+
+def _materials(
+    dossier: dict | None,
+    grounding: str,
+    existing_slices: list,
+    existing_structure,
+    accepted_slices=None,
+) -> str:
+    """材料按步骤裁剪（真实冒烟第 4 轮实证修正）：
+
+    dossier 22k 字符对 slices 步是注意力噪声——弱模型在 100k 字符材料下无视
+    现成 suggested chains 自建长链（SLICE_MISSING_EDGE 3 拒）。修正：
+    slices 材料只给 grounding（符号/边/链，即验证器认可的全部事实），
+    dossier 服务 structure/overview 思考（步骤语义不同，材料不同）。
+    """
+    parts: list = []
+    if dossier is not None:
+        parts.append(
+            "## Intake material: dossier (facts.db-derived, task-typed budget)\n"
+            + json.dumps(dossier, ensure_ascii=False, default=str)
+        )
+    parts.append(grounding)
     if existing_slices:
         parts.append(
             "## Existing ingested slices (context; you may refine or replace them)\n"
@@ -141,11 +250,28 @@ def _produce_artifact(
             _write_json(Path(f"{prefix}.error.json"), {"error": str(exc)})
             return result
         _write_text(Path(f"{prefix}.response.txt"), response["content"])
+        _write_json(
+            Path(f"{prefix}.meta.json"),
+            {"finish_reason": response.get("finish_reason"), "usage": response.get("usage", {})},
+        )
+        # 推理模型可能把全部输出预算烧在 reasoning 上：空响应+length 快速诚实失败
+        # （重试同预算必然同果），明示修法（探针实证 glm-4.5-flash 2048 tokens 全 reasoning）
+        if not response["content"].strip() and response.get("finish_reason") == "length":
+            detail = (
+                "llm response is empty - all output tokens consumed before content "
+                "(finish_reason=length); raise llm.max_output_tokens in config"
+            )
+            result["attempts"].append({"attempt": attempt, "outcome": "request_error", "detail": detail})
+            _write_json(Path(f"{prefix}.error.json"), {"error": detail, "finish_reason": "length"})
+            return result
         try:
             artifact = extract_json(response["content"])
         except ValueError as exc:
-            result["attempts"].append({"attempt": attempt, "outcome": "parse_error", "detail": str(exc)[:500]})
-            feedback = f"Your previous response could not be parsed as JSON: {exc}"
+            detail = str(exc)[:500]
+            if response.get("finish_reason") == "length":
+                detail += "; response truncated (finish_reason=length) - keep the artifact short"
+            result["attempts"].append({"attempt": attempt, "outcome": "parse_error", "detail": detail})
+            feedback = f"Your previous response could not be parsed as JSON: {detail}"
             continue
         _write_json(Path(f"{prefix}.artifact.json"), artifact)
         receipt = curate_mod.curate_payload(con, kind, json.dumps(artifact, ensure_ascii=False))
@@ -206,9 +332,10 @@ def run_auto_curate(
         etl_mod.ensure_schema(con)
         existing_slices = curate_mod.list_slices(con)
         existing_structure = (curate_mod.get_structure(con) or {}).get("payload")
+        grounding = _symbol_edge_material(con)
 
-        # 2. slices
-        slices_materials = _materials(dossier, existing_slices, existing_structure)
+        # 2. slices（材料只给 grounding：注意力预算留给验证器认可的事实）
+        slices_materials = _materials(None, grounding, existing_slices, existing_structure)
         slices_result = _produce_artifact(
             call, config, "slices", "02-slices", _SLICES_CONTRACT, slices_materials, con, steps_dir
         )
@@ -218,6 +345,7 @@ def run_auto_curate(
         if slices_result["status"] == "accepted":
             structure_materials = _materials(
                 dossier,
+                grounding,
                 existing_slices,
                 existing_structure,
                 accepted_slices=slices_result.get("artifact"),

@@ -145,6 +145,22 @@ def test_load_config_bom_tolerated(tmp_path):
     assert config.model == "m"
 
 
+def test_load_config_thinking_toggle(tmp_path):
+    """思考开关：显式配置才发送（智谱 thinking 模型 reasoning 烧光 tokens 实证）。"""
+    repo = tmp_path
+    (repo / ".vrp").mkdir()
+    base = {"base_url": "http://x/v1", "api_key": "k", "model": "m"}
+    _write_config(repo, {**base, "thinking": "disabled"})
+    config = load_config(repo)
+    assert config.thinking == "disabled"
+    assert config.echo()["thinking"] == "disabled"
+    _write_config(repo, base)
+    assert load_config(repo).thinking is None
+    _write_config(repo, {**base, "thinking": "sometimes"})
+    with pytest.raises(ValueError, match="thinking"):
+        load_config(repo)
+
+
 # ---------- chat client ----------
 
 def _fake_transport(statuses):
@@ -172,6 +188,20 @@ def test_chat_retry_429_then_ok():
     assert sleeps == [2.0]
     assert result["content"] == '{"a": 1}'
     assert result["finish_reason"] == "stop"
+    assert "thinking" not in calls[0]["body"]  # 未配置不发送
+
+
+def test_chat_thinking_param_sent_when_configured(tmp_path):
+    repo = tmp_path
+    (repo / ".vrp").mkdir()
+    _write_config(
+        repo,
+        {"base_url": "http://llm.example/v1", "api_key": API_KEY, "model": "test-model", "thinking": "disabled"},
+    )
+    config = load_config(repo)
+    post, calls = _fake_transport([(200, _ok_body())])
+    chat(config, [{"role": "user", "content": "x"}], transport=post, sleep=lambda s: None)
+    assert calls[0]["body"]["thinking"] == {"type": "disabled"}
 
 
 def test_chat_4xx_no_retry():
@@ -244,6 +274,8 @@ def _fake_chat(responses):
         item = state[queue].pop(0)
         if isinstance(item, Exception):
             raise item
+        if isinstance(item, dict):
+            return dict(item)
         return {"content": item, "finish_reason": "stop", "usage": {}}
 
     call.prompts = prompts
@@ -273,6 +305,7 @@ def test_run_happy_path(tmp_path):
         "01-dossier.json",
         "02-slices-attempt-1.request.json",
         "02-slices-attempt-1.response.txt",
+        "02-slices-attempt-1.meta.json",
         "02-slices-attempt-1.artifact.json",
         "02-slices-attempt-1.receipt.json",
         "03-structure-attempt-1.receipt.json",
@@ -283,11 +316,17 @@ def test_run_happy_path(tmp_path):
     assert (audit / "summary.json").exists()
     log_line = (repo / ".vrp" / "auto" / "log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
     assert json.loads(log_line)["rc"] == 0
-    # 红线：prompt 含默认英文句 + 材料（dossier 内容透传）
+    # 红线：prompt 含默认英文句 + 按步骤裁剪的材料（真实冒烟修正）：
+    # slices 材料只给 grounding（无 dossier 噪声），dossier 服务 structure
     for messages in fake.prompts:
         assert "Default output language for curated content" in messages[0]["content"]
         assert "English" in messages[0]["content"]
-    assert "dossier" in fake.prompts[0][1]["content"]
+    assert "## Real symbols" in fake.prompts[0][1]["content"]
+    assert "## Real call edges" in fake.prompts[0][1]["content"]
+    assert "## Suggested step chains" in fake.prompts[0][1]["content"]
+    assert f"{('f1')} pkg.calc.total -> f2 pkg.calc.double (CALLS)" in fake.prompts[0][1]["content"]
+    assert "Intake material: dossier" not in fake.prompts[0][1]["content"]  # slices 步无 dossier
+    assert "Intake material: dossier" in fake.prompts[1][1]["content"]  # structure 步有 dossier
     # 红线：key 零落盘（扫描整个留痕树）
     for path in (repo / ".vrp" / "auto").rglob("*"):
         if path.is_file():
@@ -343,6 +382,28 @@ def test_run_parse_error_counts_attempt(tmp_path):
     assert summary["slices"]["attempts"][0]["outcome"] == "parse_error"
 
 
+def test_run_empty_response_length_fails_fast(tmp_path):
+    """推理模型烧光预算（content=''+finish=length）→ 快速诚实失败，不烧重试额度。"""
+    repo = _mk_repo(tmp_path)
+    fake = _fake_chat({"slices": [{"content": "", "finish_reason": "length", "usage": {}}]})
+    summary = auto_curate.run_auto_curate(repo, chat_fn=fake)
+    assert summary["rc"] == 1
+    assert summary["slices"]["status"] == "failed"
+    assert len(summary["slices"]["attempts"]) == 1  # 快速失败：只烧一次
+    assert "max_output_tokens" in summary["slices"]["attempts"][0]["detail"]
+    assert summary["structure"]["status"] == "skipped"
+
+
+def test_run_truncated_json_hints_shorter(tmp_path):
+    """截断 JSON（finish=length）→ parse_error 反馈带「keep the artifact short」提示。"""
+    repo = _mk_repo(tmp_path)
+    truncated = {"content": '[{"slice_id": "x", "name": "X"', "finish_reason": "length", "usage": {}}
+    fake = _fake_chat({"slices": [truncated, json.dumps(VALID_SLICES)], "structure": [json.dumps(VALID_STRUCTURE)]})
+    summary = auto_curate.run_auto_curate(repo, chat_fn=fake)
+    assert summary["rc"] == 0
+    assert "keep the artifact short" in summary["slices"]["attempts"][0]["detail"]
+
+
 def test_run_missing_config(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / ".vrp" / "config.json").unlink()
@@ -356,6 +417,49 @@ def test_run_missing_facts_db(tmp_path):
     _write_config(repo)
     with pytest.raises(SystemExit, match="facts.db missing"):
         auto_curate.run_auto_curate(repo)
+
+
+# ---------- 材料面 grounding（真实冒烟实证后增） ----------
+
+def test_symbol_edge_material_grounding(tmp_path):
+    """grounding：真实符号表+边样本+伪符号排除+确定性序+截断诚实标注。"""
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            " VALUES ('fz', 'p', 'pkg.z', 'File', 'z', 'pkg/z.ts', NULL, NULL, 'h')"
+        )  # File 伪符号：file_path 有但 start_line NULL → 排除
+        con.commit()
+        text = auto_curate._symbol_edge_material(con)
+    finally:
+        con.close()
+    assert "## Real symbols (2 of 2; fid + qualified_name + location)" in text
+    assert "## Real call edges (1 of 1; consecutive slice steps MUST be such a pair)" in text
+    assert "f1 pkg.calc.total pkg/calc.py:1" in text
+    assert "f2 pkg.calc.double pkg/calc.py:5" in text
+    assert "f1 pkg.calc.total -> f2 pkg.calc.double (CALLS)" in text
+    assert "## Suggested step chains (1;" in text
+    assert "f1 pkg.calc.total -> f2 pkg.calc.double" in text
+    assert "fz" not in text  # 伪符号排除
+    assert "showing first" not in text  # 未截断不标注
+
+
+def test_symbol_edge_material_truncation_honest(tmp_path):
+    """超 cap 截断注记诚实。"""
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        for i in range(auto_curate.MATERIAL_SYMBOLS_CAP + 5):
+            con.execute(
+                "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+                f" VALUES ('x{i}', 'p', 'pkg.x{i}', 'Function', 'x{i}', 'pkg/x{i}.py', 1, 2, 'h')"
+            )
+        con.commit()
+        text = auto_curate._symbol_edge_material(con)
+    finally:
+        con.close()
+    assert f"showing first {auto_curate.MATERIAL_SYMBOLS_CAP} in deterministic order" in text
 
 
 # ---------- 红线：循环源码无重构事务面 ----------

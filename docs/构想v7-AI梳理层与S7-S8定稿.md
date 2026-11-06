@@ -615,4 +615,11 @@ MCP+skills（§1.4）服务**有 agent 环境的用户**；内置循环服务**�
 - **G3**：契约《梳理工件契约》新 §6（配置/六步与重试/留痕与 rc/红线）；README 快速开始+CLI 表 `curate-auto` 行；skills/vrp-curation 头部零 agent 路径注记；本节收口
 - **测试**：tests/test_auto_curate.py **31 例**——config 单元 12（缺文件/inline+脱敏/env 引用/参数化 7 拒/坏 JSON/BOM 容错）、chat 传输 5（429 退避成功/401 不重试/3 次耗尽/网络错/坏响应形）、extract_json 6（围栏/语言标注/前后散文/数组/非法）、E2E 7（happy path 含留痕全清单+key 零落盘扫描+prompt 红线句断言/拒收→回执驱动→第 2 次 accepted/3 拒中止（03- 文件不存在+enforce/drift 仍落盘）/structure 失败 rc=1/解析失败计尝试/缺 config/缺 facts.db）、红线 1（双模块源码无 s6_transact/tx_run 引用）
 - **dogfood（vrp 自仓）**：无 config → 诚实拒+最小示例 rc=1 ✓；M4 闸正确触发（facts.db 落后 HEAD 硬拒，重跑 etl 过）✓；伪 config（127.0.0.1:9）→ 连接诚实拒，留痕树完整（request+error 落盘，key 零出现），enforce 诚实 skip（本轮 etl 复验把旧 ai-layer structure 标 stale——F2 钩子顺带佐证）✓
-- **真实 LLM 冒烟**：待用户配置真实 key 后跑（`vrp curate-auto <repo>`）；deep 冒烟（skipif 无 `VRP_LLM_API_KEY`）留作下批可选
+- **真实 LLM 冒烟（2026-11-06， lusiem 仓 + 智谱免费 API，7 轮实证迭代）**：终态 **rc=0 全链通过**（slices attempt-1 accepted / structure attempt-1 accepted / enforce ok 534 违例诚实入 P9 / drift 全 fresh）。冒烟驱动的四项修正（每项先诚实跑、按观察补）：
+  1. **材料面 grounding**（`_symbol_edge_material`）：首轮暴露设计缺口——无 function calling 时 LLM 只能被动吃材料，dossier 仅 5 个 fid 远不够；补真实符号表（排 File/Module 伪符号，cap 200）+真实边样本（CALLS/CALL_REFERENCE/HTTP_CALLS 确定性序，cap 200）+**suggested chains**（服务端 DFS 预计算真实调用链 cap 20/长 ≤5——弱模型自建长链必违邻接约束，机械链提取交机器，模型只做语义命名）
+  2. **按步裁剪材料**：slices 材料 102k 字符时弱模型注意力过载无视现成链；修正为 slices 步只给 grounding（验证器认可的全部事实），dossier 服务 structure 步——信息架构按步骤分工
+  3. **客户端诚实性**：空响应+finish_reason=length 快速失败（明示"raise llm.max_output_tokens"，不烧重试额度）；截断 JSON 解析失败回执带"keep the artifact short"；新增 `llm.thinking` 配置项（`enabled`/`disabled`，显式配置才发送——思考模型 reasoning 可烧光 max_tokens 致 content 空）；审计新增 `*.meta.json`（finish_reason/usage 落盘）
+  4. **s7_enforce_ts 逗号 bug**（冒烟副产）：`build_config` 多契约漏逗号 → Node `Unexpected token '{'` → depcruise rc=1 enforcer-failed；单规则探针未暴露，补多契约回归测试
+- **模型选型结论（智谱免费档实测）**：glm-4-flash 指令遵循力不足（verbatim 邻接纪律 3 轮 3 拒，材料三轮补强后行为不变——诚实记录为不可用）；glm-4.5-flash 推理模型不适用（97.5s+2048 tokens 全烧 reasoning、content 空）；**glm-4.5 可用**（thinking 开启时 slices/structure 稳定 attempt-1 过，关 thinking 则 slices 退化 3 拒——verbatim 纪律依赖思考模式；max_output_tokens 32768 下结构一次成型）；engines 面结论已并入 §13.3 配置示例
+- **测试收口**：tests/test_auto_curate.py **37 例**（+grounding 2：真实符号/边/链节+截断标注；+thinking 2：配置开关校验+显式才发送）；tests/test_s7_enforce_ts.py 多契约逗号回归 1；快测 **478 绿**
+- **deep 冒烟**（skipif 无 `VRP_LLM_API_KEY`）留作下批可选
