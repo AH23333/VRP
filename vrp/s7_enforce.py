@@ -424,28 +424,47 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     derived = derive_containers(con, payload)
     containers = derived["containers"]
     from .s7_enforce_ts import derive_ts_containers, run_ts  # 惰性导入防环（ts 模块顶层反向 import 本模块）
+    from .s7_enforce_go import derive_go_containers, run_go  # 惰性导入防环（go 模块 import 本模块常量）
 
     ts_derived = derive_ts_containers(con, payload)
+    go_derived = derive_go_containers(con, payload)
     has_py = any(containers.values())
     has_ts = any(ts_derived["containers"].values())
-    if has_py and has_ts:
+    has_go = any(go_derived["containers"].values())
+    langs = [name for name, present in (("py", has_py), ("ts", has_ts), ("go", has_go)) if present]
+    if len(langs) > 1:
         return {
             **base,
             "structure_status": structure_status,
             "status": "not-enforceable",
-            "reason": "mixed-language structure (py + ts/js): split per language into separate structures",
+            "reason": (
+                f"mixed-language structure ({' + '.join(langs)}):"
+                " split per language into separate structures"
+            ),
         }
+    if has_go:
+        return run_go(repo, con, payload, structure_status, go_derived["containers"], timeout)
     if has_ts:
         return run_ts(repo, con, payload, structure_status, ts_derived["containers"], timeout)
     if not has_py:
-        if derived["extensions"] or ts_derived["extensions"]:
-            seen = ", ".join(sorted(set(derived["extensions"]) | set(ts_derived["extensions"])))
+        if (
+            derived["extensions"]
+            or ts_derived["extensions"]
+            or go_derived["extensions"]
+        ):
+            seen = ", ".join(
+                sorted(
+                    set(derived["extensions"])
+                    | set(ts_derived["extensions"])
+                    | set(go_derived["extensions"])
+                )
+            )
             return {
                 **base,
                 "status": "language-unsupported",
                 "reason": (
                     f"no enforceable containers (seen: {seen}); supported: .py (import-linter),"
-                    " .ts/.tsx/.js/.jsx/.mjs/.cjs (dependency-cruiser)"
+                    " .ts/.tsx/.js/.jsx/.mjs/.cjs (dependency-cruiser), .go (go list)"
                 ),
                 "structure_status": structure_status,
             }
