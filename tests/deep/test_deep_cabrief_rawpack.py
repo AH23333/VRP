@@ -1,4 +1,3 @@
-import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -88,14 +87,20 @@ def test_cabrief_big_repo_real_mcp(big_repo):
 
 
 def test_rawpack_big_repo_deterministic(big_repo):
+    # determinism = same repo state -> same bytes, proven by two builds in the
+    # SAME session. Comparing against a stale pre-existing xml would over-assert:
+    # tsa is a live dogfood repo (run/drift/report touch it every batch), so
+    # cross-session byte equality was never a promised invariant (flaked in #76
+    # era and again in F-batch full run for this reason).
+    result1 = s5_rawpack.build_raw_pack(big_repo)
+    assert result1["status"] == "ok"
+    assert result1["bytes"] > 30_000_000
+    result2 = s5_rawpack.build_raw_pack(big_repo)
+    assert result2["status"] == "ok"
     out = big_repo / ".vrp" / "repomix-output.xml"
-    pre_sha = hashlib.sha256(out.read_bytes()).hexdigest()[:16]
-    result = s5_rawpack.build_raw_pack(big_repo)
-    assert result["status"] == "ok"
-    assert result["bytes"] > 30_000_000
-    assert result["bytes"] == out.stat().st_size
-    assert result["sha256"] == pre_sha
-    assert len(result["sha256"]) == 16
+    assert result2["bytes"] == out.stat().st_size
+    assert result2["sha256"] == result1["sha256"]
+    assert len(result2["sha256"]) == 16
 
 
 def test_rawpack_big_repo_excludes_workdirs(big_repo):
