@@ -94,6 +94,13 @@ def test_blank_noncode():
     assert "'\\n'" not in out and "'\"'" not in out  # 字符字面量空白化
 
 
+def test_blank_noncode_unclosed_char_literal_advances():
+    """非闭合字符字面量（WIP 文件）不卡死扫描——回退前进（c/rs 同守卫）。"""
+    src = "char broken = 'x; int next = 1;\n"
+    out = s7_enforce_java._blank_noncode(src)
+    assert "int next = 1;" in out
+
+
 def test_parse_package_and_imports():
     blanked = s7_enforce_java._blank_noncode(
         "package com.demo.store;\n"

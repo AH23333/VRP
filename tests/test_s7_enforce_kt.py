@@ -97,6 +97,13 @@ def test_blank_noncode_nested_comments_and_raw_string():
     assert "v=" not in out  # 字符串模板随字符串空白化
 
 
+def test_blank_noncode_unclosed_char_literal_advances():
+    """非闭合字符字面量（WIP 文件）不卡死扫描——回退前进（c/rs 同守卫）。"""
+    src = "val broken = 'x; val next = 1\n"
+    out = s7_enforce_kt._blank_noncode(src)
+    assert "val next = 1" in out
+
+
 def test_parse_package_and_imports():
     blanked = s7_enforce_kt._blank_noncode(
         "package com.demo.store\n"  # 1 分号可选

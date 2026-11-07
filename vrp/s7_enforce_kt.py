@@ -113,7 +113,7 @@ def _blank_noncode(text: str) -> str:
             for k in range(i, min(j, n)):
                 if out[k] != "\n":
                     out[k] = " "
-            i = j
+            i = j if j > i else i + 1  # 非闭合字符（WIP 文件）→ 回退前进（防死循环，同 c/rs 守卫）
         else:
             i += 1
     return "".join(out)
