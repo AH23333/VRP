@@ -5,7 +5,7 @@ lint-imports 执行（cwd=repo）→ Broken contracts 解析 → 违例 = P9 fin
 （kind='layer-violation'，source='s7-enforce'，幂等 replace-all）→ dossier
 侧进 AI 重构目标。
 
-十二引擎 → 十三引擎 → 十四引擎 → 十五引擎 → 十六引擎：本模块 Python 路径（import-linter 2.15，pip 全局；
+十二引擎 → 十三引擎 → 十四引擎 → 十五引擎 → 十六引擎 → 十七引擎：本模块 Python 路径（import-linter 2.15，pip 全局；
 VRP_IMPORT_LINTER_BIN 覆盖）；TS/JS 路径见 s7_enforce_ts.py（dependency-cruiser
 18 沙箱，work/dep-cruise-probe）；Go 路径见 s7_enforce_go.py（go list -e -json）；
 Rust 路径见 s7_enforce_rs.py（内置源级 use 树解析）；Java 路径见
@@ -21,7 +21,9 @@ s7_enforce_swift.py（内置源级 import 解析 + Package.swift targets 权威�
 Zig 路径见 s7_enforce_zig.py（内置源级 @import 解析，文件容器）；
 Lua 路径见 s7_enforce_lua.py（内置源级 require 解析，文件容器）；
 ObjC 路径见 s7_enforce_objc.py（内置源级 #import 解析，目录容器——
-.h 与 C 引擎共享，.m/.mm 在仓且无 .c 源文件时归 objc 引擎）。
+.h 与 C 引擎共享，.m/.mm 在仓且无 .c 源文件时归 objc 引擎）；
+Perl 路径见 s7_enforce_perl.py（内置源级 package/use 解析，包容器——
+CBM Perl 零 IMPORTS 边，依赖边全自扫）。
 run() 按语言路由：
 .py 容器 → Python；.ts/.tsx/.js/.jsx/.mjs/.cjs 目录前缀 → TS 引擎；.go 容器
 → Go 引擎；.rs 符号 → Rust 引擎；.java 符号 → Java 引擎；.cs 符号 →
@@ -29,7 +31,7 @@ C# 引擎；.kt 符号 → Kotlin 引擎；.c/.cc/.cpp/.h 等符号 → C/C++ �
 文件时归 ObjC 引擎）；.m/.mm 符号 → ObjC 引擎；
 .php 符号 → PHP 引擎；.scala 符号 → Scala 引擎；.rb 符号 → Ruby 引擎；
 .dart 符号 → Dart 引擎；.swift 符号 → Swift 引擎；.zig 符号 → Zig 引擎；
-.lua 符号 → Lua 引擎；混语言 not-enforceable。
+.lua 符号 → Lua 引擎；.pl/.pm/.t 符号 → Perl 引擎；混语言 not-enforceable。
 
 探针事实（work/probe_r4_importlinter.py + probe_r4_forbidden.py，2026-11-05）：
 - rc 0=kept / 1=broken；rc 1 且 stdout 无 "Broken contracts" 块 = 配置/环境
@@ -459,6 +461,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     from .s7_enforce_zig import derive_zig_containers, run_zig  # 惰性导入防环（zig 模块 import 本模块常量）
     from .s7_enforce_lua import derive_lua_containers, run_lua  # 惰性导入防环（lua 模块 import 本模块常量）
     from .s7_enforce_objc import derive_objc_containers, run_objc  # 惰性导入防环（objc 模块 import 本模块常量）
+    from .s7_enforce_perl import derive_perl_containers, run_perl  # 惰性导入防环（perl 模块 import 本模块常量）
 
     ts_derived = derive_ts_containers(con, payload)
     go_derived = derive_go_containers(con, payload)
@@ -475,6 +478,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     zig_derived = derive_zig_containers(repo, con, payload)
     lua_derived = derive_lua_containers(repo, con, payload)
     objc_derived = derive_objc_containers(con, payload)
+    perl_derived = derive_perl_containers(repo, con, payload, timeout)
     has_py = any(containers.values())
     has_ts = any(ts_derived["containers"].values())
     has_go = any(go_derived["containers"].values())
@@ -490,6 +494,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     has_zig = zig_derived["zig_files"] > 0
     has_lua = lua_derived["lua_files"] > 0
     has_objc = objc_derived["objc_files"] > 0
+    has_perl = perl_derived["perl_files"] > 0
     # .h 归属：.m/.mm 在仓（has_objc）且无 C 源文件时 .h 归 objc 引擎——
     # 纯 ObjC 仓（.h+.m）不算 c 混仓；.c 与 .m 并存则诚实 c+objc 混仓
     has_c = c_derived["c_files"] > 0 and (
@@ -514,6 +519,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
             ("swift", has_swift),
             ("zig", has_zig),
             ("lua", has_lua),
+            ("perl", has_perl),
         )
         if present
     ]
@@ -581,6 +587,18 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
         return run_c(repo, con, payload, structure_status, c_derived["containers"], timeout)
     if has_objc:
         return run_objc(repo, con, payload, structure_status, objc_derived["containers"], timeout)
+    if has_perl:
+        if perl_derived.get("timed_out"):
+            return {
+                **base,
+                "structure_status": structure_status,
+                "status": "enforcer-failed",
+                "reason": f"perl scan exceeded {timeout}s (partial results discarded)",
+            }
+        result = run_perl(repo, con, payload, structure_status, perl_derived["containers"], timeout)
+        if perl_derived.get("orphan_files"):
+            result["orphan_perl_files"] = perl_derived["orphan_files"]
+        return result
     if has_php:
         if php_derived.get("timed_out"):
             return {
@@ -652,6 +670,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
             or zig_derived["extensions"]
             or lua_derived["extensions"]
             or objc_derived["extensions"]
+            or perl_derived["extensions"]
         ):
             seen = ", ".join(
                 sorted(
@@ -671,6 +690,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
                     | set(zig_derived["extensions"])
                     | set(lua_derived["extensions"])
                     | set(objc_derived["extensions"])
+                    | set(perl_derived["extensions"])
                 )
             )
             return {
@@ -689,7 +709,8 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
                     " .swift (built-in Package.swift target parser),"
                     " .zig (built-in @import parser),"
                     " .lua (built-in require parser),"
-                    " .m/.mm (built-in #import parser)"
+                    " .m/.mm (built-in #import parser),"
+                    " .pl/.pm (built-in package/use parser)"
                 ),
                 "structure_status": structure_status,
             }
