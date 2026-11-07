@@ -5,7 +5,7 @@ lint-imports 执行（cwd=repo）→ Broken contracts 解析 → 违例 = P9 fin
 （kind='layer-violation'，source='s7-enforce'，幂等 replace-all）→ dossier
 侧进 AI 重构目标。
 
-十二引擎 → 十三引擎 → 十四引擎：本模块 Python 路径（import-linter 2.15，pip 全局；
+十二引擎 → 十三引擎 → 十四引擎 → 十五引擎：本模块 Python 路径（import-linter 2.15，pip 全局；
 VRP_IMPORT_LINTER_BIN 覆盖）；TS/JS 路径见 s7_enforce_ts.py（dependency-cruiser
 18 沙箱，work/dep-cruise-probe）；Go 路径见 s7_enforce_go.py（go list -e -json）；
 Rust 路径见 s7_enforce_rs.py（内置源级 use 树解析）；Java 路径见
@@ -18,14 +18,15 @@ s7_enforce_scala.py（内置源级 package/import 解析）；Ruby 路径见
 s7_enforce_ruby.py（内置源级 module/require 解析）；Dart 路径见
 s7_enforce_dart.py（内置源级 import URI 解析，文件容器）；Swift 路径见
 s7_enforce_swift.py（内置源级 import 解析 + Package.swift targets 权威清单）；
-Zig 路径见 s7_enforce_zig.py（内置源级 @import 解析，文件容器）。
+Zig 路径见 s7_enforce_zig.py（内置源级 @import 解析，文件容器）；
+Lua 路径见 s7_enforce_lua.py（内置源级 require 解析，文件容器）。
 run() 按语言路由：
 .py 容器 → Python；.ts/.tsx/.js/.jsx/.mjs/.cjs 目录前缀 → TS 引擎；.go 容器
 → Go 引擎；.rs 符号 → Rust 引擎；.java 符号 → Java 引擎；.cs 符号 →
 C# 引擎；.kt 符号 → Kotlin 引擎；.c/.cc/.cpp/.h 等符号 → C/C++ 引擎；
 .php 符号 → PHP 引擎；.scala 符号 → Scala 引擎；.rb 符号 → Ruby 引擎；
 .dart 符号 → Dart 引擎；.swift 符号 → Swift 引擎；.zig 符号 → Zig 引擎；
-混语言 not-enforceable。
+.lua 符号 → Lua 引擎；混语言 not-enforceable。
 
 探针事实（work/probe_r4_importlinter.py + probe_r4_forbidden.py，2026-11-05）：
 - rc 0=kept / 1=broken；rc 1 且 stdout 无 "Broken contracts" 块 = 配置/环境
@@ -453,6 +454,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     from .s7_enforce_dart import derive_dart_containers, run_dart  # 惰性导入防环（dart 模块 import 本模块常量）
     from .s7_enforce_swift import derive_swift_containers, run_swift  # 惰性导入防环（swift 模块 import 本模块常量）
     from .s7_enforce_zig import derive_zig_containers, run_zig  # 惰性导入防环（zig 模块 import 本模块常量）
+    from .s7_enforce_lua import derive_lua_containers, run_lua  # 惰性导入防环（lua 模块 import 本模块常量）
 
     ts_derived = derive_ts_containers(con, payload)
     go_derived = derive_go_containers(con, payload)
@@ -467,6 +469,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     dart_derived = derive_dart_containers(repo, con, payload, timeout)
     swift_derived = derive_swift_containers(repo, con, payload)
     zig_derived = derive_zig_containers(repo, con, payload)
+    lua_derived = derive_lua_containers(repo, con, payload)
     has_py = any(containers.values())
     has_ts = any(ts_derived["containers"].values())
     has_go = any(go_derived["containers"].values())
@@ -481,6 +484,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     has_dart = dart_derived["dart_files"] > 0
     has_swift = swift_derived["swift_files"] > 0
     has_zig = zig_derived["zig_files"] > 0
+    has_lua = lua_derived["lua_files"] > 0
     langs = [
         name
         for name, present in (
@@ -498,6 +502,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
             ("dart", has_dart),
             ("swift", has_swift),
             ("zig", has_zig),
+            ("lua", has_lua),
         )
         if present
     ]
@@ -612,6 +617,8 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
         return run_swift(repo, con, payload, structure_status, swift_derived["containers"], timeout)
     if has_zig:
         return run_zig(repo, con, payload, structure_status, zig_derived["containers"], timeout)
+    if has_lua:
+        return run_lua(repo, con, payload, structure_status, lua_derived["containers"], timeout)
     if has_ts:
         return run_ts(repo, con, payload, structure_status, ts_derived["containers"], timeout)
     if not has_py:
@@ -630,6 +637,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
             or dart_derived["extensions"]
             or swift_derived["extensions"]
             or zig_derived["extensions"]
+            or lua_derived["extensions"]
         ):
             seen = ", ".join(
                 sorted(
@@ -647,6 +655,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
                     | set(dart_derived["extensions"])
                     | set(swift_derived["extensions"])
                     | set(zig_derived["extensions"])
+                    | set(lua_derived["extensions"])
                 )
             )
             return {
@@ -663,7 +672,8 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
                     " .rb (built-in module/require parser),"
                     " .dart (built-in import parser),"
                     " .swift (built-in Package.swift target parser),"
-                    " .zig (built-in @import parser)"
+                    " .zig (built-in @import parser),"
+                    " .lua (built-in require parser)"
                 ),
                 "structure_status": structure_status,
             }
