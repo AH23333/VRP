@@ -407,8 +407,8 @@ def test_run_skipped_not_active(tmp_path):
 def test_run_language_unsupported(tmp_path):
     repo = _mk_repo(tmp_path, structure=None)
     con = _con(repo)
-    # .zig 仍不在支持清单（.py/.ts/.go/.rs/.java 均已路由对应引擎）
-    con.execute("UPDATE symbols SET file_path = 'src/main.zig'")
+    # .lua 仍不在支持清单（.py/.ts/.go/.rs/.java/.zig 均已路由对应引擎）
+    con.execute("UPDATE symbols SET file_path = 'src/main.lua'")
     con.execute(
         "INSERT INTO structure (payload_json, status, created_at) VALUES (?, 'active', 't')",
         (STRUCTURE,),
@@ -419,8 +419,8 @@ def test_run_language_unsupported(tmp_path):
     finally:
         con.close()
     assert out["status"] == "language-unsupported"
-    assert ".zig" in out["reason"]
-    assert "dependency-cruiser" in out["reason"]  # 支持清单列四引擎（.rs 已路由 rs 引擎，此处用 .zig）
+    assert ".lua" in out["reason"]
+    assert "dependency-cruiser" in out["reason"]  # 支持清单列各引擎（.zig 已路由 zig 引擎，此处用 .lua）
 
 
 def test_run_enforcer_not_found(tmp_path, monkeypatch):
