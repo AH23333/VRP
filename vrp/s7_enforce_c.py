@@ -395,7 +395,9 @@ def derive_c_containers(con: sqlite3.Connection, payload: dict) -> dict:
 
     目录直接取自 symbols.file_path（无源码扫描——容器即路径，异于
     java/cs/kt 的读文件解析）；c_files 供 run() 路由（有 C 文件但全部
-    根级/无容器也进 C 引擎给出可行动的 not-enforceable）。
+    根级/无容器也进 C 引擎给出可行动的 not-enforceable）；c_source_files
+    仅计 C 源文件（.c/.cc/.cpp/.cxx/.c++，不含 .h——.h 与 objc 引擎歧义，
+    run() 路由归属判定用：.m/.mm 在仓且无 C 源文件时 .h 归 objc 引擎）。
     """
     fids_by_module: dict[str, list[str]] = {}
     for mod in payload.get("modules", []):
@@ -407,6 +409,7 @@ def derive_c_containers(con: sqlite3.Connection, payload: dict) -> dict:
     containers: dict[str, set[str]] = {mid: set() for mid in fids_by_module}
     extensions: set[str] = set()
     c_paths: set[str] = set()
+    c_source = 0
     rows: list[tuple[str, str]] = []
     all_fids = list(fid_to_module)
     for i in range(0, len(all_fids), 500):
@@ -426,6 +429,8 @@ def derive_c_containers(con: sqlite3.Connection, payload: dict) -> dict:
                 extensions.add(ext)
             continue
         c_paths.add(p)
+        if p.lower().endswith(C_SOURCE_SUFFIXES):
+            c_source += 1
         d = _dir_of(p)
         if d == "":
             continue  # 根级文件无目录容器（与 ts 根级文件同策略）
@@ -434,6 +439,7 @@ def derive_c_containers(con: sqlite3.Connection, payload: dict) -> dict:
         "containers": {mid: sorted(names) for mid, names in containers.items()},
         "extensions": sorted(extensions),
         "c_files": len(c_paths),
+        "c_source_files": c_source,
     }
 
 
