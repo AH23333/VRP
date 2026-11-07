@@ -5,7 +5,7 @@ lint-imports 执行（cwd=repo）→ Broken contracts 解析 → 违例 = P9 fin
 （kind='layer-violation'，source='s7-enforce'，幂等 replace-all）→ dossier
 侧进 AI 重构目标。
 
-十一引擎：本模块 Python 路径（import-linter 2.15，pip 全局；
+十二引擎：本模块 Python 路径（import-linter 2.15，pip 全局；
 VRP_IMPORT_LINTER_BIN 覆盖）；TS/JS 路径见 s7_enforce_ts.py（dependency-cruiser
 18 沙箱，work/dep-cruise-probe）；Go 路径见 s7_enforce_go.py（go list -e -json）；
 Rust 路径见 s7_enforce_rs.py（内置源级 use 树解析）；Java 路径见
@@ -15,12 +15,13 @@ s7_enforce_kt.py（内置源级 package/import 解析）；C/C++ 路径见
 s7_enforce_c.py（内置源级 #include 解析，目录容器）；PHP 路径见
 s7_enforce_php.py（内置源级 namespace/use 解析）；Scala 路径见
 s7_enforce_scala.py（内置源级 package/import 解析）；Ruby 路径见
-s7_enforce_ruby.py（内置源级 module/require 解析）。run() 按语言路由：
+s7_enforce_ruby.py（内置源级 module/require 解析）；Dart 路径见
+s7_enforce_dart.py（内置源级 import URI 解析，文件容器）。run() 按语言路由：
 .py 容器 → Python；.ts/.tsx/.js/.jsx/.mjs/.cjs 目录前缀 → TS 引擎；.go 容器
 → Go 引擎；.rs 符号 → Rust 引擎；.java 符号 → Java 引擎；.cs 符号 →
 C# 引擎；.kt 符号 → Kotlin 引擎；.c/.cc/.cpp/.h 等符号 → C/C++ 引擎；
 .php 符号 → PHP 引擎；.scala 符号 → Scala 引擎；.rb 符号 → Ruby 引擎；
-混语言 not-enforceable。
+.dart 符号 → Dart 引擎；混语言 not-enforceable。
 
 探针事实（work/probe_r4_importlinter.py + probe_r4_forbidden.py，2026-11-05）：
 - rc 0=kept / 1=broken；rc 1 且 stdout 无 "Broken contracts" 块 = 配置/环境
@@ -445,6 +446,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     from .s7_enforce_php import derive_php_containers, run_php  # 惰性导入防环（php 模块 import 本模块常量）
     from .s7_enforce_scala import derive_scala_containers, run_scala  # 惰性导入防环（scala 模块 import 本模块常量）
     from .s7_enforce_ruby import derive_ruby_containers, run_ruby  # 惰性导入防环（ruby 模块 import 本模块常量）
+    from .s7_enforce_dart import derive_dart_containers, run_dart  # 惰性导入防环（dart 模块 import 本模块常量）
 
     ts_derived = derive_ts_containers(con, payload)
     go_derived = derive_go_containers(con, payload)
@@ -456,6 +458,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     php_derived = derive_php_containers(repo, con, payload, timeout)
     scala_derived = derive_scala_containers(repo, con, payload, timeout)
     ruby_derived = derive_ruby_containers(repo, con, payload, timeout)
+    dart_derived = derive_dart_containers(repo, con, payload, timeout)
     has_py = any(containers.values())
     has_ts = any(ts_derived["containers"].values())
     has_go = any(go_derived["containers"].values())
@@ -467,6 +470,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     has_php = php_derived["php_files"] > 0
     has_scala = scala_derived["scala_files"] > 0
     has_ruby = ruby_derived["ruby_files"] > 0
+    has_dart = dart_derived["dart_files"] > 0
     langs = [
         name
         for name, present in (
@@ -481,6 +485,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
             ("php", has_php),
             ("scala", has_scala),
             ("ruby", has_ruby),
+            ("dart", has_dart),
         )
         if present
     ]
@@ -582,6 +587,15 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
         if ruby_derived.get("orphan_files"):
             result["orphan_ruby_files"] = ruby_derived["orphan_files"]
         return result
+    if has_dart:
+        if dart_derived.get("timed_out"):
+            return {
+                **base,
+                "structure_status": structure_status,
+                "status": "enforcer-failed",
+                "reason": f"dart scan exceeded {timeout}s (partial results discarded)",
+            }
+        return run_dart(repo, con, payload, structure_status, dart_derived["containers"], timeout)
     if has_ts:
         return run_ts(repo, con, payload, structure_status, ts_derived["containers"], timeout)
     if not has_py:
@@ -597,6 +611,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
             or php_derived["extensions"]
             or scala_derived["extensions"]
             or ruby_derived["extensions"]
+            or dart_derived["extensions"]
         ):
             seen = ", ".join(
                 sorted(
@@ -611,6 +626,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
                     | set(php_derived["extensions"])
                     | set(scala_derived["extensions"])
                     | set(ruby_derived["extensions"])
+                    | set(dart_derived["extensions"])
                 )
             )
             return {
@@ -624,7 +640,8 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
                     " .c/.cc/.cpp/.h etc. (built-in include parser),"
                     " .php (built-in namespace/use parser),"
                     " .scala (built-in package/import parser),"
-                    " .rb (built-in module/require parser)"
+                    " .rb (built-in module/require parser),"
+                    " .dart (built-in import parser)"
                 ),
                 "structure_status": structure_status,
             }
