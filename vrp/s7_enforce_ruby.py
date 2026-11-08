@@ -14,23 +14,35 @@
   超类忽略——依赖边是 require 不是继承）。文件容器 = 文件内声明全路径的
   极大元（中间命名空间被更深层声明覆盖时排除：module Probe 遇 Probe::Api
   时 Probe 不入图——共享根坍缩噪声防护，叶容器仍可见）。
-- 块深度启发式：行首 opener 关键字（module/class/def/do/if/unless/case/
-  begin/while/until/for）+1、end 词计数 -1；行中 modifier if/unless 不开启块
-  （常规风格 opener 均在行首）；{} 块不计深（module 声明罕见于 brace 块内）；
-  同行分号链逐声明 local_depth 递进（module A; module B 同行 → A::B 嵌套正确）。
 - 词法（等长空白，换行保留，前进保证处处——_char_end 死循环教训）：行注释 #；
-  =begin/=end 块注释（列 0）；单引号串仅单引号与反斜杠转义（异于双引号全
-  转义）；双引号/反引号/冒号引号符号串全转义（插值花括号内嵌引号不穿透——
-  词法局限同 kt/php）；% 字面量 %q/%Q/%w/%W/%i/%I/%s/%r/裸 % 成对或同字符
-  定界（前一非空白字符为标识符/数字/右括号时按模运算跳过）；heredoc 形态
-  <<ID/<<-ID/<<~ID/带引号 ID（前一非空白字符为标识符字符时按左移/追加跳过；
-  无终止行截断至文件尾——WIP 未闭合 heredoc 保守处理）；正则字面量按表达式
-  位置启发式（前一非空白字符为等号/左括号/逗号/左方括号/感叹/与或/问冒分号/
-  花括号或行首——除法/追加误判防护；字符类内斜杠不闭合；无闭合回退行尾）。
+  =begin/=end 块注释（列 0）；__END__ 行首独立行截断其后 DATA 数据节
+  （review 批修正：原数据节内伪 require/module/字符串污染图——假阳方向）；
+  单引号串仅单引号与反斜杠转义（异于双引号全转义）；双引号/反引号/冒号
+  引号符号串全转义（插值花括号内嵌引号不穿透——词法局限同 kt/php）；
+  % 字面量 %q/%Q/%w/%W/%i/%I/%s/%r/裸 % 成对或同字符定界（前一非空白
+  字符为标识符/数字/右括号时按模运算跳过）；heredoc 形态 <<ID/<<-ID/
+  <<~ID/带引号 ID（前一非空白字符为标识符字符时按左移/追加跳过；无终止
+  行截断至文件尾——WIP 未闭合 heredoc 保守处理）；正则字面量按表达式
+  位置启发式（前一非空白字符为等号/左括号/逗号/左方括号/感叹/与或/问冒
+  分号/花括号/波浪号（=~ 是 Ruby 正则最高频位置——review 批修正）或
+  行首/文件首，或前一非空白记号以 if/unless/when/while/until/and/or/
+  not/elsif/then/do/return 结尾（review 批修正——行首条件正则）——
+  除法/追加误判防护；字符类内斜杠不闭合；无闭合回退行尾）。
 - require 目标区整体保留（同 C 引擎 include 引号目标——require 是字符串语法
-  不能随字符串空白化）：require/require_relative 后同行紧邻（可含左括号）的
-  首个字符串字面量原样保留；目标含花括号插值或实参非字符串（变量/表达式）→
-  动态 require 不入图（诚实文档化）。
+  不能随字符串空白化）：require/require_relative 后同行紧邻（可含左括号，
+  括号实参可跨行——review 批修正：require(\n'foo.rb'\n) 合法 Ruby 原丢边；
+  无括号形态不跨行——require\n'x' 是两条语句非实参）的首个字符串字面量
+  原样保留；成员访问 obj.require(...) 拒（review 批修正：原目标保留→
+  伪边——同 Dart _DIRECTIVE_BLOCKERS 句点拒绝哲学）；目标含花括号插值
+  或实参非字符串（变量/表达式）→ 动态 require 不入图（诚实文档化）。
+- 块深度启发式：行首 opener 关键字（module/class/def/do/if/unless/case/
+  begin/while/until/for）+1、end 词计数 -1；Ruby 3 endless def
+  （def 名(参数)? = 表达式——无 end 闭合；= 两侧空白区分 setter
+  def foo=(v)）不开启块（review 批修正：原 +1 永不闭合致深度漂移、
+  后续 module 嵌套错挂——假阳/假阴双风险）；行中 modifier if/unless
+  不开启块（常规风格 opener 均在行首）；{} 块不计深（module 声明罕见于
+  brace 块内）；同行分号链逐声明 local_depth 递进（module A; module B
+  同行 → A::B 嵌套正确）。
 - require_relative 解析 = 相对当前文件目录 + .rb（实参自带 .rb 时原样候选）；
   require 解析 = $LOAD_PATH 近似候选根（仓根/lib/src/app）+ .rb；./ ../ 前缀
   按相对当前文件目录；未命中 → 外部 gem/stdlib 跳过（不入图）。
@@ -43,6 +55,9 @@
   * 无 module/class 声明的脚本文件不入图（orphan 计数）
   * 行中块开启（x = if y 形态）不计数 → 嵌套深度漂移（常规风格不出现）
   * 动态 require（插值/变量实参）不入图
+  * require 行内注释间隙（require # c\n'x'）不支持——Ruby 语义 = 两条语句
+    非实参（异于 Dart 批：Dart 间隙注释同行合法故跳过）
+  * archaic 字符字面量（?' ?# 等）不解析（现代代码零出现，不特调）
   * 继承（< Super）不是依赖边（require 才是声明边，与各引擎同哲学）
   * vendor/node_modules/build/target/隐藏目录跳过（产物无源码语义）
   * 扫描超时 → enforcer-failed（部分图不可信，不静默截断）
@@ -73,7 +88,16 @@ _PAIRED = {"(": ")", "[": "]", "{": "}", "<": ">"}
 # heredoc / % 字面量的前一非空白字符为标识符/数字/右括号 → 运算符（<<追加/%模）非字面量
 _OP_TAIL = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_)].")
 # 正则字面量表达式位置：前一非空白字符 ∈ 此集合（或行首/文件首）
-_REGEX_PREV = set("=(,[!&|?:;{}")
+_REGEX_PREV = set("=(,[!&|?:;{}~")
+# 正则字面量关键字尾：前一非空白记号以这些关键字结尾（if/unless/when/...）
+# —— =~ 与行首条件是 Ruby 正则最高频位置（review 批修正：原漏 ~ 与关键字尾，
+# 正则体内 module/class/require 文本泄漏为伪声明/伪边）
+_REGEX_KW_TAIL = re.compile(
+    r"(?:\A|[^\w.])(?:if|unless|when|while|until|and|or|not|elsif|then|do|return)[ \t]*$"
+)
+# Ruby 3 endless def：def 名(参数)? = 表达式——无 end 闭合（块深度漂移根源；
+# Ruby 语法要求 = 两侧空白——\s+=\s 精确区分 setter def foo=(v) 与 endless）
+_ENDLESS_DEF_RE = re.compile(r"^[ \t]*def\s+(self\.)?[a-z_]\w*[?!]?(\([^()]*\))?\s+=\s")
 
 _DECL_RE = re.compile(
     r"\b(module|class)\s+([A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*)"
@@ -85,7 +109,9 @@ _END_RE = re.compile(r"\bend\b")
 _HEREDOC_RE = re.compile(r"<<([-~]?)(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 _BLOCK_COMMENT_END = re.compile(r"^=end", re.M)
 _REQUIRE_RE = re.compile(
-    r"\b(require_relative|require)\b[ \t]*\(?[ \t]*(['\"])([^'\"\n]+)\2"
+    # 括号实参可跨行（review 批修正：require(\n'foo.rb'\n) 合法 Ruby 原丢边）；
+    # 无括号形态不跨行（require\n'x' 是两条语句非实参——Ruby 语句完整即终止）
+    r"\b(require_relative|require)\b[ \t]*(?:\([ \t\r\n]*|)[ \t]*(['\"])([^'\"\n]+)\2"
 )
 
 
@@ -125,14 +151,30 @@ def _blank_noncode(text: str) -> str:
                 if out[k] != "\n":
                     out[k] = " "
             i = j
-        elif _word_at(text, i, "require_relative") or _word_at(text, i, "require"):
+        elif (
+            c == "_"
+            and text.startswith("__END__", i)
+            and (i == 0 or text[i - 1] == "\n")
+            and (i + 7 >= n or text[i + 7] in "\r\n")
+        ):
+            # __END__ 行首独立行：其后全为 DATA 数据节非代码（review 批修正：
+            # 原数据节内伪 require/module/字符串污染图——假阳方向）
+            for k in range(i, n):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = n
+        elif (
+            (_word_at(text, i, "require_relative") or _word_at(text, i, "require"))
+            and _prev_char(text, i) != "."
+        ):
+            # 成员访问 obj.require(...) 拒（review 批修正：原误入目标保留→伪边）
             wlen = 16 if text.startswith("require_relative", i) else 7
             k = i + wlen
             while k < n and text[k] in " \t":
                 k += 1
             if k < n and text[k] == "(":
                 k += 1
-                while k < n and text[k] in " \t":
+                while k < n and text[k] in " \t\r\n":
                     k += 1
             if k < n and text[k] in "'\"":
                 i = _string_end(text, k)  # 目标区整体保留（含标识符与字面量）
@@ -163,7 +205,10 @@ def _blank_noncode(text: str) -> str:
                 if out[k] != "\n":
                     out[k] = " "
             i = j
-        elif c == "/" and _prev_char(text, i) in _REGEX_PREV:
+        elif c == "/" and (
+            _prev_char(text, i) in _REGEX_PREV
+            or _REGEX_KW_TAIL.search(text[max(0, i - 48) : i]) is not None
+        ):
             j = _regex_end(text, i)
             for k in range(i, min(j, n)):
                 if out[k] != "\n":
@@ -312,7 +357,7 @@ def _parse_containers(blanked: str) -> list[str]:
                 paths.append("::".join([s[1] for s in stack] + [nm]))
                 stack.append((local, nm))
             local += 1
-        if _OPENER_RE.match(line):
+        if _OPENER_RE.match(line) and not _ENDLESS_DEF_RE.match(line):
             depth += 1
         depth -= len(_END_RE.findall(line))
         if depth < 0:

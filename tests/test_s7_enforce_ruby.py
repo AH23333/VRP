@@ -251,6 +251,113 @@ def test_iter_requires_pseudo_forms_lexer_guarded():
     assert s7_enforce_ruby._iter_requires(blanked) == []  # 伪 require（注释/字符串）不出现
 
 
+def test_iter_requires_member_access_rejected():
+    """obj.require(...) 是成员调用非声明边——不入列（review 批修正回归）。"""
+    blanked = s7_enforce_ruby._blank_noncode(
+        "util.require('util.rb')\n"
+        "x = obj . require('other.rb')\n"
+        "require 'real.rb'\n"
+    )
+    rows = s7_enforce_ruby._iter_requires(blanked)
+    assert rows == [{"kind": "require", "arg": "real.rb", "line": 3}]
+
+
+def test_iter_requires_multiline_paren_form():
+    """括号实参可跨行（合法 Ruby）；裸跨行 = 两条语句非实参（Ruby 语义）。"""
+    blanked = s7_enforce_ruby._blank_noncode(
+        "require(\n"
+        "  'foo.rb'\n"
+        ")\n"
+        "require_relative(\n"
+        "  'bar.rb'\n"
+        ")\n"
+        "require\n"
+        "'two_stmt.rb'\n"
+    )
+    rows = s7_enforce_ruby._iter_requires(blanked)
+    assert rows == [
+        {"kind": "require", "arg": "foo.rb", "line": 1},
+        {"kind": "require_relative", "arg": "bar.rb", "line": 4},
+    ]  # 裸 require\n'x' 是两条语句——首行完整即终止，不入列
+
+
+def test_blank_end_marker_data_section():
+    """__END__ 行首独立行：其后 DATA 数据节非代码（伪 require/module 不泄漏）。"""
+    src = (
+        "require 'genuine.rb'\n"
+        "module Real\n"
+        "  def self.x; end\n"
+        "end\n"
+        "__END__\n"
+        "require 'fake.rb'\n"
+        "module Fake\n"
+    )
+    out = s7_enforce_ruby._blank_noncode(src)
+    assert "genuine.rb" in out  # __END__ 前代码保留
+    assert "fake" not in out and "Fake" not in out  # 数据节整段空白化
+    assert len(out) == len(src)  # 等长空白
+    # 非独立行 __END__（行中标识符）不触发
+    mid = "x = flag__END__ing\nmodule Live\n  def y; end\nend\n"
+    out2 = s7_enforce_ruby._blank_noncode(mid)
+    assert "flag__END__ing" in out2
+    assert s7_enforce_ruby._parse_containers(out2) == ["Live"]
+
+
+def test_parse_containers_endless_def_no_drift():
+    """Ruby 3 endless def（无 end）不开启块——后续 module 嵌套不错挂。"""
+    blanked = s7_enforce_ruby._blank_noncode(
+        "module A\n"
+        "  def helper = 42\n"
+        "end\n"
+        "module B\n"
+        "  def m() = 1\n"
+        "end\n"
+        "module C\n"
+        "  def sq(x) = x * x\n"
+        "end\n"
+        "module D\n"
+        "  def foo=(v)\n"
+        "    @v = v\n"
+        "  end\n"
+        "end\n"
+    )
+    assert s7_enforce_ruby._parse_containers(blanked) == ["A", "B", "C", "D"]
+    # 修复前：endless def 开块永不闭合 → A::B::C::D 错误嵌套
+
+
+def test_parse_containers_endless_def_cross_module():
+    """endless def 后续跨 module 声明漂移（修复前 B 挂 A 下）。"""
+    blanked = s7_enforce_ruby._blank_noncode(
+        "module A\n"
+        "  def helper = 42\n"
+        "end\n"
+        "module B\n"
+        "  module C\n"
+        "    def self.x; end\n"
+        "  end\n"
+        "end\n"
+    )
+    # B 被 B::C 极大元覆盖（共享根坍缩噪声防护）——嵌套归属正确
+    assert s7_enforce_ruby._parse_containers(blanked) == ["A", "B::C"]
+
+
+def test_blank_regex_tilde_and_keyword_tail():
+    """=~ 与行首条件关键字尾是正则最高频位置——体内文本不泄漏。"""
+    src = (
+        "x = y =~ /module Fake/\n"
+        "if /require 'fake2.rb'/\n"
+        "  z = 1\n"
+        "end\n"
+        "module Real\n"
+        "end\n"
+        "a = if x / 2 > 1 then 0 else 1 end\n"
+    )
+    out = s7_enforce_ruby._blank_noncode(src)
+    assert "Fake" not in out and "fake2" not in out  # 正则体空白化
+    assert s7_enforce_ruby._parse_containers(out) == ["Real"]
+    assert "if x / 2 > 1" in out  # 关键字尾后除法仍安全（if 后有操作数非直接斜杠）
+
+
 def test_is_test_conventions():
     assert s7_enforce_ruby._is_test("test/store_test.rb") is True
     assert s7_enforce_ruby._is_test("tests/helper.rb") is True

@@ -260,3 +260,85 @@ def test_enforce_ruby_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_ruby_e2e_review_batch_regressions(tmp_path):
+    """review 批五修叠加 E2E：缺任一修复本测失败。
+
+    (a) util.require('../util/util.rb') 成员调用——修复前伪边 → 假违例；
+    (b) 跨行括号 require_relative——修复前真违例边丢失 → violations=0；
+    (c) __END__ 数据节伪 require/伪 module；
+    (d) endless def 块深度漂移；
+    (e) =~ 正则体内 module 文本泄漏。
+    """
+    repo = _mk_repo(tmp_path)
+    (repo / "src" / "util").mkdir()
+    (repo / "src" / "util" / "util.rb").write_text(
+        "module Probe\n"
+        "  module Util\n"
+        "    def self.wrap(v)\n"
+        "      v\n"
+        "    end\n"
+        "  end\n"
+        "end\n",
+        encoding="utf-8",
+    )
+    # 五修陷阱全叠在违例文件上
+    (repo / "src" / "store" / "storage.rb").write_text(
+        "util.require('../util/util.rb')\n"  # (a) 成员调用非声明边
+        'require_relative(\n'  # (b) 跨行括号——真违例边锚定第 2 行
+        '  "../api/api"\n'
+        ")\n"
+        "module Probe\n"
+        "  module Storage\n"
+        "    def self.put(value)\n"
+        "      Probe::Api.handle(value)\n"
+        "    end\n"
+        "    def helper = 42\n"  # (d) endless def 无 end 不漂移
+        "  end\n"
+        "end\n"
+        "x = y =~ /module Fake/\n"  # (e) =~ 正则体不泄漏
+        "__END__\n"  # (c) 数据节起点
+        "require 'data_fake.rb'\n"
+        "module Fake\n",
+        encoding="utf-8",
+    )
+    structure = json.dumps(
+        {
+            "modules": [
+                {"module_id": "core-mod", "name": "存储", "responsibility": "存", "symbol_fids": ["g1"], "layer": "core"},
+                {"module_id": "iface-mod", "name": "接口", "responsibility": "面", "symbol_fids": ["g2", "g5"], "layer": "interface"},
+            ],
+            "layers": [
+                {"name": "core", "may_depend_on": []},
+                {"name": "interface", "may_depend_on": ["core"]},
+            ],
+        },
+        ensure_ascii=False,
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES ('g5', 'p', 'Probe::Util', 'Module', 'Util', 'src/util/util.rb', 2, 6, 'h')"
+    )
+    con.execute("UPDATE structure SET payload_json = ?", (structure,))
+    con.commit()
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["files"] == 4  # storage/api/util/test
+    assert out["modules"] == 3
+    assert out["tests_excluded"] == 1
+    # (b) 真违例边在（修复前 0）；(a) 伪边不在（修复前假违例 → 2）
+    assert out["violations"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    data = json.loads(rows[0][6])
+    assert data["importer"] == "Probe::Storage"
+    assert data["imported"] == "Probe::Api"  # 修复前若 (a) 泄漏会是 Probe::Util
+    assert data["chain"] == ["Probe::Storage", "Probe::Api"]
+    assert data["line"] == 2  # 跨行 require_relative 关键字行锚定
+    assert rows[0][4] == "src/store/storage.rb"
+    assert rows[0][5] == 2
