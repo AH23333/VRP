@@ -215,6 +215,48 @@ def test_iter_imports_pseudo_forms_lexer_guarded():
     assert [(r["module"], r["line"]) for r in rows] == [("Real", 8)]  # 伪 import 全部词法消化
 
 
+def test_iter_imports_attribute_prefixes():
+    """任意 @ 属性前缀 import 放行（@testable/@_exported/@_implementationOnly/
+    @_spi(...)——Swift import 属性形态；review 修正：原仅特判 @testable）。"""
+    blanked = s7_enforce_swift._blank_noncode(
+        "@_exported import Other\n"
+        "@_implementationOnly import Impl\n"
+        "@testable import MyTarget\n"
+        "@_spi(Preview) import Hidden\n"
+        "x.import NotImport\n"
+        "foo import NotStatement\n"
+        "import Real\n"
+    )
+    rows = s7_enforce_swift._iter_imports(blanked)
+    assert [(r["module"], r["line"]) for r in rows] == [
+        ("Other", 1), ("Impl", 2), ("MyTarget", 3), ("Hidden", 4), ("Real", 7)
+    ]  # 四属性形态全收；成员访问/裸标识符前缀拒
+
+
+def test_parse_package_swift_unclosed_targets_no_crash(tmp_path):
+    """未闭合 targets 数组（畸形清单）不越界崩溃——截断解析已声明 target。"""
+    repo = tmp_path / "bad"
+    repo.mkdir()
+    (repo / "Package.swift").write_text(
+        '// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n'
+        '    name: "demo",\n'
+        '    targets: [\n'
+        '        .target(name: "Core", dependencies: []),\n',  # 缺闭 ]
+        encoding="utf-8",
+    )
+    out = s7_enforce_swift.parse_package_swift(repo)
+    assert out["found"] is True
+    assert out["targets"] == {"Core": {"path": "Sources/Core", "test": False}}  # 截断解析
+
+
+def test_iter_imports_bom_immune():
+    """文件首 BOM 不吞 import（无 bol 追踪；\b 边界与 @ 前缀判定均不受 \ufeff 污染）。"""
+    rows = s7_enforce_swift._iter_imports(
+        s7_enforce_swift._blank_noncode("\ufeff@_exported import Api\n")
+    )
+    assert [(r["module"], r["line"]) for r in rows] == [("Api", 1)]
+
+
 def test_parse_package_swift_full_forms(tmp_path):
     manifest = """// swift-tools-version:5.9
 import PackageDescription

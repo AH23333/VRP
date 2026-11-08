@@ -5,7 +5,9 @@
   Package.swift 是 target 权威清单（同 Go go.mod 地位）→ 容器 = target 名。
   target 路径：path: 实参或 SwiftPM 默认（Sources/<名>；testTarget 为
   Tests/<名>）。
-- 依赖边 = import <TargetName>（含 @testable import 与限定形态
+- 依赖边 = import <TargetName>（含 @ 属性前缀 import——@testable/
+  @_exported/@_implementationOnly/@_spi(...)（Swift import 属性形态，
+  任意 @ 前缀放行）与限定形态
   import class/struct/enum/protocol/func/let/var/typealias TargetName.X——
   取模块段）；未声明模块（Foundation 等系统/外部库）跳过；同 target
   自导入不成边。import 模块名是裸标识符非字符串 → 指令无目标区保留
@@ -224,7 +226,8 @@ def _read(repo: Path, rel: str) -> str:
 
 def _import_statement_at(text: str, i: int) -> bool:
     """位置 i 的 import 关键字是否语句位置（成员访问/标识符尾拒绝；
-    @testable 前缀放行——Swift 可测试导入合法形态）。
+    任意 @ 属性前缀放行——@testable/@_exported/@_implementationOnly/
+    @_spi(...)（Swift import 属性形态；括号属性经 ) 放行路径）。
     """
     j = i - 1
     while j >= 0 and text[j] in " \t\r":
@@ -235,7 +238,7 @@ def _import_statement_at(text: str, i: int) -> bool:
         k = j
         while k >= 0 and text[k] in _IDENT_CHARS:
             k -= 1
-        return k >= 0 and text[k] == "@" and text.startswith("testable", k + 1)
+        return k >= 0 and text[k] == "@"  # 任意 @ 属性前缀（非裸标识符）
     return text[j] != "."
 
 
@@ -309,10 +312,12 @@ def _iter_target_decls(
 ):
     """targets 数组顶层（深度 1）.target(/.executableTarget(/.testTarget( 声明
     → 逐一 yield (label, paren_open)；嵌套 dependencies 引用不误判。
+    未闭合数组截断文本尾（arr_close==len 时 i<n 守卫——畸形清单不越界）。
     """
+    n = len(text)
     depth = 0
     i = arr_open
-    while i <= arr_close:
+    while i <= arr_close and i < n:
         if comment_mask[i] or string_mask[i]:
             i += 1
             continue

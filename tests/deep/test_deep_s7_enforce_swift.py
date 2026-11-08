@@ -249,6 +249,28 @@ def test_enforce_swift_e2e_fix_clears_findings(tmp_path):
     assert _rows(repo) == []  # 合规重跑清掉旧违例
 
 
+def test_enforce_swift_e2e_exported_attribute_import(tmp_path):
+    """@_exported import 违例边不丢（review 修正：原仅特判 @testable 致假阴）。"""
+    repo = _mk_repo(tmp_path)
+    (repo / "Sources" / "Storage" / "Storage.swift").write_text(
+        "@_exported import Api\n\n"
+        "public func storagePut(key: String) -> Int {\n"
+        "    if key.isEmpty { return 1 }\n"
+        "    return apiVersion()\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1  # @_exported 属性 import 边入图
+    rows = _rows(repo)
+    assert len(rows) == 1 and rows[0][4] == "Sources/Storage/Storage.swift" and rows[0][5] == 1
+
+
 def test_enforce_swift_e2e_compliant_repo_clean(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / "Sources" / "Storage" / "Storage.swift").write_text(
