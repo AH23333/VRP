@@ -215,6 +215,27 @@ def test_enforce_zig_e2e_fix_clears_findings(tmp_path):
     assert _rows(repo) == []  # 合规重跑清掉旧违例
 
 
+def test_enforce_zig_e2e_comptime_concat_not_edged(tmp_path):
+    """comptime ++ 拼接 @import 不产边（首串 .zig 结尾亦不误边——review 修正锚定语义）。"""
+    repo = _mk_repo(tmp_path)
+    (repo / "src" / "storage.zig").write_text(
+        'const api = @import("api.zig" ++ comptime suffix);\n\n'
+        "pub fn storagePut(key: []const u8) i32 {\n"
+        "    if (key.len == 0) return 1;\n"
+        "    return 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 0  # 拼接实参弃取——无 storage→api 假边
+    assert _rows(repo) == []
+
+
 def test_enforce_zig_e2e_compliant_repo_clean(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / "src" / "storage.zig").write_text(

@@ -32,7 +32,9 @@
   锚定 = 链尾直接 @import 边 (file,line) 字典序首 + 违例文件首符号。
 - 诚实局限（文档化不静默）：
   * build.zig 程序化模块声明不解析——命名模块 import 视为外部
-  * 动态 @import（comptime 拼接实参）不入图
+  * 动态 @import（comptime 拼接实参）不入图（实参闭引号后尾随 ++
+    → 弃取，防首串字面量误边——同 Lua 引擎 .. 拼接守卫）
+  * @import 多行字符串字面量（\\ 前缀形态）实参不入图（罕见形态）
   * zig-cache/zig-out/node_modules/vendor/隐藏目录跳过（产物无源码语义）
   * 扫描超时 → enforcer-failed（部分图不可信，不静默截断）
 """
@@ -214,12 +216,20 @@ def _iter_imports(blanked: str, test_ranges: list[tuple[int, int]]) -> tuple[lis
     """保留区 → ([{path, line}], suppressed)；test 块内 @import 抑制。
 
     suppressed = test 块内被抑制的 @import 行数（诚实计数）。
+    实参闭引号后尾随 ++（comptime 拼接实参）→ 动态 import 弃取
+    （防首串字面量以 .zig 结尾时误边——同 Lua 引擎 .. 拼接守卫）。
     """
     rows: list[dict] = []
     suppressed = 0
+    n = len(blanked)
     for m in _IMPORT_RE.finditer(blanked):
         if any(s <= m.start() < e for s, e in test_ranges):
             suppressed += 1
+            continue
+        k = m.end()
+        while k < n and blanked[k] in " \t\r\n":
+            k += 1
+        if blanked.startswith("++", k):  # comptime 拼接实参 → 动态 import 不入图
             continue
         rows.append(
             {"path": m.group(1), "line": blanked.count("\n", 0, m.start()) + 1}

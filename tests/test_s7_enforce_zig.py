@@ -152,6 +152,41 @@ def test_iter_imports_test_block_suppression():
     assert suppressed == 2  # 块内 @import 抑制计数
 
 
+def test_iter_imports_concat_guard():
+    """实参闭引号后尾随 ++ → 动态 import 弃取（防首串 .zig 结尾误边——同 Lua .. 守卫）。"""
+    blanked = s7_enforce_zig._blank_noncode(
+        'const a = @import("other.zig" ++ suffix);\n'
+        'const b = @import("models/" ++ name ++ ".zig");\n'
+        'const c = @import("a.zig" ++ "b.zig");\n'
+        'const d = @import (\n  "skip.zig"\n  ++ suffix\n);\n'
+        'const e = @import("api.zig");\n'
+    )
+    rows, suppressed = s7_enforce_zig._iter_imports(blanked, [])
+    assert [(r["path"], r["line"]) for r in rows] == [("api.zig", 8)]  # 仅静态实参（拼接跨行后第 8 行）
+    assert suppressed == 0
+
+
+def test_iter_imports_concat_outside_parens_kept():
+    """) 后 ++ 不在实参内——静态 @import 不受守卫误伤。"""
+    blanked = s7_enforce_zig._blank_noncode('const e = @import("api.zig") ++ later;\n')
+    rows, _ = s7_enforce_zig._iter_imports(blanked, [])
+    assert [(r["path"], r["line"]) for r in rows] == [("api.zig", 1)]
+
+
+def test_iter_imports_multiline_string_arg_limitation():
+    """@import 多行字符串字面量（\\ 前缀形态）实参不入图（罕见形态——文档化局限）。"""
+    src = 'const m = @import(\n    \\\\other.zig\n);\n'
+    rows, _ = s7_enforce_zig._iter_imports(s7_enforce_zig._blank_noncode(src), [])
+    assert rows == []
+
+
+def test_iter_imports_bom_immune():
+    """BOM 首字符不吞 @import（Zig 无行首锚定——\\ufeff 非标识符字符不阻断匹配）。"""
+    src = '\ufeffconst api = @import("api.zig");\n'
+    rows, _ = s7_enforce_zig._iter_imports(s7_enforce_zig._blank_noncode(src), [])
+    assert [(r["path"], r["line"]) for r in rows] == [("api.zig", 1)]
+
+
 def test_test_block_ranges_rejections():
     blanked = s7_enforce_zig._blank_noncode(
         'const t = testing.test;\n'  # 字段访问 .test
