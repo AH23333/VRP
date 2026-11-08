@@ -16,7 +16,12 @@
 - import 全形态统一捕获点链：单类型 `import a.b.C`；Scala 2 通配 `import a.b._`
   （随链捕获为 a.b._，前缀解析时剥落）；Scala 3 通配 `import a.b.*`（* 不入链）；
   选择器 `import a.b.{C, D}` / 重命名 `{C => D}` / 成员通配 `import a.b.C._`
-  （选择器与通配均在链后截断）。
+  （选择器与通配均在链后截断）。import/package 目标与关键字同行
+  （review 批修正：`\s+` 改 `[ \t]+`——Scala 换行即语句终止，无续行运算符，
+  原 `import\ncom.probe.Foo` 残缺文本被跨行捕获为伪边/伪包）。
+- package 声明排除 `package object` 子句（review 批修正：`package a { package
+  object b }` 原 `(?!object)` 缺失把 object 误捕获为包名段 → a.object 错包；
+  `package objectx` 合法包名不误伤——`\b` 边界精确区分）。
 - import 目标解析 = 已知包集合最长前缀（`com.probe.store.Storage` → com.probe.store；
   外部依赖 scala.* / java.util.* 等无前缀命中 → 跳过）；同包 import 不成自环。
 - 测试代码排除（与 java /test/java/、kt /test/kotlin/ 对齐）：路径含 /test/scala/
@@ -29,6 +34,8 @@
   * .sc（worksheet/Ammonite 脚本）不匹配 .scala 后缀，不参与执法
   * 多 packaging 块文件仅取首链（首声明近似，文件级容器粒度不受影响）
   * XML 字面量（Scala 2 legacy，2.13 起废弃）不识别——内嵌引号/注释可能导致词法漂移
+  * Scala 3 `export` 子句（export a.b.*——成员转发依赖边）不入图（诚实局限，
+    import 才是本引擎的声明边口径；export 支持留待后续批）
   * raw 插值字符串内的转义序列按字面处理，误判为普通字符串词法（文档化微局限）
   * 非标准测试源根不识别（按生产计，保守方向）
   * 构建/隐藏目录（target/build/node_modules/.*）跳过（产物无源码语义）
@@ -56,11 +63,15 @@ SCALA_SUFFIX = ".scala"
 TEST_SOURCE_ROOT = "/test/scala/"
 SKIP_DIRS = {"target", "build", "node_modules"}
 
+# package 后目标同行（Scala 换行即语句终止——\n 跨行不收，病态残缺代码不产伪包）；
+# (?!object\b) 拒 package object 子句（review 批修正：原 `package a { package object b }`
+# 把 object 误捕获为包名段 → a.object 错包；\b 保 package objectx 合法包名不误伤）
 _PACKAGE_RE = re.compile(
-    r"\bpackage\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"\bpackage[ \t]+(?!object\b)([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
 )
+# import 后目标同行（同上——Scala 无续行运算符，跨行形态必为残缺代码）
 _IMPORT_RE = re.compile(
-    r"\bimport\s+"
+    r"\bimport[ \t]+"
     r"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
 )
 

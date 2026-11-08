@@ -167,6 +167,65 @@ def test_parse_package_plain_with_code_braces():
     assert s7_enforce_scala._parse_package(blanked) == "com.probe.store"  # 类体花括号不误判 packaging
 
 
+def test_parse_package_object_clause_excluded():
+    """package object 子句不误捕获 object 包名段（review 批修正回归）。"""
+    blanked = s7_enforce_scala._blank_noncode(
+        "package com.probe {\n"
+        "  package object utils {\n"
+        "    val x = 1\n"
+        "  }\n"
+        "}\n"
+    )
+    assert s7_enforce_scala._parse_package(blanked) == "com.probe"  # 修复前 com.probe.object
+    blanked = s7_enforce_scala._blank_noncode(
+        "package a {\n"
+        "  package b {\n"
+        "    package object c {\n"
+        "      val x = 1\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    assert s7_enforce_scala._parse_package(blanked) == "a.b"  # 修复前 a.b.object
+    blanked = s7_enforce_scala._blank_noncode(
+        "package com.probe\n"
+        "package object utils {\n"
+        "  val x = 1\n"
+        "}\n"
+    )
+    assert s7_enforce_scala._parse_package(blanked) == "com.probe"  # flat+package object 首匹配
+
+
+def test_parse_package_objectx_legal_name():
+    """package objectx 是合法包名（objectx 非 object 关键字）——\b 边界不误伤。"""
+    blanked = s7_enforce_scala._blank_noncode(
+        "package objectx {\n  val x = 1\n}\n"
+    )
+    assert s7_enforce_scala._parse_package(blanked) == "objectx"
+
+
+def test_iter_imports_same_line_only():
+    """import/package 目标与关键字同行（Scala 换行即语句终止——残缺跨行不产伪边/伪包）。"""
+    blanked = s7_enforce_scala._blank_noncode(
+        "import\n"  # 残缺：import 后换行（非法 Scala——两语句非一）
+        "com.fake.Target\n"
+        "import real.One\n"
+        "package\n"  # 残缺：package 后换行
+        "com.fake.Pkg\n"
+    )
+    rows = s7_enforce_scala._iter_imports(blanked)
+    assert rows == [("real.One", 3)]  # 修复前 com.fake.Target 在行 1 被捕获
+    assert s7_enforce_scala._parse_package(blanked) is None  # 修复前 com.fake.Pkg 在行 4 被捕获
+
+
+def test_iter_imports_bom_immune():
+    """源文件首 BOM 免疫（review 批 BOM 盲区核查结论）。"""
+    blanked = s7_enforce_scala._blank_noncode("\ufeffimport com.probe.A\n")
+    assert s7_enforce_scala._iter_imports(blanked) == [("com.probe.A", 1)]
+    blanked = s7_enforce_scala._blank_noncode("\ufeffpackage com.probe\n")
+    assert s7_enforce_scala._parse_package(blanked) == "com.probe"
+
+
 def test_resolve_import_longest_prefix():
     packages = {"com.demo", "com.demo.api", "com.demo.store", "com.other"}
     assert s7_enforce_scala._resolve_import("com.demo.api.Handler", packages) == "com.demo.api"

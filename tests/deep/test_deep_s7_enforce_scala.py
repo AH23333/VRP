@@ -238,3 +238,40 @@ def test_enforce_scala_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_scala_e2e_review_batch_regressions(tmp_path):
+    """review 批修正 E2E：packaging 块内 package object 不产伪包段。
+
+    修复前 `package com.deep.store { package object util }` 把包解析为
+    com.deep.store.object——违例 importer 错挂伪包；修复后包名正确。
+    """
+    repo = _mk_repo(tmp_path)
+    (repo / "src" / "main" / "scala" / "com" / "deep" / "store" / "Storage.scala").write_text(
+        "package com.deep.store {\n"
+        "  import com.deep.api.Handler\n"
+        "  class Storage {\n"
+        "    def get(): String = new Handler().handle()\n"
+        "  }\n"
+        "  package object util {\n"
+        "    val version = \"1\"\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    data = json.loads(rows[0][6])
+    assert data["importer"] == "com.deep.store"  # 修复前 com.deep.store.object
+    assert data["imported"] == "com.deep.api"
+    assert data["chain"] == ["com.deep.store", "com.deep.api"]
+    assert data["line"] == 2  # packaging 块内 import 行锚定
+    assert rows[0][4] == "src/main/scala/com/deep/store/Storage.scala"
+    assert rows[0][5] == 2
