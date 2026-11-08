@@ -14,7 +14,9 @@
   索引——xcheck agreement 0、cbm_only=1；同 Dart 先例不阻塞）。
 - 词法：同 C 引擎底座（// 行注释、块注释**不可嵌套**、字符串反斜杠转义、
   @"..." NSString 字面量（@ 是普通字符，引号起串）、字符字面量有界扫描、
-  .mm ObjC++ raw string R"delim(...)delim"）——ObjC 词法是 C 的严格超集。
+  .mm ObjC++ raw string R"delim(...)delim"）——ObjC 词法是 C 的严格超集；
+  文件首 BOM（\ufeff）空白化——Windows 编辑器 BOM 头不污染行首 #import
+  词法（bol 追踪）与 `^[ \t]*#` 匹配（BOM+行 1 import 假阴防御）。
 - #import/#include 提取：反斜杠续行合并为逻辑行（锚定取逻辑行首行号）；
   尖括号框架/系统头不入图；@import Module; clang 模块语法不入图（系统
   框架）；引号目标解析顺序近似编译器与 Xcode——源文件所在目录（clang
@@ -199,6 +201,9 @@ def _blank_noncode(text: str) -> str:
     i = 0
     n = len(text)
     bol = True
+    if text.startswith("\ufeff"):
+        out[0] = " "  # 文件首 BOM 空白化：bol 追踪/行首指令词法不受污染（BOM+行 1 #import 假阴防御）
+        i = 1
     while i < n:
         c = text[i]
         if c == "\n":

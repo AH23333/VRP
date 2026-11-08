@@ -242,3 +242,36 @@ def test_enforce_objc_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_objc_e2e_bom_first_line_import(tmp_path):
+    """BOM+行 1 违例 import 全链路：修复前 bol 被 BOM 污染→指令未跳过→目标按串空白化（0 违例假阴）。"""
+    repo = _mk_repo(tmp_path)
+    # 行 1 违例 import 紧跟 BOM；保留行 2 伪 import（@字符串 canary）防泄漏
+    (repo / "queue" / "Queue.m").write_text(
+        "\ufeff" + '#import "Logging.h"\n'
+        'NSString *s = @"#import \\"Logging.h\\"";\n'
+        '#import "Queue.h"\n'
+        "@implementation Queue\n"
+        "@end\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["engine"] == "objc-import-parser"
+    assert out["violations"] == 1  # 修复前 0（BOM 吞行 1 违例 import）
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    assert out["files"] == 5
+    assert out["tests_excluded"] == 1  # Tests/QueueTests.m 排除不变
+    rows = _rows(repo)
+    assert len(rows) == 1
+    file_path, line, payload = rows[0][4], rows[0][5], json.loads(rows[0][6])
+    assert file_path == "queue/Queue.m"
+    assert line == 1  # 行 1 违例 import 锚定（canary 行 2 不算）
+    assert payload["line"] == 1
+    assert payload["chain"] == ["queue", "logging"]

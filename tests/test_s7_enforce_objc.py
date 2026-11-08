@@ -104,6 +104,21 @@ def test_blank_noncode_canary_forms():
     assert rows == [("Real.h", 4), ("Util.h", 5)]  # 指令行锚定；尖括号不入列
 
 
+def test_blank_bom_first_char():
+    """文件首 BOM 空白化：bol 追踪不被污染——修复前行 1 #import 目标被串词法吞掉（假阴）。"""
+    src = "\ufeff" + '#import "Bom.h"\nint keep = 1;\n'
+    out = s7_enforce_objc._blank_noncode(src)
+    assert len(out) == len(src)  # 等长空白（BOM 空白化非删除）
+    assert "keep = 1" in out
+    rows = s7_enforce_objc._iter_imports(out)
+    assert rows == [("Bom.h", 1)]  # 修复前 []（BOM→bol=False→指令未跳过→串词法吞目标）
+    # 无 BOM 对照不变
+    rows2 = s7_enforce_objc._iter_imports(
+        s7_enforce_objc._blank_noncode('#import "Bom.h"\nint keep = 1;\n')
+    )
+    assert rows2 == [("Bom.h", 1)]
+
+
 def test_blank_directive_continuation():
     """反斜杠续行指令跨行保留；逻辑行锚定首行行号。"""
     src = '#import \\\n"Split.h"\nint x = 1;\n'
@@ -474,6 +489,31 @@ def test_run_objc_test_file_excluded_e2e(tmp_path):
     assert out["files"] == 5  # files_scanned 含测试文件
     assert out["dirs"] == 3  # queue/logging/Tests 叶目录全部入图
     assert out["violations"] == 1  # 仅生产 import 产违例（测试 import 不入图）
+
+
+def test_run_objc_bom_first_line_import_e2e(tmp_path):
+    """BOM+行 1 违例 import E2E：修复前 bol 被 BOM 污染→指令未跳过→目标被串词法吞（0 违例假阴）。"""
+    repo = _mk_objc_repo(tmp_path)
+    (repo / "queue" / "Queue.m").write_text(
+        "\ufeff" + '#import "Logging.h"\n'  # 行 1 违例 import（BOM 后）
+        '#import "Queue.h"\n'
+        "@implementation Queue\n"
+        "@end\n",
+        encoding="utf-8",
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_objc.run_objc(repo, con, json.loads(OBJC_STRUCTURE), "active", OBJC_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1  # 修复前 0（BOM 吞行 1 违例 import）
+    assert out["anchored"] == 1
+    row = sqlite3.connect(repo / ".vrp" / "facts.db").execute(
+        "SELECT file_path, start_line FROM findings"
+    ).fetchone()
+    assert row[0] == "queue/Queue.m"
+    assert row[1] == 1  # 行 1 违例 import 锚定
 
 
 # ------------------------------------------------------ run() 路由
