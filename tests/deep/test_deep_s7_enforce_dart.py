@@ -233,3 +233,43 @@ def test_enforce_dart_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_dart_e2e_review_batch_regressions(tmp_path):
+    """review 批三修正 E2E：raw 三引号尾反斜杠 + 指令间隙注释 + pubspec 行尾注释。
+
+    修前三者叠加即全文件假阴性（raw 串吞文件 + 间隙注释空白化 URI +
+    package: 判包失败），修后违例完整锚定。
+    """
+    repo = _mk_repo(tmp_path)
+    (repo / "pubspec.yaml").write_text("name: probe # 行尾注释\n", encoding="utf-8")
+    (repo / "lib" / "src" / "storage.dart").write_text(
+        "const doc = r'''C:\\dir\\''';\n"
+        "import /* gap */ 'package:probe/src/api.dart';\n"
+        "\n"
+        "int storagePut(String key, String value) {\n"
+        "  if (key.isEmpty) return 1;\n"
+        "  return apiVersion() > 0 ? 0 : 1;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["engine"] == "dart-import-parser"
+    assert out["violations"] == 1  # 三修正叠加下违例不丢
+    assert out["anchored"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    pathology, kind, source, anchor, file_path, line, payload = rows[0]
+    assert (pathology, kind, source) == ("P9", "layer-violation", "s7-enforce")
+    assert anchor == "g1"
+    assert file_path == "lib/src/storage.dart"
+    assert line == 2  # 间隙注释 import 行号锚定
+    data = json.loads(payload)
+    assert data["importer"] == "lib/src/storage.dart"
+    assert data["imported"] == "lib/src/api.dart"  # package: URI 判包命中（pubspec 行尾注释容忍）
+    assert data["chain"] == ["lib/src/storage.dart", "lib/src/api.dart"]

@@ -21,27 +21,35 @@
   （反斜杠转义；单行字符串不跨行——未闭合截断行尾保守前进）；raw
   字符串 r'...' r"..."（前导 r 紧邻引号且 r 前非标识符字符——raw 内
   转义不生效，与普通串分开扫描）；三引号串跨行（闭三引号序列；反斜杠
-  转义跳过）；插值 $var / ${expr} 内嵌引号不穿透（词法局限同 kt/php/
-  ruby）。Dart 无字符字面量/正则字面量/heredoc——词法面显著小于 Ruby。
+  转义跳过；raw 三引号转义不生效——review 批修正：原不分 raw 尾反斜杠
+  转义吞闭引号首枚致整文件假阴性）；插值 $var / ${expr} 内嵌引号不穿透
+  （词法局限同 kt/php/ruby）。Dart 无字符字面量/正则字面量/heredoc——
+  词法面显著小于 Ruby。
 - import/export/part 指令目标区整体保留（同 C 引擎 include、Ruby 引擎
   require 的引号目标——指令 URI 是字符串语法不能随字符串空白化）：
   关键字（前一非空白字符为标识符/引号/句点时拒绝——命名实参 import: 'x'
-  与成员访问不误入）后跳空白（可跨行）与可选 raw 前缀，紧邻字符串字面量
-  原样保留；part of 串不保留（of 挡住目标判定，owner 侧才计归属）。
+  与成员访问不误入）后跳空白（可跨行）、间隙注释（review 批修正——原
+  间隙注释致 URI 空白化丢边假阴性；行/块注释等长空白化换行保留后继续）
+  与可选 raw 前缀，紧邻字符串字面量原样保留；part of 串不保留（of
+  挡住目标判定，owner 侧才计归属）。
 - URI 解析：相对 URI 相对当前文件目录（percent-decode 后 posix 归一，
   dart: SDK 与未命中跳过）；package: URI 就近 pubspec.yaml 判包——
   从导入文件目录向上找首个 pubspec.yaml，name 匹配则其 lib/ 子路径
   （不匹配或无 pubspec = 外部包跳过；monorepo 跨包 import 视为外部，
-  诚实文档化）。插值 URI（$ 记号）动态依赖不入图。
+  诚实文档化；pubspec name 行尾注释容忍——YAML `#` 前空白语义，
+  review 批修正：原不容行尾注释致 name=None 全外部假阴性）。插值
+  URI（$ 记号）动态依赖不入图。
 - 测试排除：路径含 test/tests/integration_test 目录段或 *_test.dart
   文件名（Dart test/ 约定）——import/export 不入图，文件容器仍入表
   （叶可见，同各引擎哲学）。
 - 违例语义 = 传递闭包（十二引擎统一）：BFS 最短链入 payload；
   锚定 = 链尾直接 import/export 边 (file,line) 字典序首 + 违例文件首符号。
 - 诚实局限（文档化不静默）：
-  * 相邻字符串拼接 URI（import 'a' 'b'; 罕见形态）只取首段
+  * 相邻字符串拼接 URI（import 'a' 'b'; 非法 Dart 形态）只取首段
   * 条件 import（if (dart.library.x) 'b.dart'）取默认 URI，条件分支不入图
   * 插值 URI（动态依赖）不入图
+  * import augment 'x.dart'（Dart 3 增强指令实验性）不入图——augment
+    关键字挡住目标判定
   * build/node_modules/vendor/隐藏目录（含 .dart_tool）跳过（产物无源码语义）
   * 扫描超时 → enforcer-failed（部分图不可信，不静默截断）
 """
@@ -77,7 +85,9 @@ _IDENT_CHARS = set(
 )
 
 _DIRECTIVE_RE = re.compile(r"\b(import|export|part)\b[ \t\r\n]*r?(['\"])([^'\"\n]+)\2")
-_PUBSPEC_NAME_RE = re.compile(r"^name:\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?\s*$", re.M)
+_PUBSPEC_NAME_RE = re.compile(
+    r"^name:\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?(?:\s+#[^\n]*)?\s*$", re.M
+)
 
 
 # ------------------------------------------------------------------ 词法底座
@@ -110,7 +120,7 @@ def _blank_noncode(text: str) -> str:
         elif c in "'\"":
             raw = i > 0 and text[i - 1] == "r" and (i < 2 or text[i - 2] not in _IDENT_CHARS)
             if text.startswith(c * 3, i):
-                j = _triple_end(text, i)
+                j = _triple_end(text, i, raw)
             else:
                 j = _string_end(text, i, raw)
             for k in range(i, min(j, n)):
@@ -124,8 +134,27 @@ def _blank_noncode(text: str) -> str:
                 continue
             wlen = len(word)
             k = i + wlen
-            while k < n and text[k] in " \t\r\n":
-                k += 1
+            # 关键字-目标间隙：空白与注释均跳过（review 批修正——原仅空白，
+            # 间隙注释被下方注释分支空白化后 URI 丢失假阴性；注释等长
+            # 空白化换行保留，扫描继续）
+            while True:
+                while k < n and text[k] in " \t\r\n":
+                    k += 1
+                if k + 1 < n and text[k] == "/" and text[k + 1] == "/":
+                    j = text.find("\n", k)
+                    j = j if j >= 0 else n
+                    for x in range(k, j):
+                        out[x] = " "
+                    k = j
+                    continue
+                if k + 1 < n and text[k] == "/" and text[k + 1] == "*":
+                    j = _block_comment_end(text, k)
+                    for x in range(k, min(j, n)):
+                        if out[x] != "\n":
+                            out[x] = " "
+                    k = j
+                    continue
+                break
             raw = k < n and text[k] == "r" and k + 1 < n and text[k + 1] in "'\""
             if raw:
                 k += 1
@@ -185,13 +214,17 @@ def _string_end(text: str, i: int, raw: bool) -> int:
     return j if j >= 0 else n
 
 
-def _triple_end(text: str, i: int) -> int:
-    """三引号串结束位置（闭三引号序列；反斜杠转义跳过；未闭合文件尾）。"""
+def _triple_end(text: str, i: int, raw: bool = False) -> int:
+    """三引号串结束位置（闭三引号序列；反斜杠转义跳过；未闭合文件尾）。
+
+    raw 三引号串转义不生效（Dart 语义——闭三引号按原文扫描；review 批
+    修正：原不区分 raw，尾反斜杠转义跳过吞掉闭引号首枚致整文件假阴性）。
+    """
     q = text[i] * 3
     j = i + 3
     n = len(text)
     while j < n:
-        if text[j] == "\\":
+        if not raw and text[j] == "\\":
             j += 2
             continue
         if text.startswith(q, j):

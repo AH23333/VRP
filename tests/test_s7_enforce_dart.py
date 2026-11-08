@@ -149,6 +149,47 @@ def test_blank_unclosed_single_line_string():
     assert "b = 2;" in out  # 后续代码不受损
 
 
+def test_blank_raw_triple_backslash_before_close():
+    # raw 三引号串尾反斜杠不转义闭引号（Dart 语义）——review 批修正回归
+    src = "var p = r'''C:\\dir\\''';\nimport 'real.dart';\n"
+    out = s7_enforce_dart._blank_noncode(src)
+    assert "dir" not in out  # raw 三引号体空白化（\''' 原文闭三引号终止）
+    assert "import 'real.dart';" in out  # 后续真指令保留（原整文件假阴性）
+    assert len(out) == len(src)
+
+
+def test_blank_nonraw_triple_backslash_escape_stays_open():
+    # 非 raw 对照：尾 \' 是转义——闭三引号未闭合，串体延伸吞后续（Dart 语义）
+    src = "var p = '''C:\\dir\\''';\nimport 'gone.dart';\n"
+    out = s7_enforce_dart._blank_noncode(src)
+    assert "gone.dart" not in out  # 仍在串体内（合法语义，非 bug）
+    assert "dir" not in out
+
+
+def test_iter_directives_comment_in_gap():
+    # 指令关键字-目标间隙注释：URI 保留——review 批修正回归
+    blanked = s7_enforce_dart._blank_noncode(
+        "import /* block */ 'x.dart';\n"
+        "import // line\n    'y.dart';\n"
+        "export /* c */ r'z.dart';\n"
+        "part /* p */ 'piece.dart';\n"
+    )
+    rows = s7_enforce_dart._iter_directives(blanked)
+    got = {(r["kind"], r["uri"], r["line"]) for r in rows}
+    assert ("import", "x.dart", 1) in got  # 块注释间隙（原 URI 空白化丢边）
+    assert ("import", "y.dart", 2) in got  # 行注释间隙（行号=关键字行）
+    assert ("export", "z.dart", 4) in got  # 注释+raw 前缀组合
+    assert ("part", "piece.dart", 5) in got
+    assert len(rows) == 4
+
+
+def test_iter_directives_bom_immune():
+    # UTF-8 BOM 首行指令不误伤（\ufeff 非阻断字符，\b 词界对 Cf 类成立）
+    blanked = s7_enforce_dart._blank_noncode("\ufeffimport 'bom.dart';\n")
+    rows = s7_enforce_dart._iter_directives(blanked)
+    assert [(r["kind"], r["uri"], r["line"]) for r in rows] == [("import", "bom.dart", 1)]
+
+
 def test_iter_directives_forms():
     blanked = s7_enforce_dart._blank_noncode(
         "import 'package:probe/src/api.dart';\n"
@@ -289,6 +330,27 @@ def test_resolve_uri_package_nested_pubspec(tmp_path):
     assert s7_enforce_dart._resolve_uri(
         repo, "packages/sub/lib/y.dart", "package:sibling/x.dart", file_set
     ) is None  # 跨包外部
+
+
+def test_pubspec_name_trailing_comment(tmp_path):
+    """pubspec name 行尾注释容忍（YAML `#` 前空白语义）——review 批修正回归。"""
+    repo = tmp_path / "pkg"
+    (repo / "lib").mkdir(parents=True)
+    (repo / "pubspec.yaml").write_text(
+        "name: my_pkg # my package\n", encoding="utf-8"
+    )
+    (repo / "lib" / "a.dart").write_text("", encoding="utf-8")
+    file_set = {"lib/a.dart"}
+    assert s7_enforce_dart._pubspec_name(repo / "pubspec.yaml") == "my_pkg"
+    assert s7_enforce_dart._resolve_uri(
+        repo, "lib/main.dart", "package:my_pkg/a.dart", file_set
+    ) == "lib/a.dart"  # 原 name=None 全外部假阴性
+    (repo / "pubspec.yaml").write_text(
+        "name: \"my_pkg\"\t# tab comment\n", encoding="utf-8"
+    )
+    assert s7_enforce_dart._pubspec_name(repo / "pubspec.yaml") == "my_pkg"  # 引号+tab 注释
+    (repo / "pubspec.yaml").write_text("name: my_pkg#c\n", encoding="utf-8")
+    assert s7_enforce_dart._pubspec_name(repo / "pubspec.yaml") is None  # # 前无空白非注释（YAML 语义）
 
 
 def test_build_dart_graph_self_external_part():
