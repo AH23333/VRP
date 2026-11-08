@@ -149,6 +149,33 @@ def test_require_at_boundaries():
     assert s7_enforce_lua._require_at(text, text.index("z.require") + 2)  # 点前缀按全局（V1 局限）
 
 
+def test_require_arg_scan_limitations():
+    """实参扫描不感知转义（文档化局限）：转义闭引号误检截断实参；\\z/反斜杠跨行实参弃取。
+
+    方向保障：误检实参（含反斜杠）不解析不产边——病态模块名假阴方向，不误报。
+    """
+    # 转义闭引号：_read_arg 裸扫描在 \" 误判闭合 → 实参截断为 a\（不解析 → 无边）
+    rows = s7_enforce_lua._iter_requires(
+        s7_enforce_lua._blank_noncode('local m = require("a\\"b")\n')
+    )
+    assert [r["path"] for r in rows] == ["a\\"]  # 文档化误检形态
+    # \z 跨行续串实参：_read_arg 遇换行即弃
+    rows = s7_enforce_lua._iter_requires(
+        s7_enforce_lua._blank_noncode("local m = require('foo\\z\n  .bar')\n")
+    )
+    assert rows == []
+    # 反斜杠续行实参同弃
+    rows = s7_enforce_lua._iter_requires(
+        s7_enforce_lua._blank_noncode("local m = require('foo\\\nbar')\n")
+    )
+    assert rows == []
+    # 文件首 BOM 无害（引擎无 bol 追踪——异于 C/ObjC）
+    rows = s7_enforce_lua._iter_requires(
+        s7_enforce_lua._blank_noncode('\ufeffrequire("bom_mod")\n')
+    )
+    assert rows == [{"path": "bom_mod", "line": 1}]
+
+
 def test_is_test_conventions():
     assert s7_enforce_lua._is_test("spec/a_spec.lua")
     assert s7_enforce_lua._is_test("tests/b.lua")

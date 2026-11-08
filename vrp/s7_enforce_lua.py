@@ -33,8 +33,16 @@
     视为外部跳过
   * 动态 require（变量/拼接实参）不入图；level>0 长括号实参不入图
     （罕见形态）
+  * require 实参扫描不感知转义（_read_arg 裸扫描闭引号）——实参含
+    `\"` 时闭引号误检（实参截断，病态模块名方向；模块名实践不含
+    引号/反斜杠，误检不产边不误报）；`\z`/反斜杠跨行续串实参不入图
+    （_read_arg 遇换行即弃——罕见形态）；实参含转义序列不解转义
+    （原文匹配）
   * require 实参字符串内嵌 require 文本的病态模块名可能误报（与
     Zig 引擎 @import 同型理论局限）
+  * 文件首 BOM（\ufeff）无害——引擎无 bol 追踪、_REQUIRE_RE 后行断言
+    仅排除标识符字符，BOM 后 require 照常提取（跨引擎 BOM 盲区核查
+    结论，异于 C/ObjC bol 追踪引擎）
   * node_modules/vendor/隐藏目录（含 .luarocks）跳过
   * 扫描超时 → enforcer-failed（部分图不可信，不静默截断）
 """
