@@ -126,6 +126,56 @@ def test_parse_package_and_imports():
     ]  # 伪 import（注释/嵌套注释/raw string/字符串）不出现
 
 
+def test_parse_package_and_imports_eof_no_newline():
+    """文件末行声明无换行（编辑器常见形态）不丢——终结符 [;\r\n]|$（review 修正）。"""
+    assert s7_enforce_kt._parse_package(s7_enforce_kt._blank_noncode("package com.demo.store")) == "com.demo.store"
+    assert s7_enforce_kt._parse_package(s7_enforce_kt._blank_noncode("package com.demo.store;")) == "com.demo.store"
+    blanked = s7_enforce_kt._blank_noncode("package com.demo.store\nimport com.demo.api.Handler")
+    assert s7_enforce_kt._parse_package(blanked) == "com.demo.store"
+    assert s7_enforce_kt._iter_imports(blanked) == [("com.demo.api.Handler", 2)]
+    assert s7_enforce_kt._iter_imports(
+        s7_enforce_kt._blank_noncode("import com.demo.api.Handler as H")
+    ) == [("com.demo.api.Handler", 1)]  # 别名
+    assert s7_enforce_kt._iter_imports(
+        s7_enforce_kt._blank_noncode("import com.demo.api.*")
+    ) == [("com.demo.api", 1)]  # 通配
+
+
+def test_import_keyword_newline_rejected():
+    """关键字与目标间换行非法（Kotlin 语法该处无 NL 记号）——正则仅 [ \t]+。"""
+    assert s7_enforce_kt._iter_imports(
+        s7_enforce_kt._blank_noncode("import\ncom.demo.api.Handler\n")
+    ) == []
+    assert s7_enforce_kt._parse_package(
+        s7_enforce_kt._blank_noncode("package\ncom.demo.store\n")
+    ) is None
+    assert s7_enforce_kt._iter_imports(
+        s7_enforce_kt._blank_noncode("import \t com.demo.api.Handler\n")
+    ) == [("com.demo.api.Handler", 1)]  # 多空格/Tab 合法
+
+
+def test_blank_unclosed_string_stops_at_newline():
+    """未闭合普通串换行截断（普通串不得含字面换行，跨行须 raw）——不吞下行真 import。"""
+    src = 'val s = "unclosed\nimport com.demo.api.Handler\n'
+    out = s7_enforce_kt._blank_noncode(src)
+    assert "unclosed" not in out  # 串内容空白化
+    assert out.count("\n") == src.count("\n")  # 换行保留（行号不漂移）
+    assert s7_enforce_kt._iter_imports(out) == [("com.demo.api.Handler", 2)]
+    # 行尾反斜杠不越过换行（反斜杠+换行非合法转义）
+    out = s7_enforce_kt._blank_noncode('val s = "tail\\\nimport com.demo.api.Handler\n')
+    assert s7_enforce_kt._iter_imports(out) == [("com.demo.api.Handler", 2)]
+
+
+def test_kt_bom_prefix_immune():
+    """UTF-8 BOM 不破坏 package/import 解析（\b 边界对 \ufeff 成立）。"""
+    blanked = s7_enforce_kt._blank_noncode("\ufeffpackage com.demo.store\nimport com.demo.api.Handler\n")
+    assert s7_enforce_kt._parse_package(blanked) == "com.demo.store"
+    assert s7_enforce_kt._iter_imports(blanked) == [("com.demo.api.Handler", 2)]
+    assert s7_enforce_kt._parse_package(
+        s7_enforce_kt._blank_noncode("\ufeffpackage com.demo.store")
+    ) == "com.demo.store"  # BOM+EOF 无换行
+
+
 def test_resolve_import_longest_prefix():
     packages = {"com.demo", "com.demo.api", "com.demo.store", "com.other"}
     assert s7_enforce_kt._resolve_import("com.demo.api.Handler", packages) == "com.demo.api"

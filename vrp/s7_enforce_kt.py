@@ -7,8 +7,11 @@
   是路径式（kt-cbm-probe.src.main.kotlin.com.probe...），故容器一律 fid→file_path→
   读文件解析 package（与 java/cs 同策略）。
 - 词法与 Java 的关键差异：块注释**可嵌套**（Kotlin 语法 /* /* */ */ 合法——深度计数）；
-  raw string（三引号字符串）；package/import **分号可选**（行结尾即终止）；import 别名
-  `import a.b.C as D`（取左侧目标）；import 通配 `import a.b.*`。
+  raw string（三引号字符串）；package/import **分号可选**（行尾或 EOF 均终止——
+  文件末行无换行不丢声明）；import 别名 `import a.b.C as D`（取左侧目标）；
+  import 通配 `import a.b.*`；关键字与目标间仅空格/Tab（Kotlin 语法
+  packageHeader/importHeader 产生式在该处无 NL 记号——`import⏎com.x` 非法，
+  正则按 `[ \t]+` 严格匹配）；BOM 免疫（\ufeff 非词字符，\b 边界成立）。
 - import 目标解析 = 已知包集合最长前缀（`com.probe.store.Storage` → com.probe.store；
   外部依赖 kotlin.* / java.util.* 等无前缀命中 → 跳过）；同包 import 不成自环。
 - 测试代码排除（与 java /test/java/ 对齐）：路径含 /test/kotlin/ 段
@@ -21,6 +24,9 @@
   * .kts 脚本（build.gradle.kts 等）不入 .kt 后缀匹配，不参与执法（构建脚本非生产源码）
   * 字符串模板 ${} 内嵌引号（如 "${map["k"]}"）词法不穿透——普通字符串在模板内
     首个裸引号处提前截断，残余按代码扫描；package/import 位于该残余的概率极低
+  * 未闭合普通字符串（WIP 文件）换行即截断（Kotlin 普通串不得含字面换行，跨行
+    须 raw string）——不吞后续行的真 package/import
+  * backtick 标识符（如 val `import`、含空格的测试函数名）词法不识别——病态不修
   * 非标准测试源根不识别（按生产计，保守方向）
   * 构建/隐藏目录（target/build/node_modules/.*）跳过（产物无源码语义）
   * 扫描超时 → enforcer-failed（部分图不可信，不静默截断）
@@ -47,15 +53,19 @@ KT_SUFFIX = ".kt"
 TEST_SOURCE_ROOT = "/test/kotlin/"
 SKIP_DIRS = {"target", "build", "node_modules"}
 
+# 终结符 [;\r\n]|$：分号可选且行尾/EOF 均终止（文件末行无换行不丢声明）；
+# 关键字与目标间仅 [ \t]+：Kotlin 语法 packageHeader/importHeader 产生式在
+# 'package'/'import' 与 identifier 之间无 NL 记号（import⏎com.x 非法）。
 _PACKAGE_RE = re.compile(
-    r"\bpackage\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*[;\r\n]"
+    r"\bpackage[ \t]+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"[ \t]*(?:[;\r\n]|$)"
 )
 _IMPORT_RE = re.compile(
-    r"\bimport\s+"
+    r"\bimport[ \t]+"
     r"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
     r"(?:\.\*)?"
-    r"(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?"
-    r"\s*[;\r\n]"
+    r"(?:[ \t]+as[ \t]+[A-Za-z_][A-Za-z0-9_]*)?"
+    r"[ \t]*(?:[;\r\n]|$)"
 )
 
 
@@ -120,10 +130,17 @@ def _blank_noncode(text: str) -> str:
 
 
 def _string_end(text: str, i: int) -> int:
+    """普通字符串结束位置；换行即截断（Kotlin 普通串不得含字面换行，跨行须 raw）。
+
+    未闭合串（WIP 文件）在行尾截断——不吞后续行的真 package/import；
+    行尾反斜杠不越过换行（反斜杠+换行非合法转义，视同未闭合）。
+    """
     j = i + 1
     n = len(text)
     while j < n:
-        if text[j] == "\\":
+        if text[j] == "\n":
+            return j
+        if text[j] == "\\" and text[j + 1 : j + 2] != "\n":
             j += 2
             continue
         if text[j] == '"':

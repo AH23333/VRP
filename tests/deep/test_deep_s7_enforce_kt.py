@@ -190,6 +190,36 @@ def test_enforce_kt_e2e_transitive_and_test_root_excluded(tmp_path):
     assert sum(1 for r in rows if json.loads(r[6])["importer"] == "com.deep.store") == 2
 
 
+def test_enforce_kt_e2e_review_batch_regressions(tmp_path):
+    """review 修正回归三合一：BOM 前缀 + 未闭合串换行截断 + 末行 import 无换行。
+
+    修复前该形态 0 违例假阴（串吞 import 或 EOF 终结符不命中）。
+    """
+    repo = _mk_repo(tmp_path)
+    # WIP 文件形态：BOM 开头；第 3 行未闭合串（换行截断）；末行 import 无换行（EOF 终止）
+    (repo / "src" / "main" / "kotlin" / "com" / "deep" / "store" / "Store.kt").write_text(
+        '\ufeffpackage com.deep.store\nval s = "wip\nimport com.deep.api.Handler',
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1  # 修复前 0（假阴）
+    rows = _rows(repo)
+    assert len(rows) == 1
+    pathology, kind, source, anchor, file_path, line, payload = rows[0]
+    assert (pathology, kind, source) == ("P9", "layer-violation", "s7-enforce")
+    assert anchor == "g1"
+    assert file_path == "src/main/kotlin/com/deep/store/Store.kt"
+    assert line == 3  # 末行 import 真行号
+    data = json.loads(payload)
+    assert data["chain"] == ["com.deep.store", "com.deep.api"]
+    assert data["line"] == 3
+
+
 def test_enforce_kt_e2e_idempotent_rerun(tmp_path):
     repo = _mk_repo(tmp_path)
     con = sqlite3.connect(repo / ".vrp" / "facts.db")
