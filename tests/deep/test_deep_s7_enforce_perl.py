@@ -236,3 +236,43 @@ def test_enforce_perl_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_perl_e2e_conditional_require_and_hashkey_collision(tmp_path):
+    """条件 require（if 块内+赋值右侧）+哈希键碰撞 canary。
+
+    修复前 `$opt{s}` 的 `s}` 触发 q 算符误判（`}` 作定界符），把到下一个
+    `}` 之间的 `require Logging` 整段空白化——违例漏提（0 违例假阴）。
+    修复后：闭合括号不作定界符、`{`/`=` 语句边界命中 require；双边同对
+    dedup 单违例，锚 (file,line) 字典序首。
+    """
+    repo = _mk_repo(tmp_path)
+    (repo / "queue" / "Queue.pm").write_text(
+        "# use Logging;\n"  # 行注释 canary
+        "=pod\n"
+        "use Logging;\n"  # POD canary
+        "=cut\n"
+        'my $s = "use Logging;";\n'  # 字符串 canary
+        "package Queue;\n"
+        "my %opt = (s => 1);\n"  # 修复前：s} q 算符误触起点
+        "if ($opt{s}) { require Logging; }\n"  # 修复前：require 被误触吞掉
+        "sub work { my $m = require Logging; return 1; }\n"  # 第二边同对 dedup
+        "1;\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1  # 修复前 0（哈希键碰撞吞 require 假阴）
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    pathology, kind, source, anchor, file_path, line, payload = rows[0]
+    assert (anchor, file_path, line) == ("g1", "queue/Queue.pm", 8)
+    data = json.loads(payload)
+    assert data["chain"] == ["Queue", "Logging"]
+    assert data["line"] == 8  # 两条 Queue→Logging 边（行 8/行 9）字典序首

@@ -127,6 +127,27 @@ def test_blank_q_operators():
     assert "use RealQ;" in blanked
 
 
+def test_blank_qop_closing_bracket_misfire():
+    """闭合括号 `)]}>` 不作 q 定界符：`$h{s}`/`bar(s)` 裸字形态不空白化真实代码。"""
+    src = (
+        "package App;\n"
+        "my %opt = (s => 1);\n"
+        "if ($opt{s}) { require Foo::Bar; }\n"  # 修复前：s} 误触吞 require（假阴）
+        "my %h = (q => 1);\n"
+        "sub early { $h{q} }\n"  # 修复前：q} 误触两段扫描
+        "my $r = bar(s);\n"  # 修复前：s) 误触扫至下个 )
+        "my $m = my($y) = 1;\n"
+        "1;\n"
+    )
+    blanked, spans = s7_enforce_perl._blank_noncode(src)
+    assert "require Foo::Bar" in blanked  # 哈希键碰撞形态不再吞代码
+    assert "package App" in blanked
+    assert "$h{q}" in blanked
+    assert "my($y)" in blanked
+    rows = s7_enforce_perl._iter_uses(blanked, spans, src)
+    assert rows == [{"kind": "pkg", "target": "Foo::Bar", "line": 3}]
+
+
 def test_blank_heredoc_forms():
     src = (
         'my $a = <<"H1";\n'
@@ -211,6 +232,32 @@ def test_iter_uses_matrix():
         {"kind": "pkg", "target": "Base2", "line": 6},
         {"kind": "pkg", "target": "Base3", "line": 7},
         {"kind": "pkg", "target": "Real::End", "line": 10},
+    ]
+
+
+def test_iter_uses_statement_positions():
+    """语句边界（`{`/`=`/`;`/`(`）后 use/require 命中；守卫形态不误触。"""
+    src = (
+        "package App;\n"
+        "if ($need) { require Foo::Bar; }\n"  # 条件块内 require
+        "my $m = require Baz;\n"  # 赋值右侧 require
+        "$x = 1; use Qux;\n"  # 分号后续 use
+        "return unless (require Cond);\n"  # 圆括号内 require
+        "$obj->require(1);\n"  # 方法调用不触发（-> 不在边界集）
+        "reuse Foo;\n"  # 标识符前缀不触发（前字符字母）
+        "my %h = (use => 1, require => 2);\n"  # 哈希键 => 后非裸词
+        "require 5.010;\n"  # 版本守卫
+        "require $mod;\n"  # 动态目标不入图
+        "use Real;\n"  # 行首（既有路径）不变
+    )
+    blanked, spans = s7_enforce_perl._blank_noncode(src)
+    rows = s7_enforce_perl._iter_uses(blanked, spans, src)
+    assert rows == [
+        {"kind": "pkg", "target": "Foo::Bar", "line": 2},
+        {"kind": "pkg", "target": "Baz", "line": 3},
+        {"kind": "pkg", "target": "Qux", "line": 4},
+        {"kind": "pkg", "target": "Cond", "line": 5},
+        {"kind": "pkg", "target": "Real", "line": 11},
     ]
 
 
@@ -522,6 +569,36 @@ def test_run_perl_test_file_excluded_e2e(tmp_path):
     assert out["files"] == 3  # files_scanned 含测试文件
     assert out["packages"] == 2  # 仅生产包入图（.t 无包）
     assert out["violations"] == 1  # 仅生产 use 产违例
+
+
+def test_run_perl_conditional_require_e2e(tmp_path):
+    """条件 require（if 块内+哈希键碰撞 canary）产边入图——修复前整段被 s} 误触空白化。"""
+    repo = _mk_perl_repo(tmp_path)
+    # 直连 use 换成条件 require：$opt{s} 哈希键形态 + 块内语句位置双重命中
+    (repo / "queue" / "Queue.pm").write_text(
+        "package Queue;\n"
+        "my %opt = (s => 1);\n"
+        "if ($opt{s}) { require Logging; }\n"
+        "sub work { 1; }\n"
+        "1;\n",
+        encoding="utf-8",
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_perl.run_perl(repo, con, json.loads(PERL_STRUCTURE), "active", PERL_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    row = sqlite3.connect(repo / ".vrp" / "facts.db").execute(
+        "SELECT file_path, start_line, payload_json FROM findings"
+    ).fetchone()
+    assert row[0] == "queue/Queue.pm"
+    assert row[1] == 3  # 条件 require 行
+    assert json.loads(row[2])["line"] == 3
+    assert json.loads(row[2])["chain"] == ["Queue", "Logging"]
 
 
 # ------------------------------------------------------ run() 路由
