@@ -16,7 +16,10 @@ r"""S7 架构执法 PHP 引擎：内置源级 namespace/use 解析（构想v7 §
   嵌套；单引号串仅 `\'`/`\\` 转义（异于双引号全转义）；双引号串支持
   `\$var`/`{$...}` 插值——插值内嵌引号不穿透（与 Kotlin `${}` 同型局限）；
   heredoc/nowdoc（`<<<EOT`/`<<<'EOT'`，PHP 7.3+ 缩进闭合容错）；反引号
-  shell-exec 按双引号串处理。
+  shell-exec 按双引号串处理；引号串（单/双/反引号）**合法跨行**（换行是
+  字面内容——review 批修正：原行截断违背 PHP 语义，串内容次行起被当
+  代码扫描产伪 use 边/伪 namespace 容器）——一律扫至闭合引号，未闭合
+  （病态）→ EOF 保守空白化（同 heredoc；残余真边丢失优于伪边产生）。
 - use 形态（全落实）：`use A\B\C;`、别名 `as D`（取左侧目标）、
   `use function f;`/`use const X;`（kind 不影响命名空间边）、逗号多目标
   `use A\B, C\D;`、**分组** `use A\{B, C as D};`；闭包捕获 `use ($x)`
@@ -39,6 +42,10 @@ r"""S7 架构执法 PHP 引擎：内置源级 namespace/use 解析（构想v7 §
     代码无架构语义；legacy require 链不覆盖）
   * 双引号/插值内嵌引号（`"{$arr["k"]}"`）词法不穿透——字符串在插值内
     首个裸引号处提前截断，残余按代码扫描
+  * namespace 声明名段间空白/注释间隙（`namespace A /* c */ \B;`——
+    合法但病态，段间 token 间隙无 PSR 实践）不识别
+  * attribute 实参字符串内 `]`（如 `#[Attr("]")]`）致深度计数提前闭合
+    ——影响面极窄
   * 行注释内 `?>` 短闭合不识别（PHP 实际会闭合岛——残余按注释空白化，
     影响面极窄）
   * 构建/第三方目录（vendor/node_modules/build/target/隐藏目录）跳过
@@ -77,7 +84,11 @@ _USE_RE = re.compile(r"\buse\s+(function\s+|const\s+)?")
 
 
 def _sq_end(text: str, i: int) -> int:
-    """单引号串结束位置：仅 `\\'` 与 `\\\\` 转义（异于双引号全转义）。"""
+    """单引号串结束位置：仅 `\\'` 与 `\\\\` 转义（异于双引号全转义）。
+
+    PHP 单引号串合法跨行（换行是字面内容）——扫至闭合引号；未闭合
+    （病态）→ EOF 保守（残余不当代码扫描，防伪边——同 heredoc/Ruby）。
+    """
     j = i + 1
     n = len(text)
     while j < n:
@@ -86,14 +97,15 @@ def _sq_end(text: str, i: int) -> int:
             continue
         if text[j] == "'":
             return j + 1
-        if text[j] == "\n":
-            return j  # 防御：单引号串不跨行，行尾截断防误吞下行代码
         j += 1
     return n
 
 
 def _dq_end(text: str, i: int, quote: str) -> int:
-    """双引号串/反引号 shell-exec 结束位置：全转义+插值不穿透（文档化局限）。"""
+    """双引号串/反引号 shell-exec 结束位置：全转义+插值不穿透（文档化局限）。
+
+    PHP 双引号串/反引号合法跨行——扫至闭合；未闭合（病态）→ EOF 保守。
+    """
     j = i + 1
     n = len(text)
     while j < n:
@@ -102,8 +114,6 @@ def _dq_end(text: str, i: int, quote: str) -> int:
             continue
         if text[j] == quote:
             return j + 1
-        if text[j] == "\n":
-            return j  # 防御：不跨行
         j += 1
     return n
 

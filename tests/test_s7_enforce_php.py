@@ -736,3 +736,72 @@ def test_cli_enforce_php_wiring(tmp_path, capsys):
     assert out["engine"] == "php-namespace-parser"
     assert out["findings_written"] == 1
     assert out["anchored"] == 1
+
+
+# ------------------------------------------------------- review 批（跨行串修正）
+
+
+def test_blank_multiline_strings_blank_content():
+    """PHP 单/双/反引号串合法跨行（换行是字面内容）——串体整体空白化。
+
+    修复前行截断：串内容次行起被当代码扫描 → 伪 use 边/伪 namespace。
+    """
+    src = (
+        "<?php\n"
+        "namespace Probe\\Core;\n"
+        "$sql = 'SELECT *\n"
+        "use Probe\\Iface\\Api;\n"
+        "FROM users';\n"
+        "$tpl = \"header\n"
+        "use Probe\\Iface\\Dao;\n"
+        "footer\";\n"
+        "$r = `cmd\n"
+        "use Probe\\Iface\\Util;\n"
+        "out`;\n"
+        "use Real\\Keep;\n"
+    )
+    out = s7_enforce_php._blank_noncode(src)
+    assert "SELECT" not in out and "FROM users" not in out  # 单引号跨行串体
+    assert "header" not in out and "footer" not in out  # 双引号跨行串体
+    assert "cmd" not in out and "out" not in out  # 反引号跨行串体
+    assert "Probe\\Iface" not in out  # 三型串内伪 use 全空白化
+    assert "use Real\\Keep;" in out  # 串后真 use 保留
+    assert out.count("\n") == src.count("\n")
+    assert s7_enforce_php._parse_namespace(out) == "Probe\\Core"
+    rows = s7_enforce_php._iter_uses(out)
+    assert rows == [("Real", 12)]  # 伪边消失，真 use 行 12
+
+
+def test_blank_multiline_string_no_fake_namespace():
+    """跨行串内伪 namespace 声明不解析为容器（修复前行截断泄漏）。"""
+    src = (
+        "<?php\n"
+        "$doc = 'Example:\n"
+        "namespace Probe\\Fake;\n"
+        "end';\n"
+    )
+    out = s7_enforce_php._blank_noncode(src)
+    assert s7_enforce_php._parse_namespace(out) is None
+
+
+def test_blank_unclosed_quote_eof_conservative():
+    """未闭合引号（病态）→ EOF 保守空白化（残余不当代码扫描——同 heredoc）。"""
+    src = "<?php\n$bad = 'unclosed\nuse Real\\Lost;\n"
+    out = s7_enforce_php._blank_noncode(src)
+    assert "use Real\\Lost;" not in out
+    assert s7_enforce_php._iter_uses(out) == []
+    src = '<?php\n$bad = "unclosed\nuse Real\\Lost;\n'
+    out = s7_enforce_php._blank_noncode(src)
+    assert s7_enforce_php._iter_uses(out) == []
+    src = "<?php\n$bad = `unclosed\nuse Real\\Lost;\n"
+    out = s7_enforce_php._blank_noncode(src)
+    assert s7_enforce_php._iter_uses(out) == []
+    assert out.count("\n") == src.count("\n")
+
+
+def test_blank_bom_immune():
+    """文件首 BOM 免疫：岛模型（BOM 在岛外 HTML 区空白化，`<?php` 开岛不受污染）。"""
+    src = "\ufeff<?php\nnamespace Probe\\Core;\nuse Probe\\Iface\\Api;\n"
+    out = s7_enforce_php._blank_noncode(src)
+    assert s7_enforce_php._parse_namespace(out) == "Probe\\Core"
+    assert s7_enforce_php._iter_uses(out) == [("Probe\\Iface", 3)]

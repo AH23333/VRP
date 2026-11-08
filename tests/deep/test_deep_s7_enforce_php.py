@@ -249,3 +249,39 @@ def test_enforce_php_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_php_e2e_review_batch_regressions(tmp_path):
+    """review 批跨行串修正 E2E：多行引号串内伪 use/伪 namespace 不产伪边/伪容器。
+
+    修复前行截断：Store.php 多行串内 `use Deep\\Iface\\Fake;` 泄漏为伪边
+    （Fake 伪容器入图多一个叶）；修复后仅真 use 违例 1 条，锚真 use 行 8。
+    """
+    repo = _mk_repo(tmp_path)
+    (repo / "src" / "Store.php").write_text(
+        "<?php\n\n"
+        "namespace Deep\\Core;\n\n"
+        "$sql = 'SELECT *\n"
+        "use Deep\\Iface\\Fake;\n"
+        "FROM users';\n"
+        "use Deep\\Iface\\Api;\n\n"
+        "final class Store\n"
+        "{\n"
+        "    public function __construct(private Api $api) {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    assert out["namespaces"] == 2  # Deep\Core + Deep\Iface（Fake 伪容器不入图）
+    rows = _rows(repo)
+    assert len(rows) == 1
+    data = json.loads(rows[0][6])
+    assert data["chain"] == ["Deep\\Core", "Deep\\Iface"]
+    assert data["line"] == 8  # 真 use 行 8（多行串占行 5-7，非行 6 伪 use）
+    assert rows[0][4] == "src/Store.php" and rows[0][5] == 8
