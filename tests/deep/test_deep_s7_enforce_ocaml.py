@@ -2,8 +2,8 @@
 
 引擎内置解析器无外部工具链：deep 层覆盖真实源布局——编译单元文件容器、
 词法 canary（嵌套注释/注释内串含 *)/字符串/quoted string/字符字面量/类型
-变量/跨行串内伪 open）、test/ 目录测试排除、传递链；真仓 dogfood 另见
-work/ocaml-enforce-probe。
+变量/跨行串内伪 open）、test/ 目录测试排除、传递链、functor 应用实参产
+边；真仓 dogfood 另见 work/ocaml-enforce-probe。
 """
 
 import json
@@ -183,6 +183,31 @@ def test_enforce_ocaml_e2e_transitive_and_test_file_excluded(tmp_path):
     # 锚定：queuey/storage→logging 锚 queuey.ml:10（链尾直接边）；storage→queuey 锚 storage.ml:1
     anchored = {(r[4], r[5]) for r in rows}
     assert anchored == {("src/queuey.ml", 10), ("src/storage.ml", 1)}
+
+
+def test_enforce_ocaml_e2e_functor_arg_edge(tmp_path):
+    """functor 应用实参产边（`module Impl = Make(Logging)` 锚实参行）；
+    串内伪 open/类型变量 canary 不复活。"""
+    repo = _mk_repo(tmp_path)
+    (repo / "src" / "queuey.ml").write_text(
+        'let s = "text (open Logging) more"\n'   # 1 串内伪 open canary
+        "module Impl = Make(Logging)\n"          # 2 functor 实参真违例
+        "let f (x : 'a) = x\n",                  # 3 类型变量 canary
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    assert rows[0][5] == 2  # 锚定 functor 实参行（canary 不漂移）
+    data = json.loads(rows[0][6])
+    assert data["chain"] == ["src/queuey.ml", "src/logging.ml"]
+    assert data["line"] == 2
 
 
 def test_enforce_ocaml_e2e_idempotent_rerun(tmp_path):

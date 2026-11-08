@@ -208,18 +208,45 @@ def test_extract_ref_paths_and_constructors():
 
 
 def test_extract_guards_and_non_modules():
-    """struct/functor/module type/署名别名不误取；成员 `.open` 与 `open_` 标识符守卫。"""
+    """struct/functor/module type/内联署名不误取；成员 `.open` 与 `open_` 标识符守卫。"""
     src = (
         "module Sub = struct end\n"  # RHS 非大写路径
         "module type T = sig end\n"  # 模块类型≠编译单元
-        "module F (A : T) = A\n"     # functor
-        "module M : S = Dep\n"       # 署名别名不提取（文档化局限）
+        "module F (A : T) = A\n"     # functor 定义
+        "module M : sig end = Dep\n"  # 内联署名不提取（文档化局限）
         "c.open Foo\n"               # 成员访问守卫
         "open_Foo.close\n"           # open_ 标识符守卫
         "a.reopen b\n"               # reopen 前缀标识符守卫
     )
     rows = _extract(src)
     assert rows == []
+
+
+def test_extract_functor_application_args():
+    """functor 应用实参（别名/include RHS 后上下文限定）；具名/括号署名提取；跨行保守。"""
+    src = (
+        "module M = F(X)\n"        # 1 → alias F + ref X
+        "module N = F (X)(Y)\n"    # 2 → alias F + ref X + ref Y
+        "include G(Z)\n"           # 3 → include G + ref Z
+        "module P = H(A.B)\n"      # 4 → alias H + ref A.B（ref 正则另产 ref A——图级去重）
+        "module Q = I(J(K))\n"     # 5 → alias I + ref J + ref K（嵌套逐头）
+        "module R : S = Dep\n"     # 6 → 具名署名提取
+        "module T = (U : S)\n"     # 7 → 括号署名提取
+        "let c = Some (Foo)\n"     # 8 → 构造器应用上下文不提
+        "module W = F\n(X)\n"      # 9-10 → 跨行实参保守不入图
+    )
+    rows = _extract(src)
+    assert [(r["target"], r["line"]) for r in rows if r["kind"] == "alias"] == [
+        ("F", 1), ("F", 2), ("H", 4), ("I", 5), ("Dep", 6), ("U", 7), ("F", 9),
+    ]
+    assert [(r["target"], r["line"]) for r in rows if r["kind"] == "include"] == [("G", 3)]
+    refs = [(r["target"], r["line"]) for r in rows if r["kind"] == "ref"]
+    assert ("X", 1) in refs and ("X", 2) in refs and ("Y", 2) in refs  # functor 实参
+    assert ("Z", 3) in refs  # include 实参
+    assert ("A.B", 4) in refs and ("A", 4) in refs  # 实参路径 + ref 正则回溯（图级去重）
+    assert ("J", 5) in refs and ("K", 5) in refs  # 嵌套应用逐头
+    assert ("X", 10) not in refs  # 跨行实参保守不入图
+    assert not any(r["target"] == "Foo" for r in rows)  # 构造器应用不误触
 
 
 def test_is_test_conventions():
@@ -425,6 +452,28 @@ def test_run_ocaml_transitive_e2e(tmp_path):
     assert by_importer["src/storage.ml"]["chain"] == ["src/storage.ml", "src/queuey.ml", "src/logging.ml"]
     assert by_importer["src/storage.ml"]["line"] == 1  # 锚定链尾直接边：queuey.ml open 行
     assert all(r[0] == "src/queuey.ml" for r in rows)
+
+
+def test_run_ocaml_functor_arg_violation_e2e(tmp_path):
+    """functor 应用实参产边：`module Impl = Make(Logging)` 依赖 Logging。"""
+    repo = _mk_ocaml_repo(tmp_path)
+    (repo / "src" / "queuey.ml").write_text(
+        "module Impl = Make(Logging)\n", encoding="utf-8"
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_ocaml.run_ocaml(repo, con, json.loads(OCAML_STRUCTURE), "active", OCAML_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    payload = json.loads(
+        sqlite3.connect(repo / ".vrp" / "facts.db")
+        .execute("SELECT payload_json FROM findings")
+        .fetchone()[0]
+    )
+    assert payload["chain"] == ["src/queuey.ml", "src/logging.ml"]
+    assert payload["line"] == 1  # 锚定 functor 实参行
 
 
 def test_run_ocaml_idempotent(tmp_path):

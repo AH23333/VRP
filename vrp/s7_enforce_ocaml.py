@@ -30,7 +30,12 @@
   * `open [!]Mod`/`let open [!]Mod in`/`include Mod`（前一字符标识符
     尾/`.`/`'` 拒绝——`x.open`/`A.open` 成员不误触）；
   * `module M = Mod` 模块别名 RHS（`module type`/`struct`/`functor`
-    不误取——模块类型≠编译单元不产边）；
+    不误取——模块类型≠编译单元不产边）；具名署名 `module M : S = Mod`
+    与括号署名 `module M = (Mod : S)`/`module M = (Mod)` 均提取；
+  * functor 应用实参：`module M = F(X)(Y)`/`include F(X)` 实参路径
+    （别名/include RHS 后上下文限定扫描——构造器应用 `Some (x)` 与
+    functor 应用词法不可分，仅此两上下文提取；嵌套 `F(G(X))` 逐头提
+    取）；
   * `Mod.` 大写路径访问（`M.x` 值引用/`M.(expr)` 局部 open/`M.{...}`
     记录/`M.Bar.baz` 子模块路径——路径头解析，路径尾段不重复提取）；
   * 构造器误触天然免疫：构造器应用 `Some x`/`Ok 1` 无点不匹配；外部
@@ -47,7 +52,10 @@
   * `#load`/`#use` toplevel 指令（脚本形态）不入图
   * `(module M)` 一等模块打包/解包形态不入图（`let module M = F in`
     经别名正则捕获——前一字符为空格放行）
-  * `module M : S = F` 署名别名不提取（罕见形态）
+  * `module M : sig ... end = F` 内联署名形态不提取（嵌套 sig/end 不
+    可配平——具名/括号署名形态已提取）
+  * functor 应用实参局限形态：跨行实参（`F` 换行后 `(X)`）、
+    `F((X : S))`、`F(struct ... end)` 不入图（保守）
   * 局部子模块遮蔽编译单元名（`module Sub = struct ... end` 后 `Sub.x`
     恰撞仓内 sub.ml）误入图（罕见，保守方向）
   * CBM .mli 符号（若索引）容器独立——同词干 .ml 边不归属
@@ -253,35 +261,60 @@ def _blank_noncode(text: str) -> str:
 _OPEN_RE = re.compile(r"(?<![\w.'])open!?\s+([A-Z][A-Za-z0-9_'.]*)")
 _INCLUDE_RE = re.compile(r"(?<![\w.'])include\s+([A-Z][A-Za-z0-9_'.]*)")
 _MODULE_ALIAS_RE = re.compile(
-    r"(?<![\w.'])(module\s+(?:rec\s+)?[A-Z][A-Za-z0-9_']*\s*)=\s*([A-Z][A-Za-z0-9_'.]*)"
+    r"(?<![\w.'])(module\s+(?:rec\s+)?[A-Z][A-Za-z0-9_']*\s*(?::\s*[A-Z][A-Za-z0-9_'.]*\s*)?)"
+    r"=\s*\(?\s*([A-Z][A-Za-z0-9_'.]*)"
 )
 _MODULE_REF_RE = re.compile(
     r"\b([A-Z][A-Za-z0-9_']*)(?:\.[A-Z][A-Za-z0-9_']*)*\."
 )
+_ARG_SKIP_RE = re.compile(r"[ \t)]*")
+_FUNCTOR_ARG_RE = re.compile(r"\([ \t]*([A-Z][A-Za-z0-9_'.]*)")
+
+
+def _ref_row(kind: str, target: str, blanked: str, start: int) -> dict:
+    return {
+        "kind": kind,
+        "target": target,
+        "line": blanked.count("\n", 0, start) + 1,
+    }
+
+
+def _functor_args(blanked: str, pos: int) -> list[dict]:
+    """functor 应用实参（`F(X)(Y)`/嵌套 `F(G(X))` 逐头提取）。
+
+    仅别名/include RHS 后调用——构造器应用与 functor 应用词法不可分，
+    上下文限定防 `Some (x)` 误触；连接段 `[ \\t)]*` 不含换行——跨行
+    应用形态保守不入图。
+    """
+    rows: list[dict] = []
+    while True:
+        pos = _ARG_SKIP_RE.match(blanked, pos).end()
+        m = _FUNCTOR_ARG_RE.match(blanked, pos)
+        if m is None:
+            return rows
+        rows.append(_ref_row("ref", m.group(1), blanked, m.start()))
+        pos = m.end()
 
 
 def _iter_refs(blanked: str) -> list[dict]:
     """open/include/模块别名/大写路径访问 → [{kind, target, line}]。
 
     open 含 `open!` 与 `let open ... in`（前一字符守卫放行空格）；
-    别名 RHS 取大写路径头（struct/functor/module type 不误取）；
-    大写路径访问取路径头（尾段是子模块/值——不重复提取）。
+    别名 RHS 取大写路径头（struct/functor/module type 不误取；具名/
+    括号署名形态提取）；别名/include RHS 后 functor 应用实参逐头提
+    取；大写路径访问取路径头（尾段是子模块/值——不重复提取）。
     """
     rows: list[dict] = []
-    for kind, regex, group in (
-        ("open", _OPEN_RE, 1),
-        ("include", _INCLUDE_RE, 1),
-        ("alias", _MODULE_ALIAS_RE, 2),
-        ("ref", _MODULE_REF_RE, 1),
-    ):
-        for m in regex.finditer(blanked):
-            rows.append(
-                {
-                    "kind": kind,
-                    "target": m.group(group),
-                    "line": blanked.count("\n", 0, m.start()) + 1,
-                }
-            )
+    for m in _OPEN_RE.finditer(blanked):
+        rows.append(_ref_row("open", m.group(1), blanked, m.start()))
+    for m in _INCLUDE_RE.finditer(blanked):
+        rows.append(_ref_row("include", m.group(1), blanked, m.start()))
+        rows.extend(_functor_args(blanked, m.end(1)))
+    for m in _MODULE_ALIAS_RE.finditer(blanked):
+        rows.append(_ref_row("alias", m.group(2), blanked, m.start()))
+        rows.extend(_functor_args(blanked, m.end(2)))
+    for m in _MODULE_REF_RE.finditer(blanked):
+        rows.append(_ref_row("ref", m.group(1), blanked, m.start()))
     return rows
 
 
