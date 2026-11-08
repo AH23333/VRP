@@ -24,9 +24,12 @@
     与宏模块天然不匹配（模块侧小写原子正则）。
 - 依赖边提取：远程调用 `mod:fun`（裸/带引号原子:原子；fun 侧后随 `(` 或
   `/`（`/arity`）才认定——map `:=`/typespec `::`/指令 `:-` 不误触；含
-  `fun mod:fun/2` 引用与 typespec `mod:type()` 引用）；`-behaviour(mod).`/
+  `fun mod:fun/2` 引用与 typespec `mod:type()` 引用；**多行形态**——
+  `mod\n:f(`/`mod:\nf(`/`mod:f\n(` 的 `:`/fun/`(` 间空白类含换行（长
+  实参列表换行是合法 Erlang），行号=模块原子行）；`-behaviour(mod).`/
   `-behavior(mod).` 行为模块依赖；`-import(mod, [...]).` 编译期导入（后续
-  裸调用不可逐点归属，指令本身记一条依赖边）；自模块/外部模块（OTP、deps
+  裸调用不可逐点归属，指令本身记一条依赖边）；指令实参可跨行
+  （`-behaviour(\n  gen_server)`）；自模块/外部模块（OTP、deps
   ——索引未命中）跳过。
 - 解析：模块名 → 仓内 <name>.erl 索引精确命中（OTP 扁平命名空间全仓统一）；
   未命中（gen_server/lists 等外部）跳过。
@@ -38,7 +41,11 @@
   锚定 = 链尾直接调用边所在文件+行号（同模块多文件满足同一边时取
   (file,line) 字典序首）。
 - 诚实局限（文档化不静默）：
-  * 无 -module 声明文件不入图不参与执法（orphan 计数）
+  * 无 -module 声明文件不入图不参与执法（orphan 计数；其远程调用行
+    建图时丢弃）
+  * 宏定义模块名调用点形态（`-define(M, mod).` + `?M:f()`）不入图
+    （调用点 `?` 前缀守卫拒绝——静态宏展开超范围；宏体内完整调用
+    `mod:fun(` 已按普通代码提取）
   * `-include("x.hrl")`/`-include_lib(...)` 头文件不入图（.hrl 无模块容器）
   * `apply(mod, fun, args)` 字面原子形态不提取（动态调用形态）
   * `-compile([{parse_transform, mod}])` 编译变换不提取（罕见形态）
@@ -75,15 +82,15 @@ _MODULE_RE = re.compile(
 _REMOTE_RE = re.compile(
     r"(?<![A-Za-z0-9_@'?$])"
     r"(?:'([^'\n\\]*)'|([a-z][A-Za-z0-9_@]*))"
-    r"[ \t]*:[ \t]*"
+    r"[ \t\r\n]*:[ \t\r\n]*"
     r"(?:'([^'\n\\]*)'|([A-Za-z0-9_@]*))"
-    r"[ \t]*[(/]"
+    r"[ \t\r\n]*[(/]"
 )
 _BEHAVIOUR_RE = re.compile(
-    r"^[ \t]*-behaviou?r[ \t]*\([ \t]*(?:'([^'\n\\]*)'|([a-z][A-Za-z0-9_@]*))", re.M
+    r"^[ \t]*-behaviou?r[ \t]*\([ \t\r\n]*(?:'([^'\n\\]*)'|([a-z][A-Za-z0-9_@]*))", re.M
 )
 _IMPORT_DIRECTIVE_RE = re.compile(
-    r"^[ \t]*-import[ \t]*\([ \t]*(?:'([^'\n\\]*)'|([a-z][A-Za-z0-9_@]*))", re.M
+    r"^[ \t]*-import[ \t]*\([ \t\r\n]*(?:'([^'\n\\]*)'|([a-z][A-Za-z0-9_@]*))", re.M
 )
 
 
@@ -270,13 +277,16 @@ def build_erlang_graph(
     """模块依赖图（键 = 全部声明模块——叶模块无出边也入图，漏叶会假阴）+ 边明细。
 
     目标 → 模块索引精确命中（OTP 扁平命名空间）；外部（OTP/deps，索引未
-    命中）与自模块跳过。
+    命中）与自模块跳过；orphan 文件（无 -module 声明）的引用行跳过——
+    不入图不参与执法（诚实计数在 derive 侧）。
     """
     modules = set(file_mod.values())
     graph: dict[str, set[str]] = {m: set() for m in modules}
     edges: list[dict] = []
     for row in ref_rows:
         src = file_mod.get(row["file"])
+        if src is None:
+            continue  # orphan 文件（无 -module 声明）的引用行——不入图不参与执法
         dst = row["target"] if row["target"] in modules else None
         if dst is None or dst == src:
             continue

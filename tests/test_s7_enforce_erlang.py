@@ -227,6 +227,42 @@ def test_build_erlang_graph_self_external_leaf():
     assert edges == [{"file": "src/app.erl", "line": 3, "src": "app", "dst": "leaf"}]
 
 
+def test_build_erlang_graph_orphan_refs_skipped():
+    """orphan 文件（无 -module）的引用行建图时丢弃——不 KeyError 不入图。"""
+    file_mod = {"src/app.erl": "app", "src/leaf.erl": "leaf"}
+    ref_rows = [
+        {"file": "src/orphan.erl", "line": 1, "target": "leaf"},  # orphan 引用
+        {"file": "src/app.erl", "line": 2, "target": "leaf"},
+    ]
+    graph, edges = s7_enforce_erlang.build_erlang_graph(file_mod, ref_rows)
+    assert graph == {"app": ["leaf"], "leaf": []}
+    assert edges == [{"file": "src/app.erl", "line": 2, "src": "app", "dst": "leaf"}]
+
+
+def test_iter_module_refs_multiline_forms():
+    """多行远程调用/指令实参跨行——`:`/fun/`(` 间空白类含换行（长实参
+    换行合法 Erlang）；行号=模块原子行；无 `(` `/` 后随的裸原子跨行不误触。"""
+    src = (
+        "A = mymod\n  :real(x),\n"  # 1-2 冒号跨行
+        "B = mymod:\n  ref(x),\n"  # 3-4 fun 跨行
+        "C = mymod:ref\n  (x),\n"  # 5-6 括号跨行
+        "-behaviour(\n  gen_server).\n"  # 7-8 指令实参跨行
+        "-import(\n  proplists, [get_value/2]).\n"  # 9-10
+        "D = bare,\n{mod, fun} = m:f(),\n"  # 11-12 裸原子行尾+逗号——不误触
+        "ok.\n"
+    )
+    blanked = s7_enforce_erlang._blank_noncode(src)
+    rows = s7_enforce_erlang._iter_module_refs(blanked)
+    assert rows == [  # _iter_module_refs 按 regex 分组：远程调用在前、behaviour/import 在后
+        {"target": "mymod", "line": 1},
+        {"target": "mymod", "line": 3},
+        {"target": "mymod", "line": 5},
+        {"target": "m", "line": 12},
+        {"target": "gen_server", "line": 7},
+        {"target": "proplists", "line": 9},
+    ]
+
+
 def test_belongs_exact_match():
     assert s7_enforce_erlang._belongs("queue", ["queue"])
     assert not s7_enforce_erlang._belongs("queue2", ["queue"])  # 前缀污染守卫
@@ -322,6 +358,24 @@ def test_run_erlang_violation_e2e(tmp_path):
     assert payload["imported"] == "logging"
     assert payload["chain"] == ["queue", "logging"]
     assert payload["line"] == 3
+
+
+def test_run_erlang_orphan_refs_no_crash_e2e(tmp_path):
+    """orphan 文件（无 -module）远程调用目标为声明模块——不崩溃（此前
+    build_erlang_graph KeyError: None），引用行丢弃、违例不变。"""
+    repo = _mk_erlang_repo(tmp_path)
+    (repo / "orphan.erl").write_text(
+        "helper() -> logging:log_msg(x).\n", encoding="utf-8"
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_erlang.run_erlang(repo, con, json.loads(ERLANG_STRUCTURE), "active", ERLANG_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["files"] == 3  # orphan.erl 计入 files_scanned
+    assert out["modules"] == 2  # orphan 无 -module 不入图
+    assert out["violations"] == 1  # orphan 引用行丢弃——违例不增不减
 
 
 def test_run_erlang_transitive_e2e(tmp_path):

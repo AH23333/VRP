@@ -219,6 +219,50 @@ def test_enforce_erlang_e2e_fix_clears_findings(tmp_path):
     assert _rows(repo) == []  # 合规重跑清掉旧违例
 
 
+def test_enforce_erlang_e2e_orphan_and_multiline_edge(tmp_path):
+    """orphan 文件远程调用声明模块不崩溃（此前 build_erlang_graph KeyError:
+    None）+ 多行远程调用违例（长实参换行合法 Erlang）——注释/串 canary
+    包裹，锚定=模块原子行。"""
+    repo = _mk_repo(tmp_path)
+    # 违例调用改多行形态（保留注释/串 canary）
+    (repo / "queue" / "queue.erl").write_text(
+        "% logging:log_msg(x).\n"  # 1 注释 canary
+        "-module(queue).\n"  # 2
+        "-export([run/0]).\n"  # 3
+        'B = "logging:log_msg(y)",\n'  # 4 串 canary
+        "run() ->\n"  # 5
+        "    logging:\n"  # 6 多行远程调用——模块原子行锚定
+        "        log_msg(x),\n"  # 7
+        "    ok.\n",  # 8
+        encoding="utf-8",
+    )
+    # orphan：无 -module 但远程调用已声明模块 logging（非测试文件）
+    (repo / "orphan.erl").write_text(
+        "helper() -> logging:log_msg(x).\n", encoding="utf-8"
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["files"] == 4  # + orphan.erl
+    assert out["modules"] == 3  # orphan 无 -module 不入图
+    assert out["tests_excluded"] == 1
+    assert out["violations"] == 1
+    assert out["anchored"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    pathology, kind, source, anchor, file_path, line, payload = rows[0]
+    assert (pathology, kind, source) == ("P9", "layer-violation", "s7-enforce")
+    assert anchor == "g1"
+    assert file_path == "queue/queue.erl"
+    assert line == 6  # 模块原子行（非 fun 行 7）
+    data = json.loads(payload)
+    assert data["chain"] == ["queue", "logging"]
+    assert data["line"] == 6
+
+
 def test_enforce_erlang_e2e_compliant_repo_clean(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / "queue" / "queue.erl").write_text(
