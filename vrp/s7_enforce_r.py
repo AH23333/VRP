@@ -23,7 +23,8 @@
   * `source`/`library`/`require`/`loadNamespace`/`requireNamespace`
     关键字后 `(`+可选命名实参 `file=`/`package=`+字符串实参**原文保留**
     （同 C include 目标区保留哲学——实参是字符串语法不能随字符串空白
-    化；非字符串实参（变量）正常空白化→动态调用不入图；`$`/`@` 前缀
+    化；实参可跨行（空白类含换行），关键字与 `(` 须同行——R 语句边界
+    语义；非字符串实参（变量）正常空白化→动态调用不入图；`$`/`@` 前缀
     方法/槽访问拒绝，`::` 前缀放行——`base::source()` 语义仍是载入）。
 - 依赖边提取（空白化文本）：
   * `source("path.R")`/`source(file=...)`：字符串实参解析——当前文件
@@ -35,6 +36,11 @@
     索引命中 → 包目录容器；外部（CRAN/core，索引未命中）跳过；裸词
     变量实参按包名近似（library(var) 动态形态——保守方向，命中本地包
     才产边，实际风险极低）；
+  * DESCRIPTION `Imports:`/`Depends:` 字段（DCF 续行合并；版本规格
+    `pkg (>= x)` 剥离；`R` 自身跳过）：声明即依赖——R 包内代码不调
+    library()，包间依赖的权威声明在 DESCRIPTION；锚定 DESCRIPTION
+    字段行（无符号）；`Suggests:`/`LinkingTo:` 不产边（测试软依赖/
+    编译链接）；
   * 自容器（同包/同散文件）跳过。
 - 测试排除（R 约定式保守排除）：路径含 test/tests/testthat **目录段**
   （精确小写——testthat 标准布局 tests/testthat），或文件名 `test-*.R`
@@ -44,8 +50,11 @@
   锚定 = 链尾直接依赖边所在文件+行号（同容器多文件满足同一边时取
   (file,line) 字典序首）。
 - 诚实局限（文档化不静默）：
-  * NAMESPACE `import()`/`importFrom()` 声明不解析（非 .R 文件无容器；
-    实际使用侧 library()/`::` 覆盖运行时依赖）
+  * NAMESPACE `import()`/`importFrom()` 声明不解析（包级依赖经
+    DESCRIPTION `Imports:`/`Depends:` 字段入图；importFrom 裸函数使用
+    侧无 `::` 不产使用侧行号——边锚 DESCRIPTION 字段行）
+  * `sys.source()`/`eval(parse(...))` 动态载入形态不入图（sys.source
+    罕用；eval 动态求值不可静态解析）
   * `source()` 变量/拼接实参不入图（动态形态）
   * `library(var)` 变量实参按变量名近似包名（命中本地包才产边）
   * `source()` 反斜杠 Windows 路径形态不入图（R 惯例正斜杠）
@@ -79,18 +88,19 @@ TEST_SEGMENTS = ("test", "tests", "testthat")
 _KEYWORDS = ("source", "library", "require", "loadNamespace", "requireNamespace")
 
 _SOURCE_RE = re.compile(
-    r"(?<![A-Za-z0-9._$])source[ \t]*\([ \t]*(?:file[ \t]*=[ \t]*)?"
+    r"(?<![A-Za-z0-9._$])source[ \t]*\([ \t\r\n]*(?:file[ \t\r\n]*=[ \t\r\n]*)?"
     r"(?:\"([^\"]+)\"|'([^']+)'"
     r")"
 )
 _LIB_RE = re.compile(
     r"(?<![A-Za-z0-9._$])"
     r"(?:library|require|loadNamespace|requireNamespace)"
-    r"[ \t]*\([ \t]*(?:package[ \t]*=[ \t]*)?"
+    r"[ \t]*\([ \t\r\n]*(?:package[ \t\r\n]*=[ \t\r\n]*)?"
     r"(?:\"([^\"]+)\"|'([^']+)'|([A-Za-z.][A-Za-z0-9._]*))"
 )
 _NS_RE = re.compile(r"(?<![A-Za-z0-9._$])([A-Za-z.][A-Za-z0-9._]*)[ \t]*:{2,3}")
 _DESC_RE = re.compile(r"^Package:[ \t]*(\S+)", re.M)
+_DCF_FIELD_RE = re.compile(r"^(Imports|Depends):[ \t]*(.*)$")
 
 
 # ------------------------------------------------------------------ 词法底座
@@ -284,6 +294,35 @@ def _abs_like(target: str) -> bool:
     )
 
 
+def _desc_imports(text: str) -> list[dict]:
+    """DESCRIPTION `Imports:`/`Depends:` 字段 → [{kind, target, line}]。
+
+    DCF 续行（缩进行）合并；版本规格 `pkg (>= x)` 剥离；`R` 自身跳过；
+    锚定字段起始行。声明即依赖——R 包内代码不调 library()，包间依赖的
+    权威声明在 DESCRIPTION（NAMESPACE 亦由 R 包构建器从其生成）。
+    """
+    rows: list[dict] = []
+    lines = text.splitlines()
+    i = 0
+    n = len(lines)
+    while i < n:
+        m = _DCF_FIELD_RE.match(lines[i])
+        if m is None:
+            i += 1
+            continue
+        val = m.group(2)
+        line_no = i + 1
+        i += 1
+        while i < n and lines[i][:1] in (" ", "\t"):
+            val += " " + lines[i].strip()
+            i += 1
+        for part in val.split(","):
+            name = re.sub(r"[ \t]*\(.*\)[ \t]*$", "", part.strip()).strip()
+            if name and name != "R":
+                rows.append({"kind": "package", "target": name, "line": line_no})
+    return rows
+
+
 # ------------------------------------------------------------------ 扫描
 
 
@@ -319,9 +358,12 @@ def scan_r(
                 if time.monotonic() > deadline:
                     return file_set, ref_rows, package_dirs, files_scanned, tests_excluded, True
                 rel = (rel_dir + "/" + name) if rel_dir else name
-                m = _DESC_RE.search(_read(repo, rel))
+                raw = _read(repo, rel)
+                m = _DESC_RE.search(raw)
                 if m and m.group(1) not in package_dirs.values():
                     package_dirs[rel_dir or "."] = m.group(1)
+                    for prow in _desc_imports(raw):
+                        ref_rows.append({"file": rel, **prow})
                 continue
             if not name.lower().endswith(R_SUFFIXES):
                 continue
@@ -360,7 +402,12 @@ def build_r_graph(
     for row in ref_rows:
         src = container_of.get(row["file"])
         if src is None:
-            continue
+            # DESCRIPTION Imports:/Depends: 声明行（非 .R 文件）——归属其
+            # 包目录；无 .R 文件的包非图节点（无代码即无契约链）跳过。
+            d = posixpath.dirname(row["file"]) or "."
+            if not row["file"].endswith("DESCRIPTION") or d not in containers:
+                continue
+            src = d
         dst: str | None = None
         if row["kind"] == "source":
             target = row["target"]

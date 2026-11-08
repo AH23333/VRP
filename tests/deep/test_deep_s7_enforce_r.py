@@ -213,6 +213,49 @@ def test_enforce_r_e2e_fix_clears_findings(tmp_path):
     assert _rows(repo) == []  # 合规重跑清掉旧违例
 
 
+def test_enforce_r_e2e_desc_imports_and_multiline_edge(tmp_path):
+    """声明边+使用边并存：DESCRIPTION Imports 与跨行 library 实参双证据——
+    锚定取 (file,line) 字典序首（DESCRIPTION 先于 R/），声明边胜出且无符号
+    锚；注释内跨行伪调用 canary 不产边。"""
+    repo = _mk_repo(tmp_path)
+    (repo / "queue" / "DESCRIPTION").write_text(
+        "Package: queue\n"
+        "Imports:\n"  # 字段行 2（值在续行——锚字段起始行）
+        "    logging (>= 1.0),\n"
+        "    utils\n"  # 外部包不产边
+        "Suggests: testthat\n",  # 软依赖不产边
+        encoding="utf-8",
+    )
+    (repo / "queue" / "R" / "queue.R").write_text(
+        "# library(\n"
+        "#   \"logging\")\n"  # 注释内跨行伪调用 canary（1-2）
+        'x <- "library(logging)"\n'  # 串内 canary（3）
+        "library(\n"
+        '  "logging"\n'
+        ")\n"  # 跨行真调用（4-6）——使用侧边 line 4
+        "run <- function() 1\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1  # 声明边+使用边同 (queue, logging)——dedup 单违例
+    assert out["anchored"] == 0  # DESCRIPTION 边字典序首胜出——无符号锚
+    rows = _rows(repo)
+    assert len(rows) == 1
+    pathology, kind, source, anchor, file_path, line, payload = rows[0]
+    assert (pathology, kind, source) == ("P9", "layer-violation", "s7-enforce")
+    assert anchor is None
+    assert file_path == "queue/DESCRIPTION"  # "D" < "R" 字典序
+    assert line == 2  # Imports: 字段行
+    data = json.loads(payload)
+    assert data["chain"] == ["queue", "logging"]
+    assert data["line"] == 2
+
+
 def test_enforce_r_e2e_compliant_repo_clean(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / "queue" / "R" / "queue.R").write_text(

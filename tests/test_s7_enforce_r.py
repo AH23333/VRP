@@ -136,8 +136,30 @@ def test_preserved_library_string_and_named():
     assert 'library("logging")' in blanked
     assert 'requireNamespace(package = "queue")' in blanked
     rows = s7_enforce_r._iter_refs(blanked)
-    assert {"kind": "package", "target": "logging", "line": 1} in rows
-    assert {"kind": "package", "target": "queue", "line": 2} in rows
+    assert rows == [
+        {"kind": "package", "target": "logging", "line": 1},
+        {"kind": "package", "target": "queue", "line": 2},
+        {"kind": "package", "target": "core", "line": 3},  # 跨行实参提取（此前漏提）
+    ]
+
+
+def test_iter_refs_multiline_call_args():
+    """跨行实参提取（空白类含换行）；关键字与 ( 须同行——R 语句边界不误触。"""
+    src = (
+        'library(\n  "dplyr")\n'  # 1-2 跨行串实参
+        "source(\n  'R/a.R')\n"  # 3-4
+        'source(file =\n  "R/b.R")\n'  # 5-6 命名实参跨行
+        'requireNamespace(\n  package = "ns"\n)\n'  # 7-9
+        'source\n("R/c.R")\n'  # 10-11 关键字-括号跨行=语句边界，不误触
+    )
+    blanked = s7_enforce_r._blank_noncode(src)
+    rows = s7_enforce_r._iter_refs(blanked)
+    assert rows == [  # _iter_refs 按 regex 分组：source 组在前
+        {"kind": "source", "target": "R/a.R", "line": 3},
+        {"kind": "source", "target": "R/b.R", "line": 5},
+        {"kind": "package", "target": "dplyr", "line": 1},
+        {"kind": "package", "target": "ns", "line": 7},
+    ]
 
 
 def test_preserved_dollar_and_backtick_rejected():
@@ -158,6 +180,18 @@ def test_preserved_base_qualified_source():
     assert rows == [  # :: 限定符按通用规则同时产出 package 引用（base 外部，建图时跳过）
         {"kind": "source", "target": "R/x.R", "line": 1},
         {"kind": "package", "target": "base", "line": 1},
+    ]
+
+
+def test_sys_source_not_extracted():
+    """sys.source 动态载入不入图（文档化局限）；base::source 仍提取。"""
+    src = 'sys.source("R/x.R")\nbase::source("R/y.R")\n'
+    blanked = s7_enforce_r._blank_noncode(src)
+    assert "R/x.R" not in blanked  # sys.source 串空白化（前缀守卫拒绝保留）
+    rows = s7_enforce_r._iter_refs(blanked)
+    assert rows == [
+        {"kind": "source", "target": "R/y.R", "line": 2},
+        {"kind": "package", "target": "base", "line": 2},
     ]
 
 
@@ -223,6 +257,37 @@ def test_owner_nearest_ancestor():
     assert s7_enforce_r._owner("pkg/R/y.R", package_dirs) == "pkg"
     assert s7_enforce_r._owner("loose.R", package_dirs) is None
     assert s7_enforce_r._owner("R/x.R", {".": "root"}) == "."  # 根包
+
+
+def test_desc_imports_matrix():
+    """DESCRIPTION Imports:/Depends: 解析：续行合并/版本规格剥离/R 跳过/
+    Suggests 不产边/锚定字段起始行。"""
+    text = (
+        "Package: mypkg\n"  # 1
+        "Version: 1.0\n"  # 2
+        "Imports: dplyr (>= 1.0.0),\n"  # 3
+        "    tidyr, R (>= 4.0)\n"  # 4 续行（DCF 缩进）
+        "Suggests: testthat\n"  # 5 测试软依赖不产边
+        "Depends: methods, utils\n"  # 6
+        "LinkingTo: Rcpp\n"  # 7 编译链接不产边
+    )
+    rows = s7_enforce_r._desc_imports(text)
+    assert rows == [
+        {"kind": "package", "target": "dplyr", "line": 3},
+        {"kind": "package", "target": "tidyr", "line": 3},
+        {"kind": "package", "target": "methods", "line": 6},
+        {"kind": "package", "target": "utils", "line": 6},
+    ]
+
+
+def test_desc_imports_empty_and_continuation_only():
+    """Imports: 值全在续行（字段行空值）——字段行号仍为锚。"""
+    text = "Package: p\nImports:\n    a,\n    b (>= 2.0)\n"
+    rows = s7_enforce_r._desc_imports(text)
+    assert rows == [
+        {"kind": "package", "target": "a", "line": 2},
+        {"kind": "package", "target": "b", "line": 2},
+    ]
 
 
 def test_scan_r_layout(tmp_path):
@@ -396,6 +461,39 @@ def test_run_r_violation_e2e(tmp_path):
     assert payload["imported"] == "logging"
     assert payload["chain"] == ["queue", "logging"]
     assert payload["line"] == 1
+
+
+def test_run_r_desc_imports_violation_e2e(tmp_path):
+    """包间依赖仅声明于 DESCRIPTION Imports:（无使用侧 library/::）——
+    声明即依赖执法；DESCRIPTION 无符号 → anchor 空、行号=字段行。"""
+    repo = _mk_r_repo(tmp_path)
+    # 移除使用侧调用——依赖仅存于 DESCRIPTION 声明
+    (repo / "queue" / "R" / "queue.R").write_text(
+        "run <- function() 1\n", encoding="utf-8"
+    )
+    (repo / "queue" / "DESCRIPTION").write_text(
+        "Package: queue\nImports:\n    logging (>= 1.0)\n", encoding="utf-8"
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_r.run_r(repo, con, json.loads(R_STRUCTURE), "active", R_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 0  # DESCRIPTION 无符号
+    row = sqlite3.connect(repo / ".vrp" / "facts.db").execute(
+        "SELECT anchor_fid, file_path, start_line, payload_json FROM findings"
+    ).fetchone()
+    assert row[0] is None
+    assert row[1] == "queue/DESCRIPTION"
+    assert row[2] == 2  # Imports: 字段行（值在续行——锚字段起始行）
+    payload = json.loads(row[3])
+    assert payload["importer"] == "queue"
+    assert payload["imported"] == "logging"
+    assert payload["chain"] == ["queue", "logging"]
+    assert payload["line"] == 2
 
 
 def test_run_r_transitive_e2e(tmp_path):
