@@ -18,11 +18,14 @@
   文件首 BOM（\ufeff）空白化——Windows 编辑器 BOM 头不污染行首 #import
   词法（bol 追踪）与 `^[ \t]*#` 匹配（BOM+行 1 import 假阴防御）。
 - #import/#include 提取：反斜杠续行合并为逻辑行（锚定取逻辑行首行号）；
-  尖括号框架/系统头不入图；@import Module; clang 模块语法不入图（系统
-  框架）；引号目标解析顺序近似编译器与 Xcode——源文件所在目录（clang
-  引号查找首查）→ 仓根 → 各含头文件目录（近似 -I 根；亦等价 Xcode
-  header map 同名头解析——header_dirs 覆盖全部含 .h 目录，无斜杠目标按
-  名匹配任一头文件）；绝对路径/盘符按系统头跳过。
+  指令记号间隙注释（`#import /* c */ "X.h"`——C/ObjC 预处理注释=空白
+  语义，review 批修正：间隙注释不再丢 import/include 边，注释空白化后
+  正则仍匹配，与 C 引擎同型）；尖括号框架/系统头不入图；@import Module;
+  clang 模块语法不入图（系统框架）；引号目标解析顺序近似编译器与
+  Xcode——源文件所在目录（clang 引号查找首查）→ 仓根 → 各含头文件目录
+  （近似 -I 根；亦等价 Xcode header map 同名头解析——header_dirs 覆盖
+  全部含 .h 目录，无斜杠目标按名匹配任一头文件）；绝对路径/盘符按系统
+  头跳过。
 - 测试排除（XCTest 约定式保守排除）：路径含 test/tests **目录段**（大小写
   不敏感——Apple Tests/ 大写惯例，异于 C 引擎精确小写），或文件名 test.m
   裸名、test_*.m、*_test.m/*_tests.m，或 XCTest 驼峰命名
@@ -155,14 +158,17 @@ def _raw_string_end(text: str, i: int) -> int:
     return j + len(closing)
 
 
-def _directive_end(text: str, i: int) -> int:
-    """行首 '#' 在 i → 引号 #import/#include 指令目标区结束位置；非引号指令 → -1。
+def _directive_end(text: str, i: int) -> tuple[int, list[tuple[int, int]]] | None:
+    """行首 '#' 在 i → (引号 #import/#include 指令目标区结束位置, 间隙注释区段)；非引号指令 → None。
 
-    允许记号间反斜杠续行；尖括号/畸形目标返回 -1（按普通文本词法，不入图）。
+    允许记号间反斜杠续行与注释（C/ObjC 预处理注释=空白语义——review 批
+    修正：间隙注释不再丢 import/include 边，注释区段回传调用方空白化后
+    正则仍匹配）；尖括号/畸形目标返回 None（按普通文本词法，不入图）。
     """
     n = len(text)
+    spans: list[tuple[int, int]] = []
 
-    def skip_ws(k: int) -> int:
+    def skip_gap(k: int) -> int:
         while k < n:
             c = text[k]
             if c in " \t":
@@ -171,23 +177,34 @@ def _directive_end(text: str, i: int) -> int:
                 k += 2
                 while k < n and text[k] in "\r\n":
                     k += 1
+            elif text.startswith("//", k):
+                e = k
+                while e < n and text[e] != "\n":
+                    e += 1
+                spans.append((k, e))
+                k = e
+            elif text.startswith("/*", k):
+                e = text.find("*/", k + 2)
+                e = n if e < 0 else e + 2
+                spans.append((k, e))
+                k = e
             else:
                 break
         return k
 
-    j = skip_ws(i + 1)
+    j = skip_gap(i + 1)
     if text.startswith("import", j):
-        j = skip_ws(j + len("import"))
+        j = skip_gap(j + len("import"))
     elif text.startswith("include", j):
-        j = skip_ws(j + len("include"))
+        j = skip_gap(j + len("include"))
     else:
-        return -1
+        return None
     if j < n and text[j] == '"':
         k = text.find('"', j + 1)
         if k < 0 or "\n" in text[j + 1 : k]:
-            return -1
-        return k + 1
-    return -1
+            return None
+        return k + 1, spans
+    return None
 
 
 def _blank_noncode(text: str) -> str:
@@ -211,8 +228,13 @@ def _blank_noncode(text: str) -> str:
             i += 1
             continue
         if bol and c == "#":
-            end = _directive_end(text, i)
-            if end > i:
+            res = _directive_end(text, i)
+            if res is not None:
+                end, spans = res
+                for s, e in spans:
+                    for k in range(s, min(e, n)):
+                        if out[k] != "\n":
+                            out[k] = " "
                 i = end
                 bol = False
                 continue

@@ -13,10 +13,14 @@
 - 词法：块注释**不可嵌套**（C/C++ 标准——首个星斜闭合，异于 Kotlin 深度
   计数）；字符串（反斜杠转义）；C++ raw string（R"delim(...)delim"，
   u8R/uR/UR/LR 前缀）；字符字面量（有界扫描防数字分隔符 1'000 误吞代码）。
-- #include 提取：反斜杠续行合并为逻辑行（锚定取逻辑行首行号）；尖括号
+- #include 提取：反斜杠续行合并为逻辑行（锚定取逻辑行首行号）；指令记号
+  间隙注释（`#include /* c */ "x.h"`——C 预处理注释=空白语义，review 批
+  修正：间隙注释不再丢 include 边，注释空白化后正则仍匹配）；尖括号
   <...> 系统头不入图；引号目标解析顺序近似编译器 -I 语义——源文件所在
   目录（C 标准引号查找首查）→ 仓根 → 各含头文件目录（近似 -I 根）；
   绝对路径/盘符按系统头跳过。
+- 文件首 BOM（\\ufeff）空白化（review 批修正，ObjC 同型）：Windows 编辑器
+  BOM 头不污染行首指令词法与 `^[ \\t]*#` 匹配（BOM+行 1 include 假阴防御）。
 - 测试排除（C 无语言级测试标记，约定式保守排除）：路径含 test/tests
   **目录段**，或文件名 test_*.c / *_test.c / *_tests.c（及 .cc/.cpp 等同
   族后缀，test.c/test.cc 裸名亦然）——排除文件的 include 不入图；其目录
@@ -31,6 +35,8 @@
     顺序取首命中，误配概率低但存在
   * 条件编译（#if 0 包裹的 include）不识别——按文本计（保守方向：可能
     多报，不静默漏报）
+  * 指令间隙跨行块注释（`#include /*\n*/ "x.h"`——合法 C 但注释跨行使
+    逻辑行断裂，病态无实践）不识别——单行间隙注释已修（review 批）
   * .inl/.inc/.pch/.ino 等非常规后缀不扫描
   * 构建/第三方目录（build/cmake-build-*/node_modules/target/vendor/
     隐藏目录）跳过（产物与 vendored 代码无架构语义）
@@ -141,14 +147,19 @@ def _raw_string_end(text: str, i: int) -> int:
     return j + len(closing)
 
 
-def _include_directive_end(text: str, i: int) -> int:
-    """行首 '#' 在 i → 引号 include 指令目标区结束位置；非引号 include → -1。
+def _include_directive_end(
+    text: str, i: int
+) -> tuple[int, list[tuple[int, int]]] | None:
+    """行首 '#' 在 i → (引号 include 指令目标区结束位置, 间隙注释区段)；非引号 include → None。
 
-    允许记号间反斜杠续行；尖括号/畸形目标返回 -1（按普通文本词法，不入图）。
+    允许记号间反斜杠续行与注释（C 预处理注释=空白语义——review 批修正：
+    间隙注释不再丢 include 边，注释区段回传调用方空白化后正则仍匹配）；
+    尖括号/畸形目标 → None（按普通文本词法，不入图）。
     """
     n = len(text)
+    spans: list[tuple[int, int]] = []
 
-    def skip_ws(k: int) -> int:
+    def skip_gap(k: int) -> int:
         while k < n:
             c = text[k]
             if c in " \t":
@@ -157,20 +168,31 @@ def _include_directive_end(text: str, i: int) -> int:
                 k += 2
                 while k < n and text[k] in "\r\n":
                     k += 1
+            elif text.startswith("//", k):
+                e = k
+                while e < n and text[e] != "\n":
+                    e += 1
+                spans.append((k, e))
+                k = e
+            elif text.startswith("/*", k):
+                e = text.find("*/", k + 2)
+                e = n if e < 0 else e + 2
+                spans.append((k, e))
+                k = e
             else:
                 break
         return k
 
-    j = skip_ws(i + 1)
+    j = skip_gap(i + 1)
     if not text.startswith("include", j):
-        return -1
-    j = skip_ws(j + len("include"))
+        return None
+    j = skip_gap(j + len("include"))
     if j < n and text[j] == '"':
         k = text.find('"', j + 1)
         if k < 0 or "\n" in text[j + 1 : k]:
-            return -1
-        return k + 1
-    return -1
+            return None
+        return k + 1, spans
+    return None
 
 
 def _blank_noncode(text: str) -> str:
@@ -183,6 +205,9 @@ def _blank_noncode(text: str) -> str:
     i = 0
     n = len(text)
     bol = True
+    if text.startswith("\ufeff"):
+        out[0] = " "  # 文件首 BOM 空白化：bol 追踪/行首指令词法不受污染（BOM+行 1 include 假阴防御——ObjC 同型修正）
+        i = 1
     while i < n:
         c = text[i]
         if c == "\n":
@@ -190,8 +215,13 @@ def _blank_noncode(text: str) -> str:
             i += 1
             continue
         if bol and c == "#":
-            end = _include_directive_end(text, i)
-            if end > i:
+            res = _include_directive_end(text, i)
+            if res is not None:
+                end, spans = res
+                for s, e in spans:
+                    for k in range(s, min(e, n)):
+                        if out[k] != "\n":
+                            out[k] = " "
                 i = end
                 bol = False
                 continue

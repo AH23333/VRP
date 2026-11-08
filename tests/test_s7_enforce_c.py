@@ -578,3 +578,52 @@ def test_cli_enforce_c_wiring(tmp_path, capsys):
     assert out["engine"] == "c-include-parser"
     assert out["findings_written"] == 1
     assert out["anchored"] == 1
+
+
+# ------------------------------------------- review 批回归（BOM+指令间隙注释）
+
+
+def test_blank_bom_first_include():
+    # BOM+行 1 include（review 批：BOM 空白化——bol 追踪/行首指令词法不再被污染，
+    # 目标不再被串词法吞、`^[ \t]*#` 匹配恢复）
+    out = s7_enforce_c._blank_noncode("\ufeff#include \"Bom.h\"\nint x;\n")
+    rows = s7_enforce_c._iter_includes(out)
+    assert rows == [("Bom.h", 1)]
+    assert "Bom.h" in out  # include 目标保留
+    assert out[0] == " "  # BOM 字符空白化
+    # BOM 无 include：无影响
+    out2 = s7_enforce_c._blank_noncode("\ufeffint x;\n")
+    assert "int x;" in out2
+    # 无 BOM 对照不回归
+    out3 = s7_enforce_c._blank_noncode('#include "Bom.h"\nint x;\n')
+    assert s7_enforce_c._iter_includes(out3) == [("Bom.h", 1)]
+
+
+def test_iter_includes_directive_gap_comments():
+    # 指令记号间注释（C 预处理注释=空白语义——review 批修正：间隙注释不再丢边）
+    blanked = s7_enforce_c._blank_noncode(
+        '#include /* c */ "Gap.h"\n'  # 1 目标前间隙块注释
+        '#/* c */include "Hash.h"\n'  # 2 # 与 include 之间注释
+        '#include "Trail.h" /* 尾注释 */\n'  # 3 目标后尾注释：现状已正确
+        '#include // c\n"x.h"\n'  # 4-5 行注释吞目标（非法 C）：拒（"x.h" 落行 5）
+        '#include // c "x.h"\n'  # 6 注释体吞目标（非法 C）：拒
+        '#include "Ok.h"\n'  # 7
+    )
+    rows = s7_enforce_c._iter_includes(blanked)
+    assert rows == [("Gap.h", 1), ("Hash.h", 2), ("Trail.h", 3), ("Ok.h", 7)]
+    # 间隙注释空白化后正则命中，目标保留
+    assert "Gap.h" in blanked and "Hash.h" in blanked and "Trail.h" in blanked
+
+
+def test_scan_c_bom_and_gap_comment(tmp_path):
+    repo = tmp_path / "proj"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "a.c").write_text(
+        '\ufeff#include /* c */ "b.h"\nint main(void)\n{\n    return 0;\n}\n',
+        encoding="utf-8",
+    )
+    (repo / "src" / "b.h").write_text("int g;\n", encoding="utf-8")
+    c_files, include_rows, files, tests_excluded, timed_out = s7_enforce_c.scan_c(repo)
+    assert timed_out is False
+    assert files == 2 and tests_excluded == 0
+    assert [r["target"] for r in include_rows] == ["b.h"]  # BOM+间隙注释不丢边

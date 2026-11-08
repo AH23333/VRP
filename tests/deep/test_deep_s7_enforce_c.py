@@ -270,3 +270,37 @@ def test_enforce_c_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_c_e2e_review_batch_regressions(tmp_path):
+    """review 批回归：BOM 头+指令间隙注释不丢违例边（修复前 0 违例假阴）。"""
+    repo = _mk_repo(tmp_path)
+    # 违例 include 改写为 BOM + 间隙块注释形态（Windows 编辑器+注释风格现实组合）
+    (repo / "src" / "deep" / "store" / "storage.c").write_text(
+        '\ufeff#include /* legacy api */ "../api/api.h"\n\n'
+        "int store_put(const char *key)\n"
+        "{\n"
+        "    (void)key;\n"
+        "    return 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["engine"] == "c-include-parser"
+    assert out["violations"] == 1  # 修复前 BOM+间隙注释吞边 → 0
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    pathology, kind, source, anchor, file_path, line, payload = rows[0]
+    assert (pathology, kind, source) == ("P9", "layer-violation", "s7-enforce")
+    assert anchor == "g1"
+    assert file_path == "src/deep/store/storage.c"
+    assert line == 1  # BOM+间隙注释不使违例 include 行号漂移
+    data = json.loads(payload)
+    assert data["chain"] == ["src/deep/store", "src/deep/api"]

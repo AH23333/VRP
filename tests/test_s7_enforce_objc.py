@@ -598,3 +598,18 @@ def test_cli_enforce_objc_wiring(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["engine"] == "objc-import-parser"
     assert out["violations"] == 1
+
+
+def test_blank_directive_gap_comments():
+    """指令记号间注释（C/ObjC 预处理注释=空白语义——review 批家族修：间隙注释不再丢 import/include 边）。"""
+    src = (
+        '#import /* c */ "Gap.h"\n'  # 1 目标前间隙块注释
+        '#import "Trail.h" /* 尾注释 */\n'  # 2 目标后尾注释
+        '#include /* c */ "Inc.h"\n'  # 3 include 分支同型
+        '#import "Ok.h"\n'  # 4
+    )
+    out = s7_enforce_objc._blank_noncode(src)
+    rows = s7_enforce_objc._iter_imports(out)
+    assert rows == [("Gap.h", 1), ("Trail.h", 2), ("Inc.h", 3), ("Ok.h", 4)]
+    # 间隙注释空白化后正则命中，目标保留
+    assert "Gap.h" in out and "Trail.h" in out and "Inc.h" in out
