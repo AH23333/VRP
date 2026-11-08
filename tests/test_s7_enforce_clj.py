@@ -71,12 +71,14 @@ def _con(repo: Path) -> sqlite3.Connection:
 
 
 def _extract(src: str) -> tuple[list[dict], dict]:
-    """词法 → 形态树 → 依赖行 + ns 名。"""
+    """词法 → 形态树 → reader 条件展开 → 依赖行 + ns 名。"""
     blanked, strings = s7_enforce_clj._blank_noncode(src)
     rows: list[dict] = []
     ns_name: dict = {"name": None}
     s7_enforce_clj._walk(
-        s7_enforce_clj._parse_forms(s7_enforce_clj._tokenize(blanked, strings)),
+        s7_enforce_clj._splice_conds(
+            s7_enforce_clj._parse_forms(s7_enforce_clj._tokenize(blanked, strings))
+        ),
         rows,
         ns_name,
     )
@@ -219,6 +221,59 @@ def test_extract_guards_and_nested():
         {"kind": "ns", "target": "cond.ns", "line": 3},
         {"kind": "ns", "target": "not.touched", "line": 4},
     ]
+
+
+def test_extract_reader_conditionals():
+    """reader 条件 #?/#?@ 全分支按序提取（.cljc 双平台形态）+ 无残留伪目标。"""
+    src = (
+        "(ns my.app\n"                                                        # 1
+        "  (:require [my.lib :as lib]\n"                                      # 2
+        "            #?(:clj [my.jvm :as j] :cljs [my.web :as w])\n"         # 3
+        "            #?@(:clj [[my.extra :as e] [my.more]] :cljs [[my.alt]])))\n"  # 4
+        "(require #?(:clj 'my.func :cljs 'my.other))\n"                      # 5
+    )
+    rows, ns_name = _extract(src)
+    assert ns_name["name"] == "my.app"
+    targets = sorted(r["target"] for r in rows)
+    assert targets == sorted([
+        "my.lib", "my.jvm", "my.web",
+        "my.extra", "my.more", "my.alt", "my.func", "my.other",
+    ])
+    assert "?" not in targets and "?@" not in targets  # 无残留伪目标
+    line_of = {(r["kind"], r["target"]): r["line"] for r in rows}
+    assert line_of[("ns", "my.jvm")] == 3
+    assert line_of[("ns", "my.extra")] == 4
+    assert line_of[("ns", "my.other")] == 5
+
+
+def test_extract_reader_conditional_nested_and_guard():
+    """前缀列表内 #?@ 拼接子条目（拼接后仍按前缀列表解析）；注释/串内伪条件不触。"""
+    src = (
+        '; (ns fake (:require #?@(:clj [[evil.ns]])))\n'          # 1 注释 canary
+        '(def s "#?(:clj [in.str])")\n'                            # 2 串 canary
+        "(ns my.app\n"                                             # 3
+        "  (:require [my.prefix #?@(:clj [[sub.one :as s1]] :cljs [[sub.two]])]))\n"  # 4
+    )
+    rows, ns_name = _extract(src)
+    assert ns_name["name"] == "my.app"
+    targets = sorted(r["target"] for r in rows)
+    assert targets == ["my.prefix.sub.one", "my.prefix.sub.two"]
+    assert all("evil" not in t and "in.str" not in t for t in targets)
+
+
+def test_extract_ns_reader_metadata():
+    """ns 名前 reader 元数据（^:kw/^{:map}/#^）跳过后取名。"""
+    src = (
+        "(ns ^:deprecated my.app\n"          # 1
+        "  (:require [my.lib :as lib]))\n"   # 2
+    )
+    rows, ns_name = _extract(src)
+    assert ns_name["name"] == "my.app"
+    assert rows == [{"kind": "ns", "target": "my.lib", "line": 2}]
+    _r2, ns2 = _extract('(ns ^{:doc "d"} my.other)\n')
+    assert ns2["name"] == "my.other"
+    _r3, ns3 = _extract("(ns #^:old my.legacy)\n")
+    assert ns3["name"] == "my.legacy"
 
 
 def test_is_test_conventions():
@@ -467,6 +522,34 @@ def test_run_clj_transitive_e2e(tmp_path):
     assert by_importer["my-app.storage"]["chain"] == ["my-app.storage", "my-app.queue", "my-app.logging"]
     assert by_importer["my-app.storage"]["line"] == 2  # 锚定链尾直接边：queue.clj 第 2 行
     assert all(r[0] == "src/my_app/queue.clj" for r in rows)
+
+
+def test_run_clj_reader_conditional_violation_e2e(tmp_path):
+    """违例边仅存在于 #?@ 分支内也能执法（.cljc 双平台形态）——锚定分支行。"""
+    repo = _mk_clj_repo(tmp_path)
+    (repo / "src" / "my_app" / "queue.clj").write_text(
+        "(ns my-app.queue\n"
+        "  (:require [my-app.queue-helpers :as h]\n"
+        "            #?@(:clj [[my-app.logging :as log]])))\n",
+        encoding="utf-8",
+    )
+    (repo / "src" / "my_app" / "queue_helpers.clj").write_text(
+        "(ns my-app.queue-helpers)\n", encoding="utf-8"
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_clj.run_clj(repo, con, json.loads(CLJ_STRUCTURE), "active", CLJ_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    row = sqlite3.connect(repo / ".vrp" / "facts.db").execute(
+        "SELECT file_path, start_line FROM findings"
+    ).fetchone()
+    assert row[0] == "src/my_app/queue.clj"
+    assert row[1] == 3  # #?@ 分支内 require 行
 
 
 def test_run_clj_idempotent(tmp_path):

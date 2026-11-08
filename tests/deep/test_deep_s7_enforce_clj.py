@@ -176,6 +176,40 @@ def test_enforce_clj_e2e_transitive_and_test_file_excluded(tmp_path):
     assert anchored == {("src/my_app/queue.clj", 9), ("src/my_app/storage.clj", 2)}
 
 
+def test_enforce_clj_e2e_reader_conditional_edge(tmp_path):
+    """违例藏于 #? 分支（.cljc 双平台形态）+ 注释/串内伪条件 canary——锚分支行。"""
+    repo = _mk_repo(tmp_path)
+    (repo / "src" / "my_app" / "queue.clj").write_text(
+        "(ns my-app.queue)\n"                                                 # 1
+        "; (require #?@(:clj [[my-app.logging]]))\n"                          # 2 注释 canary（伪条件）
+        "#! (require 'my-app.logging)\n"                                      # 3 shebang canary
+        '(def s "text (require \'my-app.logging) #?(:clj [fake.instr])")\n'   # 4 串 canary（伪条件）
+        '(def r #"[a-z\\"]+")\n'                                              # 5 正则 canary
+        '(def c \\")\n'                                                       # 6 字符字面量 canary
+        "(def m \"line1\n"                                                    # 7 多行串起
+        "(require 'my-app.logging)\")\n"                                      # 8 多行串讫
+        "(require #?(:clj 'my-app.logging :cljs 'my-app.fake))\n"             # 9 #? 分支违例
+        "(defn run [] 1)\n",                                                  # 10
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    assert rows[0][4] == "src/my_app/queue.clj"
+    assert rows[0][5] == 9  # #? 分支内 require 行
+    data = json.loads(rows[0][6])
+    assert data["chain"] == ["my-app.queue", "my-app.logging"]
+    assert data["line"] == 9
+
+
 def test_enforce_clj_e2e_idempotent_rerun(tmp_path):
     repo = _mk_repo(tmp_path)
     con = sqlite3.connect(repo / ".vrp" / "facts.db")

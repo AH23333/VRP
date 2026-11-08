@@ -28,11 +28,15 @@
   * 括号/向量/花括号单字符 token+原子 token（行号随 token）；
   * 递归遍历全部 list 形态，头部 ns/require/use/load/load-file 处理
     （`/` 成员访问守卫——`alias/require`/Java 方法不误触）；
-  * ns 形态：第二元素=命名空间名（symbol/串）；`:require`/`:use`/
+  * ns 形态：reader 元数据前缀（`^`/`^:kw`/`#^` 及其后元数据值形态）
+    跳过后取命名空间名（symbol/串）；`:require`/`:use`/
     `:require-macros` 子句——每条目取向量头部命名空间（`:refer`/
     `:as`/`:exclude` 参数不误取）；前缀列表 `[prefix [sub :as x] ...]`
     递归拼接 prefix.sub；
   * require/use 函数形态：`'sym`/`'[vec]`/串实参+`:reload` 族 flag 跳过；
+  * reader 条件 `#?`/`#?@`（.cljc 双平台形态）：形树级展开——分支不
+    区分全分支按序（`#?` 插入分支形态/`#?@` 拼接分支形态项 Splicing），
+    分支形内嵌套条件递归展开；
   * load/load-file：串实参——load 按 classpath 根（仓根/src/test 三根
     ×带/不带扩展九候选）解析；load-file 按仓根+文件目录两候选解析；
   * 外部命名空间（clojure.string 等，索引未命中）跳过。
@@ -45,7 +49,8 @@
   (file,line) 字典序首）。
 - 诚实局限（文档化不静默）：
   * `#_` 丢弃形态后的形态不丢弃（罕见形态，多报方向保守）
-  * reader 条件 `#?`/`:clj`/`:cljs` 分支不区分（.cljc 全按序提取）
+  * reader 条件分支表内直接嵌套条件（奇偶位错位形态）不展开（罕见
+    ——分支形内嵌套已递归展开）
   * `(in-ns ...)` 中途切换命名空间不识别（文件容器取首 ns）
   * 同名命名空间多文件取字典序首（gen-class 生成物/多根布局罕见）
   * `:import`（Java 类）不产边（Java 类非仓内命名空间）
@@ -255,6 +260,46 @@ def _parse_forms(tokens: list[dict]) -> list[dict]:
     return root
 
 
+def _splice_conds(items: list[dict]) -> list[dict]:
+    """reader 条件 `#?`/`#?@` 形树级展开（分支不区分——全分支按序拼接）。
+
+    `#?` 插入分支形态本身；`#?@` 拼接分支形态项（Splicing）；分支形内
+    嵌套条件递归展开；分支表内直接嵌套条件（奇偶位错位）不展开（罕见）。
+    """
+    out: list[dict] = []
+    i = 0
+    n = len(items)
+    while i < n:
+        it = items[i]
+        if it["k"] == "seq":
+            out.append({**it, "items": _splice_conds(it["items"])})
+            i += 1
+            continue
+        if (
+            it["k"] == "sym"
+            and it["v"] in ("#?", "#?@")
+            and i + 1 < n
+            and items[i + 1]["k"] == "seq"
+        ):
+            branches = items[i + 1]["items"]
+            forms = [
+                branches[k] if branches[k]["k"] != "seq"
+                else {**branches[k], "items": _splice_conds(branches[k]["items"])}
+                for k in range(1, len(branches), 2)
+            ]
+            if it["v"] == "#?":
+                out.extend(forms)
+            else:
+                for f in forms:
+                    if f["k"] == "seq":
+                        out.extend(f["items"])
+            i += 2
+            continue
+        out.append(it)
+        i += 1
+    return out
+
+
 def _strip_reader_macros(word: str) -> str:
     """去头部 reader 宏字符（quote/syntax-quote/unquote/deref/meta/var）。"""
     return word.lstrip("'`~@^#")
@@ -316,16 +361,26 @@ def _handle_entry(entry: dict, out_rows: list[dict]) -> None:
 
 
 def _handle_ns(items: list[dict], out_rows: list[dict], ns_name: dict) -> None:
-    """ns 形态：第二元素=命名空间名；`:require`/`:use`/`:require-macros`
-    子句条目提取。"""
-    if len(items) >= 2 and ns_name.get("name") is None:
-        name = items[1]
-        if name["k"] == "sym":
-            w = _strip_reader_macros(name["v"])
-            if w and "/" not in w and not w.startswith("."):
-                ns_name["name"] = w
-        elif name["k"] == "str":
-            ns_name["name"] = name["v"]
+    """ns 形态：reader 元数据前缀（`^`/`^:kw`/`#^`+元数据值）跳过后取名；
+    `:require`/`:use`/`:require-macros` 子句条目提取。"""
+    if ns_name.get("name") is None:
+        i = 1
+        while i < len(items):
+            it = items[i]
+            if it["k"] == "sym" and (
+                it["v"].startswith("^") or it["v"].startswith("#^")
+            ):
+                i += 1
+                if it["v"] in ("^", "#^"):
+                    i += 1  # 裸 ^ 后随元数据值形态
+                continue
+            if it["k"] == "sym":
+                w = _strip_reader_macros(it["v"])
+                if w and "/" not in w and not w.startswith("."):
+                    ns_name["name"] = w
+            elif it["k"] == "str":
+                ns_name["name"] = it["v"]
+            break
     for clause in items[2:]:
         if clause["k"] != "seq" or not clause["items"]:
             continue
@@ -401,7 +456,7 @@ def _is_test(rel: str) -> bool:
 
 
 def _abs_like(target: str) -> bool:
-    """绝对路径/盘符/`~`/URL/反斜杠形态——不可仓内解析。"""
+    """绝对路径/盘符/`~`/URL——不可仓内解析（反斜杠归一 `/` 后可解析）。"""
     return (
         target.startswith(("/", "~"))
         or (len(target) > 1 and target[1] == ":")
@@ -458,7 +513,13 @@ def scan_clj(
             blanked, strings = _blank_noncode(_read(repo, rel))
             rows: list[dict] = []
             ns_name: dict = {"name": None}
-            _walk(_parse_forms(_tokenize(blanked, strings)), rows, ns_name)
+            _walk(
+                _splice_conds(
+                    _parse_forms(_tokenize(blanked, strings))
+                ),
+                rows,
+                ns_name,
+            )
             if ns_name["name"] is not None:
                 ns_by_file[rel] = ns_name["name"]
             if _is_test(rel):
