@@ -388,7 +388,7 @@ decisions(
 
 rp/s7_enforce.py（纯标准库 + import-linter 2.15 子进程，VRP_IMPORT_LINTER_BIN 覆盖）：
 
-- **契约生成**：层 DAG 每对不允许 (A,B) 生成一条 forbidden 契约（覆盖线性栈与任意 DAG；may_depend_on 只豁免直连——传递违例同抓，线性栈 top 直 import bottom 违规实测在案）；rules[] "X 不许 import Y"（from_layer/to_layer 字段优先，"不许/不能/禁止/must not import" 文本模式兜底）映射为同型契约，映射不出进 unenforced_rules 诚实清单
+- **契约生成**：层 DAG 每对不允许 (A,B) 生成一条 forbidden 契约（覆盖线性栈与任意 DAG；may_depend_on 只豁免直连——传递违例同抓，线性栈 top 直 import bottom 违规实测在案）；rules[] "X 不许 import Y"（from_layer/to_layer 字段优先，"不许/不能/禁止/must not import" 文本模式兜底）映射为同型契约，映射不出进 unenforced_rules 诚实清单；**unenforced_layers 三类无执法层并集诚实上报**（build_contracts，二十引擎共用零改动透传）：被模块引用但无容器的层 / layers[] 声明但无模块引用的层（否则静默消失）/ 被模块引用但 layers[] 未声明的层（笔误/漏声明——只上报，绝不猜测生成契约杜绝编造违例）
 - **容器推导**：module.symbol_fids → symbols.file_path → 点分模块名（`__init__.py`→父包；非 .py 仓 language-unsupported——TS 执法器 dependency-cruiser 等为后续批次，Python 引擎垂直切片先行）
 - **违例 = P9 findings**（P 码序列顺延；kind='layer-violation'，source='s7-enforce'，幂等 replace-all；锚定覆盖符号优先/文件首符号兜底；payload 带 contract/层/双方/行/structure_status）
 - **配置生命周期**：`.vrp/importlinter.ini` 生成→执行（--config= --no-cache --no-logo，cwd=repo）→finally 清理（同 stryker.conf.json 模式）

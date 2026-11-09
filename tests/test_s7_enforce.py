@@ -169,6 +169,54 @@ def test_build_contracts_dedup_and_unenforced():
     assert built["unenforced_layers"] == []
 
 
+def test_build_contracts_reports_undeclared_layer():
+    """诚实性：模块引用了 layers[] 未声明的层（笔误/漏声明）→ 必须上报，且绝不猜测生成契约。"""
+    payload = {
+        "modules": [
+            {"module_id": "m1", "name": "n", "responsibility": "r", "symbol_fids": ["f1"], "layer": "core"},
+            {"module_id": "m2", "name": "n", "responsibility": "r", "symbol_fids": ["f2"], "layer": "app"},  # 未声明
+        ],
+        "layers": [{"name": "core", "may_depend_on": []}],
+    }
+    built = s7_enforce.build_contracts(payload, {"m1": ["pkgcore.s0"], "m2": ["pkgapp.svc"]})
+    assert built["unenforced_layers"] == ["app"]
+    # 只上报不猜测：未声明层的 may_depend_on 未知，任何契约不得引用它
+    assert all(c["source_layer"] != "app" and c["forbidden_layer"] != "app" for c in built["contracts"])
+
+
+def test_build_contracts_reports_declared_moduleless_layer():
+    """诚实性：layers[] 声明了但没有任何模块引用的层 → 必须上报（否则该层静默消失）。"""
+    payload = {
+        "modules": [
+            {"module_id": "m1", "name": "n", "responsibility": "r", "symbol_fids": ["f1"], "layer": "core"},
+        ],
+        "layers": [
+            {"name": "core", "may_depend_on": []},
+            {"name": "ghost", "may_depend_on": ["core"]},  # 声明了但无模块引用
+        ],
+    }
+    built = s7_enforce.build_contracts(payload, {"m1": ["pkgcore.s0"]})
+    assert built["unenforced_layers"] == ["ghost"]
+    assert all(c["source_layer"] != "ghost" and c["forbidden_layer"] != "ghost" for c in built["contracts"])
+
+
+def test_build_contracts_unenforced_layers_union_sorted():
+    """三类无执法层（无容器/声明未用/引用未声明）并集去重排序。"""
+    payload = {
+        "modules": [
+            {"module_id": "m1", "name": "n", "responsibility": "r", "symbol_fids": ["f1"], "layer": "typo-app"},
+            {"module_id": "m2", "name": "n", "responsibility": "r", "symbol_fids": ["f2"], "layer": "orphan"},
+        ],
+        "layers": [
+            {"name": "core", "may_depend_on": []},       # 声明未用（也无模块引用）
+            {"name": "ghost", "may_depend_on": ["core"]},  # 声明未用
+            {"name": "orphan", "may_depend_on": ["core"]},  # 引用了但无容器
+        ],
+    }
+    built = s7_enforce.build_contracts(payload, {"m1": ["pkgapp.svc"], "m2": []})
+    assert built["unenforced_layers"] == ["core", "ghost", "orphan", "typo-app"]
+
+
 def test_build_config_shape():
     contracts = [
         {

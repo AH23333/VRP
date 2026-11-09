@@ -52,6 +52,9 @@ C# 引擎；.kt 符号 → Kotlin 引擎；.c/.cc/.cpp/.h 等符号 → C/C++ �
 - 层 DAG：每对不允许的 (A,B) 生成一条 forbidden 契约（覆盖线性栈与任意 DAG）；
   rules[]：from_layer/to_layer 或 "X 不许 import Y"（X/Y=层名）文本模式映射为
   同型契约；映射不出的规则进 unenforced_rules 诚实清单
+- unenforced_layers 三类无执法层并集去重排序（build_contracts，二十引擎共用）：
+  被模块引用但无容器的层 / layers[] 声明但无模块引用的层 / 被模块引用但
+  layers[] 未声明的层（笔误/漏声明——只上报，绝不猜测生成契约）
 - 容器推导：module.symbol_fids → symbols.file_path → 点分模块名
   （strip .py、/→.、__init__.py→父包名；非 .py 跳过）
 """
@@ -189,7 +192,14 @@ def _rule_pair(rule: dict, layer_names: set[str]) -> tuple[str, str] | None:
 
 
 def build_contracts(payload: dict, containers: dict[str, list[str]]) -> dict:
-    """层 DAG 对 + 可映射 rules → forbidden 契约（按 (from,to) 去重排序）。"""
+    """层 DAG 对 + 可映射 rules → forbidden 契约（按 (from,to) 去重排序）。
+
+    unenforced_layers 诚实上报三类无执法层（并集去重排序）：
+    1. 被模块引用但无容器的层（旧有口径）；
+    2. layers[] 已声明但无任何模块引用的层——不产生任何契约，静默即漏洞；
+    3. 被模块引用但 layers[] 未声明的层（笔误/漏声明）——may_depend_on
+       未知，只上报、绝不猜测生成契约（杜绝编造违例）。
+    """
     layer_mods = _layer_map(payload, containers)
     layer_names = {layer["name"] for layer in payload.get("layers", []) if isinstance(layer, dict) and isinstance(layer.get("name"), str)}
     pairs = set(_forbidden_pairs(payload))
@@ -206,8 +216,11 @@ def build_contracts(payload: dict, containers: dict[str, list[str]]) -> dict:
             else:
                 pairs.add(pair)
     contracts = []
+    used_layers = set(layer_mods)
     unenforced_layers = sorted(
-        name for name, mods in layer_mods.items() if not mods
+        {name for name, mods in layer_mods.items() if not mods}
+        | (layer_names - used_layers)
+        | (used_layers - layer_names)
     )
     for a, b in sorted(pairs):
         source = layer_mods.get(a, [])
