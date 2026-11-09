@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -204,3 +205,70 @@ def test_build_dossier_t3_raw_pack_pointer(tmp_path, con, monkeypatch):
     brief = dossier["views"]["repo_map_brief"]
     assert brief["status"] == "ok"
     assert brief["max_tokens"] == max(200, min(20000, int(32000 * s5_dossier.TASK_PROFILES["T3"]["repo_map_brief"]) // 4))
+
+
+def _no_arch(monkeypatch):
+    monkeypatch.setattr("vrp.s5_dossier.get_architecture", lambda name: {"modules": []})
+
+
+def test_build_dossier_arch_failure_degrades(tmp_path, con, monkeypatch):
+    """v6 degradation contract: CBM get_architecture failure downgrades the
+    architecture section to {"status": "failed"}; the DB-derived sections
+    still assemble ("failed" is never conflated with "skipped")."""
+    facts_db = _dump_facts(tmp_path, con)
+
+    def boom(name):
+        raise RuntimeError("cbm daemon down")
+
+    monkeypatch.setattr("vrp.s5_dossier.get_architecture", boom)
+    dossier = s5_dossier.build_dossier(tmp_path, facts_db, "p", skip_external=False)
+    arch = dossier["views"]["architecture"]
+    assert arch["status"] == "failed"
+    assert "cbm daemon down" in arch["reason"]
+    assert dossier["views"]["sql_views"]["hotspots"][0]["qualified_name"] == "mod.a"
+    assert dossier["views"]["repomap"]["files_included"] >= 1
+
+
+def test_build_dossier_raw_pack_timeout_degrades(tmp_path, con, monkeypatch):
+    """repomix TimeoutExpired re-raised by s5_rawpack must not kill the dossier."""
+    facts_db = _dump_facts(tmp_path, con)
+    _no_arch(monkeypatch)
+
+    def boom(repo, timeout=600):
+        raise subprocess.TimeoutExpired(cmd="repomix", timeout=timeout)
+
+    monkeypatch.setattr("vrp.s5_dossier.s5_rawpack.build_raw_pack", boom)
+    dossier = s5_dossier.build_dossier(tmp_path, facts_db, "p", skip_external=False)
+    raw = dossier["views"]["raw_pack"]
+    assert raw["status"] == "failed"
+    assert "repomix" in raw["reason"]
+    assert dossier["views"]["sql_views"]["hotspots"][0]["qualified_name"] == "mod.a"
+    assert (tmp_path / ".vrp" / "dossier.json").is_file()
+
+
+def test_build_dossier_raw_pack_oserror_degrades(tmp_path, con, monkeypatch):
+    facts_db = _dump_facts(tmp_path, con)
+    _no_arch(monkeypatch)
+
+    def boom(repo, timeout=600):
+        raise OSError("repomix bin disappeared")
+
+    monkeypatch.setattr("vrp.s5_dossier.s5_rawpack.build_raw_pack", boom)
+    dossier = s5_dossier.build_dossier(tmp_path, facts_db, "p", skip_external=False)
+    raw = dossier["views"]["raw_pack"]
+    assert raw["status"] == "failed"
+    assert "disappeared" in raw["reason"]
+
+
+def test_build_dossier_cabrief_oserror_degrades(tmp_path, con, monkeypatch):
+    facts_db = _dump_facts(tmp_path, con)
+    _no_arch(monkeypatch)
+
+    def boom(repo, max_tokens=4000, timeout=120):
+        raise OSError("node spawn failed")
+
+    monkeypatch.setattr("vrp.s5_dossier.s5_cabrief.repo_map_brief", boom)
+    dossier = s5_dossier.build_dossier(tmp_path, facts_db, "p", skip_external=False)
+    brief = dossier["views"]["repo_map_brief"]
+    assert brief["status"] == "failed"
+    assert "node spawn failed" in brief["reason"]

@@ -8,6 +8,10 @@ evidence (discrepancy_ledger + runtime_evidence + last_verdicts, the AI
 consumption surface - R1' embeds open verdicts so the next round must see
 the last failures), summary (findings/annotations/counts), raw_pack
 (repomix artifact pointer).
+
+v6 degradation contract (same as s5_cabrief): a failing external section
+downgrades itself to {"status": "failed", "reason": ...} - the DB-derived
+sections must still assemble; "failed" is never reported as "skipped".
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -349,20 +354,34 @@ def build_dossier(
     elif skip_external:
         arch_payload = {"status": "skipped", "reason": "external calls disabled"}
     else:
-        arch_payload = get_architecture(name)
+        # v6 degradation contract: CBM failure downgrades this section only.
+        try:
+            arch_payload = get_architecture(name)
+        except RuntimeError as exc:
+            arch_payload = {"status": "failed", "reason": str(exc)[:500]}
     if skip_external:
         brief_payload = {"status": "skipped", "reason": "external calls disabled"}
         raw_payload = {"status": "skipped", "reason": "external calls disabled"}
     else:
-        brief_payload = _cap_brief(
-            s5_cabrief.repo_map_brief(
-                repo,
-                max_tokens=max(200, min(20000, caps["repo_map_brief"] // 4)),
-                timeout=180,
-            ),
-            caps["repo_map_brief"],
-        )
-        raw_payload = s5_rawpack.build_raw_pack(repo)
+        # v6 degradation contract: code-atlas spawn failure downgrades this
+        # section only (Popen raises OSError; protocol failures return dicts).
+        try:
+            brief_payload = _cap_brief(
+                s5_cabrief.repo_map_brief(
+                    repo,
+                    max_tokens=max(200, min(20000, caps["repo_map_brief"] // 4)),
+                    timeout=180,
+                ),
+                caps["repo_map_brief"],
+            )
+        except OSError as exc:
+            brief_payload = {"status": "failed", "reason": f"repo_map_brief failed: {exc}"[:500]}
+        # v6 degradation contract: repomix timeout/OSError re-raised by
+        # s5_rawpack is caught here so the whole dossier still assembles.
+        try:
+            raw_payload = s5_rawpack.build_raw_pack(repo)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raw_payload = {"status": "failed", "reason": f"raw pack failed: {exc}"[:500]}
         if raw_payload.get("status") == "ok":
             raw_payload["recommended_read_chars"] = caps["raw_pack"]
     sections = {
