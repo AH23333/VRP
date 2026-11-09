@@ -238,3 +238,32 @@ def test_enforce_java_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_java_e2e_textblock_phantom_not_leaked(tmp_path):
+    """批 39 回归：文本块内单引号转义技巧（JLS 3.10.6，javac/jshell 21 探针
+    实证）产出裸三引号不闭合块——唯一指向 api 的 import 在块内（合法源码），
+    转义感知扫描不提前闭合：幻影 import 不泄漏成 store→api 假阳违例。"""
+    repo = _mk_repo(tmp_path)
+    # Store.java 唯一 api import 在文本块内（转义引号后）——不是真实依赖
+    (repo / "src" / "main" / "java" / "com" / "deep" / "store" / "Store.java").write_text(
+        "package com.deep.store;\n\n"
+        "public class Store {\n"
+        '    static final String DOC = """\n'
+        "        sample\n"
+        '        \\"""\n'
+        "        import com.deep.api.Handler;\n"
+        '        """;\n'
+        "    public String get() { return \"s\"; }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 0
+    assert out["findings_written"] == 0
+    assert _rows(repo) == []

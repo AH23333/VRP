@@ -7,6 +7,9 @@
 - 容器 = Java 包（`package x.y.z;` 声明）。CBM Java 符号 qualified name 是路径式
   （project.src.main.java.com.probe...），故容器一律 fid→file_path→读文件解析 package。
 - import 解析：单类型/静态/通配（`import a.b.C;` `import static a.b.C.m;` `import a.b.*;`）；
+  Java 是自由格式语言——token 间任意空白（含换行）合法，package/import 段间点号
+  两侧换行宽容（`import a.\\nb.C;` 合法，javac 21 探针实证；与 Kotlin 普通串
+  禁跨行相反，勿跨语言照搬运修）；
   注释（行/块）/字符串/字符/文本块先空白化（保长度保行号）。
 - import 目标解析 = 已知包集合最长前缀（`com.probe.store.Store` → com.probe.store；
   `import static com.probe.util.Log.log;` → com.probe.util；外部依赖 java.util.* 等
@@ -21,6 +24,13 @@
   * 非标准测试源根（src/it/java 等）不识别（按生产计，保守方向）
   * 构建/隐藏目录（target/build/node_modules/.*）跳过（产物无源码语义）
   * 扫描超时 → enforcer-failed（部分图不可信，不静默截断）
+  * `$` 标识符（JLS 3.8 合法但实践罕见）段正则不匹配（病态不修）
+  * `\\uXXXX` 预处理先于词法（JLS 3.3）：行注释内 `\\u000A` 实为换行会终结
+    注释使后文成活代码，引擎按注释内容处理（经典 gotcha，病态不修）
+  * 未闭合文本块（WIP）空白化至 EOF（javac 同报未闭合编译错，不承诺）
+  * BOM：javac 21 拒绝 U+FEFF（非法字符编译错）——有效源码无 BOM，
+    引擎宽容解析不构成执法偏差（C 引擎 BOM 假阴场景在 Java 不存在）
+  * 未闭合普通串/字符字面量（WIP）→ 行尾截断/回退前进（不吞后续行代码）
 """
 
 from __future__ import annotations
@@ -44,14 +54,18 @@ JAVA_SUFFIX = ".java"
 TEST_SOURCE_ROOT = "/test/java/"
 SKIP_DIRS = {"target", "build", "node_modules"}
 
-_PACKAGE_RE = re.compile(
-    r"\bpackage\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*;"
-)
+_SEG = r"[A-Za-z_][A-Za-z0-9_]*"
+_PACKAGE_RE = re.compile(r"\bpackage\s+(" + _SEG + r"(?:\s*\.\s*" + _SEG + r")*)\s*;")
 _IMPORT_RE = re.compile(
     r"\bimport\s+(?:static\s+)?"
-    r"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
-    r"\s*(?:\.\s*\*)?\s*;"
+    r"(" + _SEG + r"(?:\s*\.\s*" + _SEG + r")*)"
+    r"(?:\s*\.\s*\*)?\s*;"
 )
+
+
+def _clean_name(raw: str) -> str:
+    """自由格式捕获组去空白（段间换行/缩进合法，包名本身无空白）。"""
+    return re.sub(r"\s+", "", raw)
 
 
 # ------------------------------------------------------------------ 词法底座
@@ -80,10 +94,10 @@ def _blank_noncode(text: str) -> str:
                 if out[k] != "\n":
                     out[k] = " "
             i = j
-        elif three == '"""':
-            # Java 15+ 文本块：首个 """ 闭合（内部 \"\"\" 须转义，故裸扫描安全）
-            j = text.find('"""', i + 3)
-            j = n if j < 0 else j + 3
+        elif three == '"""' and i + 3 < n and text[i + 3] in "\r\n":
+            # Java 15+ 文本块：开符后必须行终止符（JLS 3.10.6；javac 探针：缺行
+            # 终止符即编译错，如 4 连引号——非块起始走串分支优雅降级不吞 EOF）
+            j = _text_end(text, i)
             for k in range(i, min(j, n)):
                 if out[k] != "\n":
                     out[k] = " "
@@ -106,28 +120,55 @@ def _blank_noncode(text: str) -> str:
 
 
 def _string_end(text: str, i: int) -> int:
+    """普通串结束位置；未闭合（WIP/病态）→ 行尾截断（JLS 3.10.5 串内禁换行，
+    javac 探针实证未闭合串编译错——换行后是代码不是串，防吞码假阴，kt/cs 同家族修）。"""
     j = i + 1
     n = len(text)
     while j < n:
-        if text[j] == "\\":
+        c = text[j]
+        if c == "\\":
             j += 2
             continue
-        if text[j] == '"':
+        if c == '"':
             return j + 1
+        if c == "\n":
+            return j  # 未闭合串：行截断（换行符本身保留）
+        j += 1
+    return n
+
+
+def _text_end(text: str, i: int) -> int:
+    """文本块闭合位置（转义感知）：反斜杠转义对跳过——转义引号不计入闭合
+    （JLS 3.10.6：3+ 连引号须至少一个转义；javac/jshell 21 探针实证单引号
+    转义技巧产出裸 3 引号内容且不闭合块——裸扫描会提前闭合产幻影代码）；
+    未闭合（WIP）→ EOF（编译错误文件不承诺，docstring 诚实局限）。"""
+    j = i + 3
+    n = len(text)
+    while j < n:
+        c = text[j]
+        if c == "\\":
+            j += 2
+            continue
+        if text[j : j + 3] == '"""':
+            return j + 3
         j += 1
     return n
 
 
 def _char_end(text: str, i: int) -> int:
-    """字符字面量 'x' / '\\n' / '\\uXXXX' 结束位置；非字面量（10 字符内无闭合）→ i。"""
+    """字符字面量 'x' / '\\n' / '\\uXXXX' 结束位置；非字面量（12 字符内无闭合
+    或遇换行，均 WIP 文件）→ i（调用方回退前进，不吞下一行代码）。"""
     j = i + 1
     n = len(text)
     while j < n and j - i <= 12:
-        if text[j] == "\\":
+        c = text[j]
+        if c == "\\":
             j += 2
             continue
-        if text[j] == "'":
+        if c == "'":
             return j + 1
+        if c == "\n":
+            return i
         j += 1
     return i
 
@@ -141,15 +182,16 @@ def _read(repo: Path, rel: str) -> str:
 
 def _parse_package(blanked: str) -> str | None:
     m = _PACKAGE_RE.search(blanked)
-    return m.group(1) if m else None
+    return _clean_name(m.group(1)) if m else None
 
 
 def _iter_imports(blanked: str) -> list[tuple[str, int]]:
-    """已空白化文本 → [(import 点分目标, 行号)]（static/通配统一剥壳为目标路径）。"""
+    """已空白化文本 → [(import 点分目标, 行号)]（static/通配统一剥壳为目标路径；
+    自由格式段间空白去净）。"""
     rows: list[tuple[str, int]] = []
     for m in _IMPORT_RE.finditer(blanked):
         line = blanked.count("\n", 0, m.start()) + 1
-        rows.append((m.group(1), line))
+        rows.append((_clean_name(m.group(1)), line))
     return rows
 
 

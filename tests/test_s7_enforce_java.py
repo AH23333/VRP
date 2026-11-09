@@ -101,6 +101,55 @@ def test_blank_noncode_unclosed_char_literal_advances():
     assert "int next = 1;" in out
 
 
+def test_blank_noncode_textblock_escaped_triple_quote():
+    """文本块内单引号转义技巧（JLS 3.10.6：转义一个引号即可产出裸三引号且
+    不闭合块——javac/jshell 21 探针实证）——转义感知扫描防提前闭合：
+    块内 import 文本不泄漏成幻影边（假阳），块后代码不吞。"""
+    src = (
+        "package a.app;\n"
+        "\n"
+        "public class App {\n"
+        '    static final String SAMPLE = """\n'
+        "        plain\n"
+        '        \\"""\n'
+        "        import a.forbidden.Thing;\n"
+        '        """;\n'
+        "}\n"
+    )
+    out = s7_enforce_java._blank_noncode(src)
+    assert "import a.forbidden.Thing" not in out  # 块内幻影不泄漏
+    assert s7_enforce_java._iter_imports(out) == []
+    assert out.splitlines()[0] == "package a.app;"  # 块后代码与行号保持
+
+
+def test_blank_noncode_unclosed_string_line_truncated():
+    """未闭合串（WIP）行尾截断（JLS 3.10.5 串内禁换行，javac 探针：编译错）——
+    不吞下一行代码（kt/cs 同家族修，防假阴）。"""
+    src = (
+        "package a.app;\n"
+        "public class App {\n"
+        '    String broken = "oops\n'
+        "import a.helper.Help;\n"
+        "}\n"
+    )
+    rows = s7_enforce_java._iter_imports(s7_enforce_java._blank_noncode(src))
+    assert rows == [("a.helper.Help", 4)]
+
+
+def test_blank_noncode_four_quotes_not_text_block():
+    """4 连引号非文本块起始（javac 探针：开符后缺行终止符即编译错）——
+    走串分支优雅降级为两个空串，不把后续代码空白化到 EOF（防假阴）。"""
+    src = (
+        "package a.app;\n"
+        "public class App {\n"
+        '    String s = """";\n'
+        "}\n"
+        "import a.helper.Help;\n"
+    )
+    rows = s7_enforce_java._iter_imports(s7_enforce_java._blank_noncode(src))
+    assert rows == [("a.helper.Help", 5)]
+
+
 def test_parse_package_and_imports():
     blanked = s7_enforce_java._blank_noncode(
         "package com.demo.store;\n"
@@ -120,6 +169,24 @@ def test_parse_package_and_imports():
         ("com.demo.util.Log.log", 7),
         ("com.demo.api", 8),
     ]  # 伪 import（注释/字符串）不出现；static/通配剥壳
+
+
+def test_parse_freeform_package_and_imports():
+    """Java 自由格式：token 间任意空白（含换行）合法（javac 21 探针实证，
+    与 Kotlin 普通串禁跨行相反）——package/import 段间点号两侧换行宽容，
+    捕获组去空白（_clean_name）。"""
+    blanked = s7_enforce_java._blank_noncode(
+        "package com.\ndemo.\nstore;\n"
+        "import com.\ndemo.\napi.Handler;\n"
+        "import\nstatic com.demo.util.Log.log;\n"
+        "import com.demo.api.\n*;\n"
+    )
+    assert s7_enforce_java._parse_package(blanked) == "com.demo.store"
+    assert s7_enforce_java._iter_imports(blanked) == [
+        ("com.demo.api.Handler", 4),
+        ("com.demo.util.Log.log", 7),
+        ("com.demo.api", 9),
+    ]
 
 
 def test_resolve_import_longest_prefix():
@@ -165,6 +232,41 @@ def test_scan_java_packages_tests_and_skip_dirs(tmp_path):
     assert graph == {"com.x.store": ["com.x.api"], "com.x.api": []}
     assert edges == [
         {"file": "src/main/java/com/x/store/Store.java", "line": 2, "src": "com.x.store", "dst": "com.x.api"}
+    ]
+
+
+def test_scan_java_lexer_hardening_e2e(tmp_path):
+    """批 39 修法 E2E（javac 21 探针定性，源均可编译）：自由格式 package/import
+    段间换行宽容产真边；文本块内转义引号技巧后的 import 文本不泄漏成幻影边。"""
+    repo = tmp_path / "proj"
+    main = repo / "src" / "main" / "java" / "com" / "x"
+    (main / "store").mkdir(parents=True)
+    (main / "api").mkdir(parents=True)
+    (main / "store" / "Store.java").write_text(
+        "package com.x.\nstore;\n\n"
+        "import com.x.\napi.Api;\n\n"
+        "public class Store {\n"
+        '    static final String S = """\n'
+        "        import com.x.hidden.Phantom;\n"
+        '        \\"""\n'
+        '        """;\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    (main / "api" / "Api.java").write_text(
+        "package com.x.api;\n\npublic class Api {}\n", encoding="utf-8"
+    )
+    file_pkg, import_rows, files, tests_excluded, timed_out = s7_enforce_java.scan_java(repo)
+    assert timed_out is False
+    assert file_pkg == {
+        "src/main/java/com/x/store/Store.java": "com.x.store",
+        "src/main/java/com/x/api/Api.java": "com.x.api",
+    }
+    assert [r["target"] for r in import_rows] == ["com.x.api.Api"]  # 幻影 target 不入列
+    graph, edges = s7_enforce_java.build_java_graph(file_pkg, import_rows)
+    assert graph == {"com.x.store": ["com.x.api"], "com.x.api": []}
+    assert edges == [
+        {"file": "src/main/java/com/x/store/Store.java", "line": 4, "src": "com.x.store", "dst": "com.x.api"}
     ]
 
 
