@@ -109,6 +109,26 @@ def test_blank_noncode_unclosed_char_literal_advances():
     assert "int next = 1;" in out
 
 
+def test_blank_noncode_empty_and_unclosed_strings_stop_local():
+    """空串四形态/转义首字符/未闭合换行截断——不吞后续行真代码（CS1010 词法族）。"""
+    src = (
+        'string e1 = $"";\n'
+        'string e2 = @"";\n'
+        'string e3 = $@"";\n'
+        'string e4 = @$"";\n'
+        'string esc = $"\\\"";\n'
+        'string unclosed = "wip\n'
+        "int keep = 1;\n"
+    )
+    out = s7_enforce_cs._blank_noncode(src)
+    assert out.splitlines()[6] == "int keep = 1;"  # 后续行代码完好
+    assert "$" not in out and "@" not in out  # 各串形态整体空白化
+    assert "wip" not in out  # 未闭合串行尾截断（不吞下一行）
+    src2 = 'string bad = "x\\\nint keep2 = 2;\n'
+    out2 = s7_enforce_cs._blank_noncode(src2)
+    assert "int keep2 = 2;" in out2  # 行尾反斜杠不越过换行
+
+
 def test_parse_ns_spans_block_file_scoped_nested():
     src = (
         "namespace Demo.A\n"
@@ -126,6 +146,19 @@ def test_parse_ns_spans_block_file_scoped_nested():
     assert by_name[("block", "Demo.A")]["full"] == "Demo.A"
     assert by_name[("block", "B")]["full"] == "Demo.A.B"  # 嵌套全名拼接
     assert by_name[("file", "Demo.F")]["close"] == len(src)  # 文件级到 EOF
+
+
+def test_parse_ns_spans_freeform_dots():
+    """namespace 段间空白/注释（C# 自由格式）——全名清洗后正确入图。"""
+    src = (
+        "namespace Demo . Free\n"
+        "{\n"
+        "    class X {}\n"
+        "}\n"
+        "namespace Demo /* c */ .Nf;\n"
+    )
+    spans = s7_enforce_cs._parse_ns_spans(s7_enforce_cs._blank_noncode(src))
+    assert [s["full"] for s in spans] == ["Demo.Free", "Demo.Nf"]
 
 
 def test_iter_usings_forms_and_attribution():
@@ -175,6 +208,30 @@ def test_iter_usings_static_alias_global():
         "Demo.Other.Thing",  # 别名取右侧
         "Demo.Global",  # global 归一
     ]
+
+
+def test_iter_usings_global_qualifier_and_freeform():
+    """global:: 限定符三形态 + 段间注释/空白/换行（C# 自由格式，dotnet 探针实证）。"""
+    src = (
+        "using global::Demo.Api;\n"
+        "using static global::Demo.Util.Log;\n"
+        "using Alias = global::Demo.Other.Thing;\n"
+        "using Demo /* c */ .Gap;\n"
+        "using Demo\n"
+        "    .Nl;\n"
+        "using Demo . Sp;\n"
+    )
+    blanked = s7_enforce_cs._blank_noncode(src)
+    rows = s7_enforce_cs._iter_usings(blanked, [])
+    assert [r["target"] for r in rows] == [
+        "Demo.Api",  # global:: 剥壳
+        "Demo.Util.Log",  # static + global::
+        "Demo.Other.Thing",  # 别名右侧 global::
+        "Demo.Gap",  # 段间注释空白化后清洗
+        "Demo.Nl",  # 段间换行
+        "Demo.Sp",  # 段间空格
+    ]
+    assert [r["line"] for r in rows] == [1, 2, 3, 4, 5, 7]  # 多行匹配锚关键字行
 
 
 def test_resolve_ns_context_then_global():
@@ -236,6 +293,20 @@ def test_scan_cs_no_namespace_orphan(tmp_path):
     assert file_ns == {}
     assert import_rows == []
     assert files == 1  # 扫描计数仍诚实
+
+
+def test_scan_cs_bom_prefix_immune(tmp_path):
+    """BOM 前缀（\ufeff 非词字符）不破坏 \b 边界——using/namespace 解析完好。"""
+    repo = tmp_path / "proj"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Store.cs").write_text(
+        "\ufeffusing Cs.Api;\nnamespace Cs.Store;\n", encoding="utf-8"
+    )
+    (repo / "src" / "Api.cs").write_text("namespace Cs.Api;\n", encoding="utf-8")
+    file_ns, import_rows, files, tests_excluded, timed_out = s7_enforce_cs.scan_cs(repo)
+    assert timed_out is False
+    assert file_ns["src/Store.cs"] == ["Cs.Store"]
+    assert [r["target"] for r in import_rows] == ["Cs.Api"]
 
 
 def test_scan_cs_timeout(tmp_path):

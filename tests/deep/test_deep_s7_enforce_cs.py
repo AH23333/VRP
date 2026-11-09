@@ -254,3 +254,47 @@ def test_enforce_cs_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_cs_e2e_review_batch_regressions(tmp_path):
+    """review 批修正回归：BOM+未闭合串+空插值串+段间注释+global:: 五合一——修复前 0 违例假阴。"""
+    repo = _mk_repo(tmp_path)
+    (repo / "src" / "Deep" / "Store" / "Store.cs").write_text(
+        "\ufeff"
+        "namespace Deep.Wip\n"
+        "{\n"
+        "    public class W\n"
+        "    {\n"
+        "        public string S = \"wip\n"
+        "    }\n"
+        "}\n"
+        "namespace Deep.Store\n"
+        "{\n"
+        "    using global::Deep /* c */ .Api;\n"
+        "    public class Store\n"
+        "    {\n"
+        "        public string Empty() => $\"\";\n"
+        "        public string Get() => new Handler().Handle();\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    pathology, kind, source, anchor, file_path, line, payload = rows[0]
+    assert (pathology, kind, source) == ("P9", "layer-violation", "s7-enforce")
+    assert (anchor, file_path, line) == ("g1", "src/Deep/Store/Store.cs", 10)
+    data = json.loads(payload)
+    assert data["importer"] == "Deep.Store"
+    assert data["imported"] == "Deep.Api"
+    assert data["chain"] == ["Deep.Store", "Deep.Api"]
+    assert data["line"] == 10

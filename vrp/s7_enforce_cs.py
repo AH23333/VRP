@@ -7,8 +7,15 @@
   嵌套块全名拼接）。CBM C# 符号 qualified name 是路径式（cs-cbm-probe.src.Api.Api），
   故容器一律 fid→file_path→读文件解析 namespace。
 - using 指令：`using X.Y;` / `using static X.Y.Z;` / 别名 `using A = B.C.D;`
-  （目标取别名右侧）/ `global using ...`；using 语句（`using var x = f();` /
+  （目标取别名右侧）/ `global using ...` / `global::` 限定符（using 目标、static
+  目标、别名右侧三处均支持）；using 语句（`using var x = f();` /
   `using (x) {...}`）词形不匹配（`var`/`(` 后无 `;`/`=` 直接收尾）。
+- 自由格式（C# token 间空白自由，dotnet 9 探针实证 2026-11-08）：点号段间
+  空白/换行/注释、关键字后换行均合法——正则宽容匹配后捕获清洗
+  （`_clean_name` 移除 token 间空白）。
+- 词法：普通串换行即截断（CS1010——未闭合 WIP 串不吞后续行真代码，跨行须
+  verbatim `@"..."`（"" 转义）或 raw 3+ 引号）；`$@/@$` 前缀一律 verbatim
+  插值（非 raw，探针 A:5 实证）；插值前缀归一到对应底座；字符字面量。
 - using 归属：命名空间花括号内 → 该命名空间（嵌套取最内全名）；命名空间外
   （文件级）→ 文件全部命名空间（编译器可见性近似）；无 namespace 文件 = orphan 不入图。
 - using 目标解析 = 命名空间上下文优先（`f"{ns}.{target}"`）再全局，各自对已知
@@ -22,6 +29,7 @@
 - 诚实局限（文档化不静默）：
   * 无 namespace 声明文件不入图不参与执法（orphan 计数）
   * #if 预处理指令不评估（全部按生产计，保守方向）
+  * `alias::` 别名限定符不支持（需别名表；`global::` 支持）
   * 插值字符串插值孔内嵌双引号（C# 11 raw string 之前的非法形态）不支持
   * 构建目录（bin/obj/node_modules/packages/target/build/.*）跳过（产物无源码语义）
   * 扫描超时 → enforcer-failed（部分图不可信，不静默截断）
@@ -49,14 +57,19 @@ SKIP_DIRS = {"bin", "obj", "packages", "node_modules", "target", "build"}
 _TEST_SEGMENTS = {"test", "tests"}
 
 _NS_RE = re.compile(
-    r"\bnamespace\s+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"\bnamespace\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)"
 )
 _USING_RE = re.compile(
-    r"(?:\bglobal\s+)?\busing\s+(?:static\s+)?"
-    r"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
-    r"(?:\s*=\s*([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*))?"
+    r"(?:\bglobal\s+)?\busing\s+(?:static\s+)?(?:global\s*::\s*)?"
+    r"([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"(?:\s*=\s*(?:global\s*::\s*)?([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*))?"
     r"\s*;"
 )
+
+
+def _clean_name(name: str) -> str:
+    """自由格式捕获清洗：token 间空白（含换行与空白化的注释）移除。"""
+    return re.sub(r"\s+", "", name)
 
 
 # ------------------------------------------------------------------ 词法底座
@@ -89,23 +102,19 @@ def _blank_noncode(text: str) -> str:
                     out[k] = " "
             i = j
         elif text.startswith(('$@"', "@$\""), i):
-            j = _verbatim_end(text, i + 3)
-            for k in range(i, min(j, n)):
-                if out[k] != "\n":
-                    out[k] = " "
-            i = j
-        elif two == '@"':
             j = _verbatim_end(text, i + 2)
             for k in range(i, min(j, n)):
                 if out[k] != "\n":
                     out[k] = " "
             i = j
-        elif text.startswith('$"""', i) or text.startswith("$@\"", i):
-            # 插值 raw / 插值普通（$ 前缀归一：raw 从 i+1 起，普通从 i+1 起）
-            if text[i + 1] == '"':
-                j = _raw_end(text, i + 1)
-            else:
-                j = _string_end(text, i + 2)
+        elif two == '@"':
+            j = _verbatim_end(text, i + 1)
+            for k in range(i, min(j, n)):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+        elif text.startswith('$"""', i):
+            j = _raw_end(text, i + 1)
             for k in range(i, min(j, n)):
                 if out[k] != "\n":
                     out[k] = " "
@@ -117,7 +126,7 @@ def _blank_noncode(text: str) -> str:
                     out[k] = " "
             i = j
         elif text.startswith('$"', i):
-            j = _string_end(text, i + 2)
+            j = _string_end(text, i + 1)
             for k in range(i, min(j, n)):
                 if out[k] != "\n":
                     out[k] = " "
@@ -140,10 +149,17 @@ def _blank_noncode(text: str) -> str:
 
 
 def _string_end(text: str, i: int) -> int:
+    """普通字符串结束位置；换行即截断（C# 普通串不得含字面换行 CS1010，跨行须 verbatim/raw）。
+
+    未闭合串（WIP 文件）在行尾截断——不吞后续行的真 using/namespace；
+    行尾反斜杠不越过换行（反斜杠+换行非合法转义，视同未闭合）。
+    """
     j = i + 1
     n = len(text)
     while j < n:
-        if text[j] == "\\":
+        if text[j] == "\n":
+            return j
+        if text[j] == "\\" and text[j + 1 : j + 2] != "\n":
             j += 2
             continue
         if text[j] == '"':
@@ -225,11 +241,11 @@ def _parse_ns_spans(blanked: str) -> list[dict]:
             j += 1
         if j < n and blanked[j] == "{":
             spans.append(
-                {"pos": m.start(), "name": m.group(1), "open": j, "kind": "block"}
+                {"pos": m.start(), "name": _clean_name(m.group(1)), "open": j, "kind": "block"}
             )
         elif j < n and blanked[j] == ";":
             spans.append(
-                {"pos": m.start(), "name": m.group(1), "open": j, "kind": "file"}
+                {"pos": m.start(), "name": _clean_name(m.group(1)), "open": j, "kind": "file"}
             )
     full: dict[int, str] = {}
     for s in spans:
@@ -260,7 +276,7 @@ def _iter_usings(blanked: str, spans: list[dict]) -> list[dict]:
     """using 指令 → [{line, ns, target}]；ns=None 表示文件级（文件全部命名空间）。"""
     rows: list[dict] = []
     for m in _USING_RE.finditer(blanked):
-        target = m.group(2) if m.group(2) else m.group(1)
+        target = _clean_name(m.group(2) if m.group(2) else m.group(1))
         line = blanked.count("\n", 0, m.start()) + 1
         inner = None
         for s in spans:
