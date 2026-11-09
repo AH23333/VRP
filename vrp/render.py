@@ -247,7 +247,10 @@ def _architecture_ir_dir_fallback(repo: Path, con: sqlite3.Connection) -> dict:
 
 
 def build_sequence_ir(repo: Path, con: sqlite3.Connection, slice_id: str) -> dict:
-    """业务线时序 IR：steps→participants、相邻步→messages（y 等距）、acts→segments。"""
+    """业务线时序 IR：steps→participants、相邻步→messages（y 等距）、acts→segments。
+
+    坏 payload_json → SystemExit（调用方 render_report 跳过该 slice，不崩整报告）。
+    """
     if not _has_table(con, "slices"):
         raise SystemExit(f"render_slice: slices table missing (pre-R2' facts.db): {slice_id}")
     row = con.execute(
@@ -255,7 +258,10 @@ def build_sequence_ir(repo: Path, con: sqlite3.Connection, slice_id: str) -> dic
     ).fetchone()
     if row is None:
         raise SystemExit(f"render_slice: unknown or inactive slice_id: {slice_id}")
-    payload = json.loads(row[1])
+    try:
+        payload = json.loads(row[1])
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"render_slice: corrupt payload for slice_id: {slice_id} ({e})")
     steps = payload.get("steps", [])
     participants = []
     seen: set[str] = set()
@@ -309,7 +315,9 @@ _KIND_BY_STATUS = {
 
 
 def build_timeline_ir(verdicts: list[dict]) -> dict:
-    """verdict 时间线 IR：open 优先在前，committed/rolled_back 按 verdict_at。"""
+    """verdict 时间线 IR：事件按 load_verdicts 顺序（verdict_at 升序）呈现；
+    kind 由状态映射（alert/recovery/change）。
+    """
     events = []
     for v in verdicts[:VERDICTS_CAP]:
         events.append({
@@ -334,7 +342,12 @@ def build_timeline_ir(verdicts: list[dict]) -> dict:
 
 
 def build_sarif(repo: Path, con: sqlite3.Connection, tool_version: str) -> dict:
-    """findings → SARIF 2.1.0（手写 JSON，行级诊断；L3 明细层零筛选）。"""
+    """findings → SARIF 2.1.0（手写 JSON，行级诊断；L3 明细层，cap SARIF_FINDINGS_CAP；
+    超限截断并在 runs[0].properties 标注 findings 总数，SARIF propertyBag 标准字段）。
+    """
+    total = con.execute(
+        "SELECT COUNT(*) FROM findings WHERE file_path IS NOT NULL AND file_path != ''"
+    ).fetchone()[0]
     results = []
     for r in con.execute(
         "SELECT pathology, kind, source, file_path, start_line, payload_json FROM findings"
@@ -353,13 +366,16 @@ def build_sarif(repo: Path, con: sqlite3.Connection, tool_version: str) -> dict:
                 }
             }],
         })
+    run: dict = {
+        "tool": {"driver": {"name": "vrp", "version": tool_version, "informationUri": "https://github.com/DeusData/vibe-restruct-pipe"}},
+        "results": results,
+    }
+    if total > SARIF_FINDINGS_CAP:
+        run["properties"] = {"findings_total": total, "results_cap": SARIF_FINDINGS_CAP}
     return {
         "version": "2.1.0",
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "runs": [{
-            "tool": {"driver": {"name": "vrp", "version": tool_version, "informationUri": "https://github.com/DeusData/vibe-restruct-pipe"}},
-            "results": results,
-        }],
+        "runs": [run],
     }
 
 

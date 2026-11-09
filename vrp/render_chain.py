@@ -140,14 +140,17 @@ def _norm(fp: str) -> str:
 
 def _load_structure(con: sqlite3.Connection) -> tuple[list[dict], list[dict]] | None:
     """structure active (modules, layers)（模块交互图链仅源自 curated structure；
-    无 structure/无 active/空 modules → None（调用方降级 L1/L2））。
+    缺表（pre-R2' 旧库）/无 active/空 modules → None（调用方降级 L1/L2））。
 
     返回 layers 一并透出（index 按层序排序/层徽标）；模块 dict 自带
     responsibility/layer 等 AI 梳理字段，调用方负责透传到用户产物。
     """
-    row = con.execute(
-        "SELECT payload_json FROM structure WHERE status = 'active' ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    try:
+        row = con.execute(
+            "SELECT payload_json FROM structure WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
     if row is None:
         return None
     try:

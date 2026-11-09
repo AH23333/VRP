@@ -180,6 +180,44 @@ def test_sarif(tmp_path):
     assert run["results"][0]["ruleId"] == "P1"
     loc = run["results"][0]["locations"][0]["physicalLocation"]
     assert loc["artifactLocation"]["uri"] == "pkg/x.py" and loc["region"]["startLine"] == 2
+    assert "properties" not in run  # 未超 cap 无截断标注
+
+
+def test_sarif_truncation_annotated(tmp_path):
+    """R-C F-2：SARIF 超过 SARIF_FINDINGS_CAP 时截断，run properties 诚实标注总数。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    cap = render.SARIF_FINDINGS_CAP
+    con.executemany(
+        "INSERT INTO findings (pathology, kind, source, file_path, start_line, payload_json)"
+        " VALUES ('P9', 'k', 's2-astgrep', ?, ?, '{}')",
+        [(f"pkg/f{i}.py", i + 1) for i in range(cap + 5)],
+    )
+    con.commit()
+    con.row_factory = sqlite3.Row
+    total = con.execute(
+        "SELECT COUNT(*) FROM findings WHERE file_path IS NOT NULL AND file_path != ''"
+    ).fetchone()[0]
+    assert total > cap  # 前置：确已超限
+    sarif = render.build_sarif(repo, con, "test")
+    con.close()
+    run = sarif["runs"][0]
+    assert len(run["results"]) == cap
+    props = run["properties"]
+    assert props["findings_total"] == total and props["results_cap"] == cap
+
+
+def test_timeline_ir_follows_verdict_at_order(tmp_path):
+    """R-C F-3：时间线事件按 load_verdicts 顺序（verdict_at 升序），与 docstring 一致。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _mk_verdict(repo, "tx-3", "2026-11-04T11:00:00+00:00")
+    _mk_verdict(repo, "tx-1", "2026-11-04T09:00:00+00:00")
+    _mk_verdict(repo, "tx-2", "2026-11-04T10:00:00+00:00")
+    verdicts = s6_transact.load_verdicts(repo)
+    ir = render.build_timeline_ir(verdicts)
+    assert [e["id"] for e in ir["events"]] == ["tx-1", "tx-2", "tx-3"]
 
 
 # ----------------------------------------------------------------- Mermaid
@@ -261,6 +299,42 @@ def test_render_report_git_head_missing_graceful(tmp_path, monkeypatch):
     result = render.render_report(repo)
     report = Path(result["report"]).read_text(encoding="utf-8")
     assert "(none)" in report  # git_head 缺失显式标注，不崩
+
+
+def test_render_report_skips_corrupt_slice_payload(tmp_path, monkeypatch):
+    """R-C F-1：坏 payload_json 的 active slice 被跳过（SystemExit 语义），不崩整报告。"""
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, payload_json, status)"
+        " VALUES ('zz-bad', 'bad', 's', 'NOT-JSON', 'active')"
+    )
+    con.commit()
+    con.close()
+    result = render.render_report(repo)  # 修复前此处抛 json.JSONDecodeError
+    out = repo / ".vrp" / "report"
+    assert (out / "report.html").is_file()
+    assert (out / "slice-flow.mmd").is_file()  # 好 slice 正常渲染
+    assert not (out / "slice-zz-bad.mmd").exists()  # 坏 slice 跳过
+    assert result["counts"]["slices"] == 1  # 只有好 slice 计数
+
+
+def test_build_chain_missing_structure_table(tmp_path):
+    """R-C F-4：pre-R2' 旧库无 structure 表——build_chain 诚实降级，不裸抛 OperationalError。"""
+    if shutil.which("node") is None:
+        pytest.skip("node not in PATH")
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("DROP TABLE structure")
+    con.commit()
+    con.close()
+    res = render_chain.build_chain(repo, tmp_path / "chain", tmp_path / "no.mjs")
+    assert res["ok"] is False
+    assert any("structure" in n for n in res["notes"])
 
 
 def test_render_report_real_archify(tmp_path):
