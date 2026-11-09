@@ -345,6 +345,24 @@ def test_check_edits_degrades_per_file_on_run_failure(tmp_path, monkeypatch):
     assert report["checked"] == 0
 
 
+def test_check_edits_changed_no_blocks_degrades(tmp_path, monkeypatch):
+    """changed 却零块 = 形状漂移——按文件降级，绝不静默 accounted（诚实性）。"""
+    repo = _mk_repo(tmp_path)
+    pre_db = _mk_span_db(tmp_path / "pre.db", [])
+    post_db = _mk_span_db(tmp_path / "post.db", [])
+
+    def fake_run(binary, old_path, new_path, timeout=60):
+        return {"ok": True, "returncode": 0, "stderr_tail": "", "parsed": {"language": "Python", "path": "a.py", "status": "changed", "chunks": []}}
+
+    monkeypatch.setattr(s6_difftastic, "find_difftastic", lambda: "difft")
+    monkeypatch.setattr(s6_difftastic, "run_difftastic", fake_run)
+    report = s6_difftastic.check_edits(repo, _mk_tx("T2"), pre_db, post_db)
+    assert report["status"] == "ok"  # degraded, non-blocking
+    assert report["degraded"] == [{"file": "a.py", "reason": "changed-no-blocks"}]
+    assert "a.py" not in report["files"]
+    assert report["checked"] == 0
+
+
 def test_module_docstring_documents_probe():
     doc = s6_difftastic.__doc__
     assert "DFT_UNSTABLE" in doc

@@ -655,3 +655,55 @@ def test_transact_batch_continue_on_fail(tmp_path, monkeypatch):
     assert result["stopped_at"] is None
     assert result["committed"] == 1
     assert s6_transact.git_clean(repo)
+
+
+def test_transact_refuses_dirty_tree(tmp_path, monkeypatch):
+    """脏树前置在 transact 唯一代码路径内强制——MCP tx_run/直调不得把 WIP 卷进 tx 提交。"""
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    _patch_pipeline(monkeypatch, [("f1", "p.a.old")])
+    (repo / "a.py").write_text("DIRTY = True\n", encoding="utf-8")
+    tx = _write_tx(
+        tmp_path,
+        {"id": "tx-dirty", "type": "T2", "summary": "dirty", "edits": [{"file": "a.py", "op": "modify", "content": "x = 1\n"}]},
+    )
+    with pytest.raises(RuntimeError, match="working tree not clean"):
+        s6_transact.transact(repo, tx, "proj")
+    # 拒绝发生在任何变更/登记之前
+    assert (repo / "a.py").read_text(encoding="utf-8") == "DIRTY = True\n"
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        assert con.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 0
+    finally:
+        con.close()
+
+
+def test_transact_commit_failure_aborted_not_fake_committed(tmp_path, monkeypatch):
+    """commit 先于 committed 记账：提交失败必须回滚+诚实 aborted（G6），不得留下 DB=committed 假象。"""
+
+    def failing_commit(repo_arg, message):
+        raise RuntimeError("git commit failed: nothing to commit, working tree clean")
+
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    _patch_pipeline(monkeypatch, [("f1", "p.a.old")])
+    monkeypatch.setattr(s6_transact, "git_commit_all", failing_commit)
+    same = (repo / "a.py").read_text(encoding="utf-8")
+    tx = _write_tx(
+        tmp_path,
+        {"id": "tx-noop", "type": "T3", "summary": "noop", "edits": [{"file": "a.py", "op": "modify", "content": same}]},
+    )
+    verdict = s6_transact.transact(repo, tx, "proj")
+    assert verdict["status"] == "aborted"
+    assert verdict["failed_gate"] == "G6"
+    gate = [g for g in verdict["gates"] if g["gate"] == "G6"][0]
+    assert gate["status"] == "fail"
+    assert gate["detail"]["reason"] == "commit-failed"
+    assert gate["detail"]["code"] == "gate/G6/commit-failed"
+    assert (repo / ".vrp" / "verdicts" / "tx-noop.json").is_file()
+    assert s6_transact.git_clean(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        assert con.execute("SELECT status FROM transactions WHERE tid = 'tx-noop'").fetchone()[0] == "aborted"
+    finally:
+        con.close()

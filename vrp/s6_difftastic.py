@@ -11,9 +11,11 @@ Difftastic 0.72.0 probe facts (2026-11-04, work/probe_difft.py):
   {language, path, status: "changed"|"unchanged", aligned_lines, chunks}.
   chunks: list of chunk lists; each block {"lhs": {...}?, "rhs": {...}?};
   a side is {line_number (0-based), changes: [{start, end, content,
-  highlight}]}. Pure removals -> lhs-only block; pure additions -> rhs-only
+  highlight}]}.   Pure removals -> lhs-only block; pure additions -> rhs-only
   block; modifications -> both sides. Unknown status values are treated as
-  per-file degradation, never as pass/fail.
+  per-file degradation, never as pass/fail; a "changed" status with zero
+  extractable blocks is likewise per-file degradation ("changed-no-blocks")
+  -- shape drift must degrade, never silently pass as accounted.
 - rc is always 0 under --display json (changed or unchanged); --exit-code
   unused by us.
 - Whitespace/indentation reformat reports no changes (structural diff), but
@@ -262,8 +264,14 @@ def check_edits(repo: Path, tx: dict, pre_db: Path, post_db: Path, timeout: int 
         if status not in _KNOWN_STATUSES:
             degraded.append({"file": rel, "reason": f"status={status}"})
             continue
+        blocks = extract_blocks(parsed)
+        if not blocks:
+            # changed 却提取不出任何块 = JSON 形状漂移（0.72.0 的 changed
+            # 文件必有 chunks）——按文件降级上报，绝不静默当 accounted 放行。
+            degraded.append({"file": rel, "reason": "changed-no-blocks"})
+            continue
         bad = []
-        for block in extract_blocks(parsed):
+        for block in blocks:
             lhs = block.get("lhs")
             rhs = block.get("rhs")
             # 分类按 token 有无而非侧字典真值：difftastic 的纯删除是

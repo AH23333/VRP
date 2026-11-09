@@ -7,7 +7,10 @@ rule since the stdlib ships no YAML parser):
      "declared_moves": [{"from": "pkg.old", "to": "pkg.new"}],
      "edits": [{"file": "pkg/a.py", "op": "modify", "content": "..."}]}
 
-Flow: clean-tree precheck -> register tx -> apply edits -> G1 rescan
+Flow: clean-tree precheck (enforced inside transact itself: RuntimeError on a
+dirty tree -- CLI, MCP tx_run and direct callers all pass through this single
+gate; `git add -A` must never sweep unrelated WIP into the tx commit) ->
+register tx -> apply edits -> G1 rescan
 (CBM reindex + ETL to a side facts.db; same-name reindex prunes deleted
 symbols, verified empirically) -> G2 lint/typecheck -> G3 test -> G4
 declared_moves / usage-edge equivalence (T1) / dangling references (T2)
@@ -16,7 +19,10 @@ difftastic structural signal (content-level: undeclared structural changes
 in modified files fail as gate/G4/structural-change; both degrade
 non-blocking when unavailable) -> G5 dead-code monotonic (T2/T4); first
 failure rolls the working tree back; all pass -> git commit + promote
-facts.db. T4 requires --confirm. Every run writes .vrp/verdicts/<tid>.json
+facts.db (the commit precedes the committed bookkeeping: a failed commit
+rolls the tree back and writes an honest "aborted" verdict under gate G6 --
+facts.db must never claim committed without a git commit). T4 requires
+--confirm. Every run writes .vrp/verdicts/<tid>.json
 with stable rule codes (RULE_CODES) on every failing gate. transact_batch
 consumes a directory of transaction files in sorted order, stopping at the
 first non-committed verdict.
@@ -60,6 +66,7 @@ RULE_CODES = {
     ("G4", "verify-broken"): "gate/G4/verify-broken",
     ("G4", "structural-change"): "gate/G4/structural-change",
     ("G5", "dead-code-increase"): "gate/G5/dead-code-increase",
+    ("G6", "commit-failed"): "gate/G6/commit-failed",
 }
 
 
@@ -337,6 +344,11 @@ def transact(
     timeout: int = 900,
 ) -> dict:
     tx = load_transaction(tx_path)
+    if not git_clean(repo):
+        # 脏树前置：git add -A 会把无关 WIP 卷进 tx 提交——CLI 有预检但
+        # MCP tx_run / 直调没有，故在唯一代码路径 transact 内强制（2026-11-09
+        # 二轮 review 实证：脏树下 T2 可一路走到 committed，用户 WIP 被提交）。
+        raise RuntimeError(f"working tree not clean - commit or stash first: {repo}")
     tid_safe = TID_SAFE.sub("_", tx["id"])
     facts_db = repo / ".vrp" / "facts.db"
     post_db = repo / ".vrp" / f"facts.db.post-{tid_safe}"
@@ -514,13 +526,20 @@ def transact(
         return finish("rolled_back", gates, failed, {"rollback": rollback, "confidence": confidence})
 
     post_db.unlink(missing_ok=True)
+    try:
+        commit = git_commit_all(repo, f"vrp {tx['id']}: {tx['summary']} [{tx['type']}]")
+    except RuntimeError as exc:
+        # 提交先于记账：commit 失败（如全 no-op edits 无可提交）绝不能留下
+        # DB=committed 却无 git 提交的假象——回滚树 + 诚实 aborted 裁决（G6）。
+        rollback = rollback_edits(repo, tx["edits"])
+        gates.append({"gate": "G6", "status": "fail", "detail": {"reason": "commit-failed", "error": str(exc)[:500]}})
+        return finish("aborted", gates, "G6", {"rollback": rollback})
     _attach_codes(gates)
     con = sqlite3.connect(facts_db)
     try:
         _record(con, tx, "committed", gates)
     finally:
         con.close()
-    commit = git_commit_all(repo, f"vrp {tx['id']}: {tx['summary']} [{tx['type']}]")
     etl.run_etl(repo, name, out_db=facts_db)
     verdict = {
         "tid": tx["id"],
