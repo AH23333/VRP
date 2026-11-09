@@ -217,3 +217,41 @@ def test_enforce_rs_e2e_compliant_repo_clean(tmp_path):
     assert out["violations"] == 0
     assert out["findings_written"] == 0
     assert _rows(repo) == []
+
+
+def test_enforce_rs_e2e_inline_mod_dep_not_missed(tmp_path):
+    """生产行内 mod use 不再丢失（review 批，rustc 探针 P2）：
+    store/mod.rs 行内 helper 依赖 api::client——旧版一刀切空白化行内体 → 假阴 0。"""
+    repo = _mk_repo(tmp_path)
+    (repo / "src" / "store" / "db.rs").write_text(
+        "pub fn get() -> u32 { 0 }\n", encoding="utf-8"
+    )
+    (repo / "src" / "store" / "mod.rs").write_text(
+        "pub mod db;\n"
+        "mod helper {\n"
+        "    use crate::api::client::handle;\n"
+        "    pub(crate) fn go() -> u32 { handle() }\n"
+        "}\n"
+        "pub fn call() -> u32 { helper::go() }\n",
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    pathology, kind, source, anchor, file_path, line, payload = rows[0]
+    assert (pathology, kind, source) == ("P9", "layer-violation", "s7-enforce")
+    assert anchor == "g1"  # src/store/mod.rs 首符号
+    assert file_path == "src/store/mod.rs"
+    assert line == 3  # 行内 use 真行号
+    data = json.loads(payload)
+    assert data["importer"] == "store"
+    assert data["imported"] == "api::client"
+    assert data["chain"] == ["store", "api::client"]

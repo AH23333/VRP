@@ -213,6 +213,120 @@ def test_scan_use_edges_excludes_tests_and_extern(tmp_path):
     assert [(e["file"], e["line"]) for e in edges] == [("src/store.rs", 8)]
 
 
+def test_scan_use_edges_counts_production_inline_mod_use(tmp_path):
+    """生产行内 mod 体 use 是真实编译期依赖边（rustc 探针 P2）——计入且行号保真。"""
+    repo = tmp_path / "crate"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "lib.rs").write_text("mod api;\nmod store;\n", encoding="utf-8")
+    (repo / "src" / "api.rs").write_text("pub fn handle() {}\n", encoding="utf-8")
+    (repo / "src" / "store.rs").write_text(
+        "mod helper {\n    use crate::api::{handle};\n    pub(crate) fn go() { handle(); }\n}\n"
+        "pub fn get() { helper::go(); }\n",
+        encoding="utf-8",
+    )
+    file_mod, _timed_out = s7_enforce_rs.build_mod_tree(repo)
+    graph, edges, _files, timed_out = s7_enforce_rs.scan_use_edges(repo, file_mod)
+    assert timed_out is False
+    assert graph["store"] == ["api"]  # 行内 mod use 边不再丢弃
+    assert [(e["file"], e["line"]) for e in edges] == [("src/store.rs", 2)]
+
+
+def test_scan_use_edges_inline_mod_super_nested(tmp_path):
+    """行内 mod 内 super=enclosing（探针 P3）：边 store→store::logger；嵌套行内下钻。"""
+    repo = tmp_path / "crate"
+    (repo / "src" / "store").mkdir(parents=True)
+    (repo / "src" / "lib.rs").write_text("mod api;\nmod store;\n", encoding="utf-8")
+    (repo / "src" / "api.rs").write_text("pub fn handle() {}\n", encoding="utf-8")
+    (repo / "src" / "store.rs").write_text(
+        "mod logger;\n"
+        "mod outer {\n"
+        "    mod inner {\n"
+        "        use crate::api::handle;\n"
+        "    }\n"
+        "}\n"
+        "mod helper {\n"
+        "    use super::logger::log_it;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (repo / "src" / "store" / "logger.rs").write_text("pub fn log_it() {}\n", encoding="utf-8")
+    file_mod, _timed_out = s7_enforce_rs.build_mod_tree(repo)
+    assert file_mod["src/store/logger.rs"] == "store::logger"
+    graph, edges, _files, timed_out = s7_enforce_rs.scan_use_edges(repo, file_mod)
+    assert timed_out is False
+    assert graph["store"] == ["api", "store::logger"]  # crate 绝对 + super 解析
+    edge_set = {(e["file"], e["line"], e["dst"]) for e in edges}
+    assert ("src/store.rs", 4, "api") in edge_set
+    assert ("src/store.rs", 8, "store::logger") in edge_set
+
+
+def test_scan_use_edges_skips_macro_rules_def_bodies(tmp_path):
+    """macro_rules 定义体是模板非真实边（探针 P5）——体内 use 不计、体内 mod 不入树。"""
+    repo = tmp_path / "crate"
+    (repo / "src" / "store").mkdir(parents=True)
+    (repo / "src" / "lib.rs").write_text("mod api;\nmod store;\n", encoding="utf-8")
+    (repo / "src" / "api.rs").write_text("pub fn handle() {}\n", encoding="utf-8")
+    (repo / "src" / "store.rs").write_text(
+        "macro_rules! fake {\n"
+        "    () => { mod fake_mod; };\n"
+        "}\n"
+        "macro_rules! fake_use {\n"
+        "    () => { use crate::api::handle; };\n"
+        "}\n"
+        "mod logger;\n",
+        encoding="utf-8",
+    )
+    (repo / "src" / "store" / "fake_mod.rs").write_text("pub fn f() {}\n", encoding="utf-8")
+    (repo / "src" / "store" / "logger.rs").write_text("pub fn log_it() {}\n", encoding="utf-8")
+    file_mod, _timed_out = s7_enforce_rs.build_mod_tree(repo)
+    assert "src/store/fake_mod.rs" not in file_mod  # 体内模板 mod 不产幻影树条目
+    assert file_mod["src/store/logger.rs"] == "store::logger"  # 真 mod 声明保留
+    graph, _edges, _files, timed_out = s7_enforce_rs.scan_use_edges(repo, file_mod)
+    assert timed_out is False
+    assert graph.get("store", []) == []  # 模板 use 不误计
+
+
+def test_scan_use_edges_multiline_string_no_phantom(tmp_path):
+    """普通串跨行合法（探针 P1）——串内伪 use 不产边（kt/cs/java 行截断修法不适用）。"""
+    repo = tmp_path / "crate"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "lib.rs").write_text("mod api;\nmod store;\n", encoding="utf-8")
+    (repo / "src" / "api.rs").write_text("pub fn handle() {}\n", encoding="utf-8")
+    (repo / "src" / "store.rs").write_text(
+        'static S: &str = "line1\nuse crate::api::handle;\nline3";\npub fn get() -> usize { S.len() }\n',
+        encoding="utf-8",
+    )
+    file_mod, _timed_out = s7_enforce_rs.build_mod_tree(repo)
+    graph, _edges, _files, timed_out = s7_enforce_rs.scan_use_edges(repo, file_mod)
+    assert timed_out is False
+    assert graph.get("store", []) == []
+
+
+def test_iter_uses_ctx_cur_tracking():
+    """上下文 cur 跟踪：嵌套行内 mod 内 use 按行内路径解析（探针 P3/P7）。"""
+    text = s7_enforce_rs._blank_test_mods(
+        s7_enforce_rs._blank_macro_defs(
+            s7_enforce_rs._blank_noncode(
+                "mod outer {\n"
+                "    use crate::api::handle;\n"
+                "    mod inner {\n"
+                "        use super::x;\n"
+                "        use self::y;\n"
+                "    }\n"
+                "}\n"
+                "use crate::top;\n"
+            )
+        )
+    )
+    got = s7_enforce_rs._iter_uses_ctx(text, ["store"])
+    assert [(list(cur), [list(s) for s in paths]) for _pos, paths, cur in got] == [
+        (["store", "outer"], [["crate", "api", "handle"]]),
+        (["store", "outer", "inner"], [["super", "x"]]),
+        (["store", "outer", "inner"], [["self", "y"]]),
+        (["store"], [["crate", "top"]]),
+    ]
+
+
 def test_find_violations_bfs_shortest_chain():
     graph = {"a": ["b", "mid"], "mid": ["c"], "b": ["c"], "c": [], "w": []}
     contracts = [
@@ -497,6 +611,32 @@ def test_run_rs_cfg_test_file_module_excluded(tmp_path):
     assert out["status"] == "ok"
     assert out["violations"] == 1  # 仅 store 的生产 use
     assert out["files"] == 3  # tests.rs 不在树
+
+
+def test_run_rs_inline_mod_violation_e2e(tmp_path):
+    """行内 mod use 依赖边全程可见（探针 P2）：run_rs 级违例锚定真 use 行。"""
+    repo = _mk_rs_repo(tmp_path)
+    (repo / "src" / "store.rs").write_text(
+        "mod helper {\n    use crate::api::handle;\n    pub(crate) fn go() { handle(); }\n}\n"
+        "pub fn get() { helper::go(); }\n",
+        encoding="utf-8",
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_rs.run_rs(repo, con, json.loads(RS_STRUCTURE), "active", RS_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1  # 旧版行内 use 被丢弃 → 假阴 0
+    row = sqlite3.connect(repo / ".vrp" / "facts.db").execute(
+        "SELECT file_path, start_line, payload_json FROM findings"
+    ).fetchone()
+    assert row[0] == "src/store.rs"
+    assert row[1] == 2  # 行内 use 真行号
+    payload = json.loads(row[2])
+    assert payload["importer"] == "store"
+    assert payload["imported"] == "api"
+    assert payload["chain"] == ["store", "api"]
 
 
 # ------------------------------------------------------ run() 路由

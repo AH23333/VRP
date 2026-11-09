@@ -8,11 +8,27 @@
 - mod 树构建：root=src/lib.rs（缺失时 src/main.rs——lib/main 是不同 crate 的根，
   同时入树会把两个 crate 混进同一命名空间）；`mod NAME;` 文件声明解析
   （parent=mod.rs 或 crate root → 同目录 name.rs|name/mod.rs；2018 风格非 mod.rs
-  文件 → <stem>/name.rs|<stem>/name/mod.rs）。
+  文件 → <stem>/name.rs|<stem>/name/mod.rs）；行内 mod 体不入树（树视图空白化
+  行内体——防体内嵌套 `mod X;` 文件声明误按兄弟目录解析）。
 - use 树解析：crate::/self::/super:: 根关键字；嵌套花括号展开
   （`use crate::api::{client::{get, post}, handler};`）；`as` 重命名/`*` glob
   （含路径后 glob `use crate::api::*;`）/多行；注释（含嵌套块注释）/字符串/字符
   字面量/原始字符串先空白化（保长度保行号）。
+- **普通串跨行合法（review 批记实，rustc 探针 P1）**：Rust 普通串字面量可含裸
+  换行——与 Java/C#/Kotlin 串内禁换行相反，kt/cs/java 批的「未闭合串换行截断」
+  家族修法对 Rust 不适用（截断会把合法多行串后段当代码产幻影边）；未闭合串
+  （rustc E0765）扫描至 EOF 保守空白化——换行截断无语法依据。
+- **行内 mod use 计入（review 批修正，探针 P2/P3/P7）**：生产行内 mod 体
+  （`mod helper { use crate::api; }`）是真实编译期依赖边，与函数体内局部 use
+  同理计入（「编译期真实依赖边」原则）；use 视图（_read_use_view）保留行内体，
+  _iter_uses_ctx 递归下钻：self/super 相对行内路径解析（super=enclosing 模块），
+  边归属性=所在文件模块（行内 mod 无独立文件节点）；`use super::*` 解析回
+  enclosing=自身自环跳过。旧版把树视图（行内体一刀切空白化）同时用作 use 扫描，
+  生产行内 use 边被静默丢弃（假阴）。
+- **macro_rules 定义体跳过（review 批修正，探针 P5）**：定义体是模板非真实边——
+  _blank_macro_defs 空白化 `macro_rules! name { ... }` 体（旧版体内裸 use 被误计
+  假阳、体内模板 `mod X;` 被当文件声明解析出幻影树条目）；调用点宏展开
+  （如 gen_mod!() 生成 mod/use）不展开（诚实局限）。
 - use 目标解析 = mod 树最长前缀（`crate::api::handle` → api::handle 非模块 → api；
   根条目 `crate::CONST` → "crate"）。self/super 链按当前文件模块路径绝对化：
   绝对段表示 crate 根 = []（空），顶层模块 = ["name"]，`crate::` 前缀天然脱落；
@@ -21,9 +37,9 @@
   入 payload；锚定 = 链尾直接 use 边所在文件+行号；函数体内局部 use 同样计入
   （编译期真实依赖边，比 import-linter 只看模块顶层更严）。
 - 测试代码排除（与 go 引擎排除 TestImports 对齐）：
-  * 行内 mod 块体空白化（`#[cfg(test)] mod tests { use super::*; }` 随之排除）
   * `#[cfg(test)]` / `#[cfg(all(..., test, ...))]` 门控的 mod 声明（文件式或行内）
-    整体空白化：其子树不进 mod 树（cfg-test 文件成 orphan 诚实计数）
+    整体空白化：其子树不进 mod 树（cfg-test 文件成 orphan 诚实计数），行内体的
+    use 随声明整体排除（use 视图与树视图一致排除）
   * `cfg(not(test))`/feature 条件门控不识别（按生产代码计）；生产文件内
     `#[cfg(test)] fn` 的 use 仍计入（保守方向）
 - 诚实局限（文档化不静默）：
@@ -31,7 +47,11 @@
     本不属层执法，2015 为遗留 edition
   * `#[path]` 属性非标准路径 mod 不支持（失配文件成 orphan 诚实计数）
   * orphan 文件（mod 树不可达，含 src/bin/*）不参与容器推导与执法（未编译进 crate）
+  * glob 导入不展开：`use crate::api::*` 边指 glob 根 api，glob 可达的 pub 子模块/
+    重导出不产传递边（假阴方向，与 import-linter 同粒度）
+  * macro_rules 调用点展开生成的 mod/use 不可见（只跳过定义体——假阴方向）
   * mod 树/use 扫描超时 → enforcer-failed（部分树/图不可信，不静默截断）
+  * BOM：rustc 接受 U+FEFF（探针 P4），引擎无行首假设天然免疫
 """
 
 from __future__ import annotations
@@ -174,11 +194,11 @@ def _char_end(text: str, i: int) -> int:
     return -1
 
 
-def _find_word(text: str, word: str, start: int) -> int:
-    n = len(text)
+def _find_word(text: str, word: str, start: int, end: int | None = None) -> int:
+    n = len(text) if end is None else min(end, len(text))
     i = start
     while i < n:
-        i = text.find(word, i)
+        i = text.find(word, i, n)
         if i < 0:
             return -1
         before_ok = i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")
@@ -297,20 +317,8 @@ def _parse_group_item(text: str, i: int):
 
 
 def _iter_uses(text: str):
-    """空白化文本 → [(use 关键字位置, [路径段列表])]。"""
-    out = []
-    i = 0
-    while True:
-        i = _find_word(text, "use", i)
-        if i < 0:
-            break
-        paths, _end = _parse_use_target(text, i + 3)
-        if paths:
-            out.append((i, paths))
-            i = _end
-        else:
-            i += 3
-    return out
+    """空白化文本 → [(use 关键字位置, [路径段列表])]（扁平视图，cur=[] 兼容包装）。"""
+    return [(pos, paths) for pos, paths, _cur in _iter_uses_ctx(text, [])]
 
 
 def _iter_mod_decls(text: str):
@@ -331,6 +339,104 @@ def _iter_mod_decls(text: str):
                 continue
         i += 3
     return out
+
+
+def _match_brace(text: str, open_pos: int, end: int) -> int:
+    """i='{' → 配平 '}' 位置（含）；失配/越界 → end（保守吞余文，调用方循环终止）。"""
+    depth = 0
+    j = open_pos
+    n = min(end, len(text))
+    while j < n:
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return end
+
+
+def _blank_macro_defs(text: str) -> str:
+    """`macro_rules! name { ... }` 定义体 → 空白（换行保留）：模板非真实边。
+
+    rustc 1.97.1 探针 P5 实证：定义体可含模板 mod/use，非宏调用不生效；旧版体内
+    裸 use 被误计（假阳）、体内模板 `mod X;` 被当文件声明解析出幻影树条目。
+    调用点宏展开（如 gen_mod!() 生成 mod/use）不识别（诚实局限，见模块 docstring）。
+    """
+    out = list(text)
+    i = 0
+    n = len(text)
+    while i < n:
+        j = _find_word(text, "macro_rules", i)
+        if j < 0:
+            break
+        k = _skip_ws(text, j + len("macro_rules"))
+        if k < n and text[k] == "!":
+            k = _skip_ws(text, k + 1)
+            _name, k = _read_ident(text, k)
+            k = _skip_ws(text, k)
+            if k < n and text[k] == "{":
+                body_end = _match_brace(text, k, n)
+                for p in range(k + 1, min(body_end, n)):
+                    if out[p] != "\n":
+                        out[p] = " "
+                i = body_end + 1
+                continue
+        i = j + len("macro_rules")
+    return "".join(out)
+
+
+def _iter_uses_ctx(text: str, base_cur: list[str]):
+    """上下文感知 use 迭代 → [(use 位置, [路径段列表], 行内 mod 上下文 cur 段)]。
+
+    生产行内 mod 体递归下钻（探针 P2/P3/P7）：self/super 相对行内路径解析
+    （super=enclosing 模块），边归属性由调用方定为文件模块；文件式 `mod X;`
+    声明跳过（其文件另行扫描）；cfg(test) mod 已被 _blank_test_mods 整体空白化、
+    macro_rules 定义体已被 _blank_macro_defs 空白化，此处均不可见。
+    """
+    out: list[tuple[int, list[list[str]], list[str]]] = []
+    _walk_inline_mods(text, 0, len(text), list(base_cur), out)
+    return out
+
+
+def _walk_inline_mods(
+    text: str,
+    start: int,
+    end: int,
+    cur: list[str],
+    out: list[tuple[int, list[list[str]], list[str]]],
+) -> None:
+    i = start
+    n = min(end, len(text))
+    while i < n:
+        u = _find_word(text, "use", i, n)
+        m = _find_word(text, "mod", i, n)
+        if u < 0 and m < 0:
+            return
+        if u >= 0 and (m < 0 or u < m):
+            paths, e = _parse_use_target(text, u + 3)
+            if paths:
+                out.append((u, paths, list(cur)))
+                i = e
+            else:
+                i = u + 3
+            continue
+        j = _skip_ws(text, m + 3)
+        name, j = _read_ident(text, j)
+        if name is None:
+            i = m + 3
+            continue
+        j2 = _skip_ws(text, j)
+        if j2 < n and text[j2] == ";":
+            i = j2 + 1
+            continue
+        if j2 < n and text[j2] == "{":
+            body_end = _match_brace(text, j2, n)
+            _walk_inline_mods(text, j2 + 1, body_end, cur + [name], out)
+            i = body_end + 1
+            continue
+        i = m + 3
 
 
 def _blank_inline_mods(text: str) -> str:
@@ -500,12 +606,22 @@ def _blank_test_mods(text: str) -> str:
 
 
 def _read(repo: Path, rel: str) -> str:
-    """读文件 → 全流水线空白化（非代码 → 行内 mod 体 → cfg(test) mod 声明）。"""
+    """读文件 → mod 树视图空白化（非代码 → macro 定义体 → 行内 mod 体 → cfg(test) mod 声明）。"""
     try:
         text = (repo / rel).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    return _blank_test_mods(_blank_inline_mods(_blank_noncode(text)))
+    return _blank_test_mods(_blank_inline_mods(_blank_macro_defs(_blank_noncode(text))))
+
+
+def _read_use_view(repo: Path, rel: str) -> str:
+    """读文件 → use 扫描视图：行内 mod 体保留（_iter_uses_ctx 下钻计入生产行内
+    use 边，探针 P2），macro_rules 定义体与 cfg(test) mod 声明整体空白化。"""
+    try:
+        text = (repo / rel).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return _blank_test_mods(_blank_macro_defs(_blank_noncode(text)))
 
 
 def build_mod_tree(repo: Path, timeout: int = DEFAULT_TIMEOUT) -> tuple[dict[str, str], bool]:
@@ -716,7 +832,9 @@ def scan_use_edges(
     """mod 树 → (模块依赖图, use 边明细[{file,line,src,dst}], 文件数, timed_out)。
 
     图以全部树模块为键（叶模块无出边也入图——_find_violations 的 forbidden 集
-    须见全部模块，漏叶会假阴）；超时截断的部分图不可信，调用方须拒绝执法。
+    须见全部模块，漏叶会假阴）；扫描用 use 视图（_read_use_view——行内 mod 体
+    保留，_iter_uses_ctx 下钻计入生产行内 use 边）；超时截断的部分图不可信，
+    调用方须拒绝执法。
     """
     repo = Path(repo)
     deadline = time.monotonic() + timeout
@@ -730,14 +848,14 @@ def scan_use_edges(
             timed_out = True
             break
         files_scanned += 1
-        text = _read(repo, rel)
+        text = _read_use_view(repo, rel)
         if not text:
             continue
         cur = [] if mod == ROOT_MODULE else mod.split("::")
-        for pos, paths in _iter_uses(text):
+        for pos, paths, use_cur in _iter_uses_ctx(text, cur):
             line = text.count("\n", 0, pos) + 1
             for segs in paths:
-                abs_segs = _absolutize(segs, cur)
+                abs_segs = _absolutize(segs, use_cur)
                 if abs_segs is None:
                     continue
                 target = _resolve_target(abs_segs, module_set)
