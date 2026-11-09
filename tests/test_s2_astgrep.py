@@ -146,3 +146,29 @@ def test_scan_missing_binary_raises(repo, facts_db, monkeypatch):
     monkeypatch.setattr("vrp.s2_astgrep.find_astgrep", lambda: None)
     with pytest.raises(RuntimeError, match="ast-grep binary not found"):
         scan(facts_db, repo, bin_path=None)
+
+
+def test_run_rule_non_json_stdout_raises_runtime_error(repo, monkeypatch):
+    """R-E E2：rc=0 但 stdout 非 JSON——RuntimeError 统一失败语义（非裸 ValueError）。"""
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from vrp.s2_astgrep import run_rule
+
+    fake = SimpleNamespace(returncode=0, stdout="warning: something\nnot json", stderr="")
+    rule = RULES_DIR / "py-bare-except.yml"
+    with mock.patch("vrp.s2_astgrep.subprocess.run", return_value=fake):
+        with pytest.raises(RuntimeError, match="non-JSON"):
+            run_rule("fake-bin", rule, repo)
+
+
+def test_run_rule_valid_json_parses(repo, monkeypatch):
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from vrp.s2_astgrep import run_rule
+
+    fake = SimpleNamespace(returncode=0, stdout='[{"file": "src/a.ts"}]', stderr="")
+    rule = RULES_DIR / "py-bare-except.yml"
+    with mock.patch("vrp.s2_astgrep.subprocess.run", return_value=fake):
+        assert run_rule("fake-bin", rule, repo) == [{"file": "src/a.ts"}]

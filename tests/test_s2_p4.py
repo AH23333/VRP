@@ -82,6 +82,62 @@ def test_scan_skips_when_no_tools(facts_db, tmp_path, monkeypatch):
     assert stats == {"knip": "skipped", "vulture": "skipped", "ledger_rows": 0}
 
 
+def test_scan_knip_failure_reports_failed(facts_db, tmp_path, monkeypatch):
+    """R-E E1：knip bin+package.json 在但运行失败——"failed" 不伪装 "skipped"。"""
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("vrp.s2_p4.find_knip", lambda: "fake-knip")
+    monkeypatch.setattr("vrp.s2_p4.find_vulture", lambda: None)
+    monkeypatch.setattr("vrp.s2_p4.run_knip", lambda bin_path, repo: None)
+    stats = scan(facts_db, tmp_path)
+    assert stats["knip"] == "failed"
+
+
+def test_scan_vulture_no_py_stays_skipped(facts_db, tmp_path, monkeypatch):
+    """R-E E1：vulture bin 在但仓无 .py——"skipped"（不适用非失败）。"""
+    monkeypatch.setattr("vrp.s2_p4.find_knip", lambda: None)
+    monkeypatch.setattr("vrp.s2_p4.find_vulture", lambda: "fake-vulture")
+    monkeypatch.setattr("vrp.s2_p4.run_vulture", lambda bin_path, repo: None)
+    stats = scan(facts_db, tmp_path)
+    assert stats["vulture"] == "skipped"
+
+
+def test_scan_vulture_failure_reports_failed(facts_db, tmp_path, monkeypatch):
+    """R-E E1：vulture bin+py 文件在但运行失败——"failed"。"""
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr("vrp.s2_p4.find_knip", lambda: None)
+    monkeypatch.setattr("vrp.s2_p4.find_vulture", lambda: "fake-vulture")
+    monkeypatch.setattr("vrp.s2_p4.run_vulture", lambda bin_path, repo: None)
+    stats = scan(facts_db, tmp_path)
+    assert stats["vulture"] == "failed"
+
+
+def test_has_py_detection(tmp_path):
+    """R-E：_has_py 三层深度检测——恒真 bug（any-of-generators）修复锁定。"""
+    from vrp.s2_p4 import _has_py
+
+    assert not _has_py(tmp_path), "empty repo must report no python"
+    (tmp_path / "deep" / "deeper").mkdir(parents=True)
+    (tmp_path / "deep" / "deeper" / "x.py").write_text("x = 1\n", encoding="utf-8")
+    assert _has_py(tmp_path), "depth-2-dir python file must be detected (glob '*/*/*.py')"
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "a" / "b" / "c").mkdir(parents=True)
+    (other / "a" / "b" / "c" / "y.py").write_text("y = 1\n", encoding="utf-8")
+    assert not _has_py(other), "depth-3-dir python file is out of probe depth (documented limit)"
+
+
+def test_run_knip_corrupt_json_returns_none(tmp_path, monkeypatch):
+    """R-E E2：knip stdout 损坏 JSON——None（失败信号）不裸崩。"""
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from vrp.s2_p4 import run_knip
+
+    fake = SimpleNamespace(returncode=0, stdout="{broken json", stderr="")
+    with mock.patch("vrp.s2_p4.subprocess.run", return_value=fake):
+        assert run_knip("fake-bin", tmp_path) is None
+
+
 def test_scan_vulture_writes_findings_and_ledger(facts_db, tmp_path, monkeypatch):
     rows = [
         {"kind": "unused-method", "file": "src/m.py", "line": 2, "name": "agreed"},

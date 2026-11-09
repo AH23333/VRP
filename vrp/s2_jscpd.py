@@ -91,7 +91,10 @@ def run_jscpd(bin_path: str, repo: Path) -> list[dict] | None:
         report = Path(out) / "jscpd-report.json"
         if not report.is_file():
             return None
-        data = json.loads(report.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(report.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
     return parse_clones(data, repo)
 
 
@@ -184,6 +187,10 @@ def scan(facts_db: sqlite3.Connection, repo: Path) -> dict:
         return stats
     clones = run_jscpd(bin_path, repo)
     if clones is None:
+        # bin exists but the run failed (rc != 0, missing or corrupt report) -
+        # must not masquerade as "skipped"; stale findings/ledger stay in
+        # place, the stats value tells the consumer not to trust them
+        stats["jscpd"] = "failed"
         return stats
     clones = [c for c in clones if _ingest_filter(c)]
     _write_findings(facts_db, clones)

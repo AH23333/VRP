@@ -68,7 +68,10 @@ def run_knip(bin_path: str, repo: Path) -> list[dict] | None:
     )
     if proc.returncode not in (0, 2) or not proc.stdout.strip():
         return None
-    data = json.loads(proc.stdout)
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
     return knip_rows(data.get("issues", []))
 
 
@@ -109,9 +112,15 @@ def parse_vulture_line(line: str) -> dict | None:
     }
 
 
+def _has_py(repo: Path) -> bool:
+    # inner any() consumes each glob generator (Path objects are truthy);
+    # a bare any(gen for gen in globs) would test generator objects themselves
+    # - always truthy - and never detect an empty repo (probed by R-E repro F4)
+    return any(any(repo.glob(p)) for p in ("*.py", "*/*.py", "*/*/*.py"))
+
+
 def run_vulture(bin_path: str, repo: Path) -> list[dict] | None:
-    has_py = any(repo.glob(p) for p in ("*.py", "*/*.py", "*/*/*.py"))
-    if not has_py:
+    if not _has_py(repo):
         return None
     proc = subprocess.run(
         [bin_path, ".", "--min-confidence", "60"],
@@ -186,7 +195,12 @@ def scan(facts_db: sqlite3.Connection, repo: Path) -> dict:
     knip_bin = find_knip()
     if knip_bin and (repo / "package.json").is_file():
         rows = run_knip(knip_bin, repo)
-        if rows is not None:
+        if rows is None:
+            # bin present + package.json present but the run failed (rc out of
+            # range, empty stdout, corrupt JSON) - must not masquerade as
+            # "skipped"; stale knip findings/ledger stay, stats say "failed"
+            stats["knip"] = "failed"
+        else:
             rows = [r for r in rows if _ingest_filter(r)]
             _write_tool_findings(facts_db, "s2-knip", "P4", rows)
             ledger = cross_check(candidates, rows, "knip")
@@ -197,7 +211,11 @@ def scan(facts_db: sqlite3.Connection, repo: Path) -> dict:
     vulture_bin = find_vulture()
     if vulture_bin:
         rows = run_vulture(vulture_bin, repo)
-        if rows is not None:
+        if rows is None:
+            # distinguish "not applicable" (no python files) from a failed
+            # run (rc out of range) - both return None from run_vulture
+            stats["vulture"] = "failed" if _has_py(repo) else "skipped"
+        else:
             rows = [r for r in rows if _ingest_filter(r)]
             _write_tool_findings(facts_db, "s2-vulture", "P4", rows)
             ledger = cross_check(candidates, rows, "vulture")

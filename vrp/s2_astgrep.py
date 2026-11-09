@@ -60,7 +60,12 @@ def run_rule(bin_path: str, rule_file: Path, scan_root: Path) -> list[dict]:
     )
     if proc.returncode != 0:
         raise RuntimeError(f"ast-grep scan failed (rc={proc.returncode}): {proc.stderr[:500]}")
-    return json.loads(proc.stdout)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        # rc == 0 with non-JSON stdout (warnings mixed in, truncated output) -
+        # same failure surface as rc != 0, same RuntimeError contract
+        raise RuntimeError(f"ast-grep scan produced non-JSON output (rc=0): {exc}") from exc
 
 
 def _anchor_symbol(con: sqlite3.Connection, rel_path: str, line: int) -> str | None:

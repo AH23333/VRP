@@ -99,6 +99,27 @@ def test_scan_skips_when_no_bin(facts_db, tmp_path, monkeypatch):
     assert scan(facts_db, tmp_path) == {"jscpd": "skipped", "ledger_rows": 0}
 
 
+def test_scan_reports_failed_when_run_fails(facts_db, tmp_path, monkeypatch):
+    """R-E E1：bin 在但运行失败（rc/报告缺失/JSON 损坏）——stats 报 "failed" 不伪装 "skipped"。"""
+    monkeypatch.setattr("vrp.s2_jscpd.find_jscpd", lambda: "fake-jscpd")
+    monkeypatch.setattr("vrp.s2_jscpd.run_jscpd", lambda bin_path, repo: None)
+    stats = scan(facts_db, tmp_path)
+    assert stats["jscpd"] == "failed"
+    assert stats["ledger_rows"] == 0
+
+
+def test_run_jscpd_missing_report_returns_none(tmp_path, monkeypatch):
+    """R-E E2：rc=0 但报告文件缺失——None（失败信号）不裸崩。"""
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from vrp.s2_jscpd import run_jscpd
+
+    fake = SimpleNamespace(returncode=0, stdout="", stderr="")
+    with mock.patch("vrp.s2_jscpd.subprocess.run", return_value=fake):
+        assert run_jscpd("fake-bin", tmp_path) is None
+
+
 def test_scan_writes_findings_and_ledger(facts_db, tmp_path, monkeypatch):
     clones = [
         {"first_file": "src/a.py", "first_line": 9, "first_end": 30, "second_file": "src/b.py",
