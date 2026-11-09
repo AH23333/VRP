@@ -91,7 +91,8 @@ def test_go_dir_variants():
     assert s7_enforce_go._go_dir("main.go") == "."
     assert s7_enforce_go._go_dir("cmd\\app\\main.go") == "cmd/app"
     assert s7_enforce_go._go_dir("vendor/x/y.go") is None
-    assert s7_enforce_go._go_dir("x/vendor/y.go") is None
+    assert s7_enforce_go._go_dir("x/vendor/y.go") == "x/vendor"  # 嵌套 vendor 是真实包（探针 P7）
+    assert s7_enforce_go._go_dir("internal/vendor/v.go") == "internal/vendor"
     assert s7_enforce_go._go_dir(".vrp/x.go") is None
     assert s7_enforce_go._go_dir("src/a.ts") is None
 
@@ -114,6 +115,45 @@ def test_module_path(tmp_path):
     assert s7_enforce_go._module_path(tmp_path / "missing") is None
     (repo / "go.mod").write_text("go 1.26\n", encoding="utf-8")
     assert s7_enforce_go._module_path(repo) is None  # 无 module 行
+
+
+def test_module_path_review_batch_forms(tmp_path):
+    """module 指令四形态全合法（go 1.26 探针实证 P1/P2/P4/P5）：块/引号/缩进/Tab+注释；BOM 拒绝真值对齐（P3）。"""
+    repo = tmp_path
+    (repo / "go.mod").write_text("module (\n\texample.com/block\n)\n\ngo 1.26\n", encoding="utf-8")
+    assert s7_enforce_go._module_path(repo) == "example.com/block"
+    (repo / "go.mod").write_text('module "example.com/quoted"\n\ngo 1.26\n', encoding="utf-8")
+    assert s7_enforce_go._module_path(repo) == "example.com/quoted"
+    (repo / "go.mod").write_text(" module example.com/indent\n\ngo 1.26\n", encoding="utf-8")
+    assert s7_enforce_go._module_path(repo) == "example.com/indent"
+    (repo / "go.mod").write_text("module\texample.com/tab // trailing\n\ngo 1.26\n", encoding="utf-8")
+    assert s7_enforce_go._module_path(repo) == "example.com/tab"
+    (repo / "go.mod").write_text("module (\n\texample.com/unbal\n", encoding="utf-8")
+    assert s7_enforce_go._module_path(repo) is None  # 未闭合块 go 拒绝（探针 P9）
+    (repo / "go.mod").write_bytes(b"\xef\xbb\xbfmodule example.com/bom\n\ngo 1.26\n")
+    assert s7_enforce_go._module_path(repo) is None  # BOM go.mod 工具链拒绝（探针 P3 rc=1）
+
+
+def test_derive_go_containers_nested_vendor(tmp_path):
+    """internal/vendor 嵌套包是真实容器（探针 P7 build rc=0）——不因路径段 vendor 被丢。"""
+    repo = _mk_go_repo(tmp_path)
+    con = _con(repo)
+    con.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES ('f3', 'p', 'demo/vendor.V', 'Function', 'V', 'internal/vendor/v.go', 1, 2, 'h')"
+    )
+    con.commit()
+    con.close()
+    payload = json.loads(GO_STRUCTURE)
+    payload["modules"].append(
+        {"module_id": "ven-mod", "name": "内嵌", "responsibility": "嵌", "symbol_fids": ["f3"], "layer": "core"}
+    )
+    con = _con(repo)
+    try:
+        derived = s7_enforce_go.derive_go_containers(con, payload)
+    finally:
+        con.close()
+    assert derived["containers"]["ven-mod"] == ["internal/vendor"]
 
 
 def test_parse_json_stream():
@@ -197,6 +237,18 @@ def test_locate_import_line(tmp_path):
     located = s7_enforce_go._locate_import(repo, pkg, "api", MODULE_PATH)
     assert located == ("store/repo.go", None)
     assert s7_enforce_go._locate_import(repo, {"GoFiles": []}, "api", MODULE_PATH) is None
+
+
+def test_locate_import_root_package_no_dot_prefix(tmp_path):
+    """根包（rel_pkg_dir="."）锚定文件路径不可带 "./" 前缀——去归一化使锚定查表失败（冒烟 F05 修正回归）。"""
+    repo = _mk_go_repo(tmp_path)
+    (repo / "main.go").write_text(
+        f'package main\n\nimport "{MODULE_PATH}/api"\n\nfunc main() {{ _ = api.Handler }}\n',
+        encoding="utf-8",
+    )
+    pkg = {"Dir": str(repo.resolve()), "GoFiles": ["main.go"]}
+    located = s7_enforce_go._locate_import(repo, pkg, "api", MODULE_PATH)
+    assert located == ("main.go", 3)  # 非 "./main.go"
 
 
 # ------------------------------------------------- run_go / run() mocked
@@ -304,6 +356,20 @@ def test_run_go_no_go_mod(tmp_path, monkeypatch):
         con.close()
     assert out["status"] == "not-enforceable"
     assert "no go.mod" in out["reason"]
+
+
+def test_run_go_malformed_gomod_reason(tmp_path, monkeypatch):
+    """go.mod 存在但 module 指令不可解析（BOM——go 工具链同拒）→ reason 与缺失区分（诚实）。"""
+    repo = _mk_go_repo(tmp_path)
+    (repo / "go.mod").write_bytes(b"\xef\xbb\xbfmodule example.com/demo\n\ngo 1.26\n")
+    monkeypatch.setattr(s7_enforce_go, "find_go", lambda: "fake-go")
+    con = _con(repo)
+    try:
+        out = s7_enforce_go.run_go(repo, con, json.loads(GO_STRUCTURE), "active", {"core-mod": ["store"], "iface-mod": ["api"]})
+    finally:
+        con.close()
+    assert out["status"] == "not-enforceable"
+    assert "no parseable module directive" in out["reason"]
 
 
 def test_run_go_enforcer_not_found(tmp_path, monkeypatch):

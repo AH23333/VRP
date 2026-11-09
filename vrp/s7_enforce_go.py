@@ -17,6 +17,23 @@ in-module import 链到达 forbidden 包即违例；BFS 最短链入 payload（c
 - in-module 判定 = ImportPath 以 go.mod module path 为前缀；root 包 rel dir
   记 "."（容器推导从 .go 文件路径出发不会产生 "."，天然不重叠）
 - rc≠0：无 go.mod / 空模块（"no Go files"）——enforcer-failed/not-enforceable
+
+review 批探针事实（2026-11-09，go 1.26.10 实测，go-syntax-probe P1-P9）：
+- module 指令四形态全合法：裸路径/带引号 `"path"`/行首缩进（modfile lexer
+  跳前导空白）/括号块形态 `module (\n\tpath\n)`（P1/P2/P4/P5）——
+  _module_path mini-parse 全形态覆盖；`//` 行注释剥离（module path 按
+  Go 规范不含 `//`——路径元素非空）；未闭合块 go 拒绝（P9 unterminated
+  block rc=1）——_first_block_token 须见 `)` 才返回 token
+- BOM go.mod 工具链拒绝（P3 rc=1 unexpected input character）——
+  _module_path 返回 None 与真值对齐（go.mod 存在但不可解析 → not-enforceable
+  reason 与缺失区分）
+- Imports 仅生产导入（P6：_test.go 的导入落 TestImports，GoFiles 仅生产文件）
+- 嵌套 internal/vendor 是真实可导入包（P7 go list+go build rc=0）——
+  _go_dir 仅跳过模块根 vendor/（P8：go list 排除对齐）；任意路径段 vendor/
+  误跳会丢容器（review 批修正：旧 `"/vendor/" in p` 过宽）
+- 诚实局限：_locate_import 扫带引号 import path 字面量定位行号——注释/
+  其他字符串中同字面量可致行号误归（病态，go list 无行号权威源）；
+  go.work 多模块工作区仅执法主模块（其余模块包 in-module 判定天然剔除）
 """
 
 from __future__ import annotations
@@ -49,11 +66,15 @@ def find_go() -> str | None:
 
 
 def _go_dir(file_path: str) -> str | None:
-    """Go 文件 → 包目录（posix；根级 → "."）；非 .go/vendor → None。"""
+    """Go 文件 → 包目录（posix；根级 → "."）；非 .go/模块根 vendor → None。
+
+    模块根 vendor/ 跳过=go list 排除对齐（探针 P8）；嵌套 internal/vendor
+    是真实可导入包（探针 P7 build rc=0）不跳过——旧任意路径段 vendor/ 误跳。
+    """
     p = file_path.replace("\\", "/")
     if not p.lower().endswith(GO_SUFFIX):
         return None
-    if p.startswith(".") or "/vendor/" in p or p.startswith("vendor/"):
+    if p.startswith(".") or p.startswith("vendor/"):
         return None
     slash = p.rfind("/")
     return p[:slash] if slash > 0 else "."
@@ -92,8 +113,26 @@ def derive_go_containers(con: sqlite3.Connection, payload: dict) -> dict:
     }
 
 
+def _first_block_token(lines: list[str], open_idx: int) -> str | None:
+    """块形态 `module (…)` 内首个 token（引号或裸）；须闭合 `)`——未闭合 go 拒绝（探针 P9 unterminated block rc=1）/空块 → None。"""
+    token: str | None = None
+    for sub in lines[open_idx + 1 :]:
+        body = sub.split("//", 1)[0].strip()
+        if not body:
+            continue
+        if body == ")":
+            return token
+        if token is None:
+            qm = re.match(r'"([^"]+)"', body)
+            token = qm.group(1) if qm else body.split()[0]
+    return None
+
+
 def _module_path(repo: Path) -> str | None:
-    """go.mod module 行；缺失/无 module 行 → None。"""
+    """go.mod module 路径四形态（裸/引号/缩进/块——探针 P1/P2/P4/P5）；缺失/无 module 指令 → None。
+
+    BOM go.mod go 工具链拒绝（探针 P3 rc=1）→ 返回 None 真值对齐。
+    """
     gomod = repo / "go.mod"
     if not gomod.is_file():
         return None
@@ -101,10 +140,19 @@ def _module_path(repo: Path) -> str | None:
         text = gomod.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    for line in text.splitlines():
-        m = re.match(r"^module\s+(\S+)", line)
-        if m:
-            return m.group(1)
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        body = line.split("//", 1)[0].strip()
+        m = re.match(r"module[ \t]+(.+)$", body)
+        if not m:
+            continue
+        rest = m.group(1).strip()
+        qm = re.match(r'"([^"]+)"$', rest)
+        if qm:
+            return qm.group(1)
+        if rest.startswith("("):
+            return _first_block_token(lines, idx)
+        return rest.split()[0] if rest else None
     return None
 
 
@@ -243,7 +291,9 @@ def _locate_import(repo: Path, pkg: dict, target_rel_dir: str, module_path: str)
     import_path = module_path if target_rel_dir == "." else f"{module_path}/{target_rel_dir}"
     first_file: str | None = None
     for gf in go_files:
-        rel_file = f"{rel_pkg_dir}/{gf}" if rel_pkg_dir else gf
+        # 根包 rel_pkg_dir="."（Path('.').as_posix()）——不可拼 "./x.go"（findings
+        # file_path 去归一化→锚定查表失败——review 批冒烟 F05 实证修正）
+        rel_file = gf if rel_pkg_dir in ("", ".") else f"{rel_pkg_dir}/{gf}"
         if first_file is None:
             first_file = rel_file
         try:
@@ -351,7 +401,11 @@ def run_go(
         return {
             **summary,
             "status": "not-enforceable",
-            "reason": "no go.mod (not a Go module)",
+            "reason": (
+                "no go.mod (not a Go module)"
+                if not (repo / "go.mod").is_file()
+                else "go.mod has no parseable module directive (malformed or BOM; go toolchain rejects it too)"
+            ),
         }
     result = _execute(repo, timeout)
     if result[0] is None:
@@ -402,7 +456,7 @@ def run_go(
                 except ValueError:
                     rel_pkg_dir = ""
                 gf = fallback_pkg["GoFiles"][0]
-                v["file_path"] = f"{rel_pkg_dir}/{gf}" if rel_pkg_dir else gf
+                v["file_path"] = gf if rel_pkg_dir in ("", ".") else f"{rel_pkg_dir}/{gf}"
             else:
                 v["file_path"] = v["importer"]
             v["line"] = None

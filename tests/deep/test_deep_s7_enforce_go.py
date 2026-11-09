@@ -153,3 +153,28 @@ def test_enforce_go_e2e_compliant_repo_clean(tmp_path):
     assert out["findings_written"] == 0
     assert out["packages"] == 2
     assert _rows(repo) == []
+
+
+def test_enforce_go_e2e_block_module_directive(tmp_path):
+    """块形态 module 指令（go 1.26 合法——探针 P1）仍可执法——review 批回归（修复前 not-enforceable 假阴）。"""
+    repo = _mk_repo(tmp_path)
+    (repo / "go.mod").write_text(
+        f"module (\n\t{MODULE_PATH}\n)\n\ngo 1.26\n", encoding="utf-8"
+    )
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        out = s7_enforce.run(repo, con, timeout=180)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["engine"] == "go-list"
+    assert out["violations"] == 1
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    rows = _rows(repo)
+    assert len(rows) == 1
+    assert rows[0][3] == "g1"  # 锚定违例 import 文件首符号
+    assert rows[0][4] == "store/repo.go"
+    data = json.loads(rows[0][6])
+    assert data["chain"] == ["store", "api"]
+    assert data["line"] == 3
