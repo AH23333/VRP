@@ -4,6 +4,10 @@
 `.vrp/ai/`，本模块确定性验证（全过才入库 / 任一不过整文件拒绝出收据），
 `--reject` 用户否决留痕（decisions 表）。
 
+R-B 批诚实性不变量：同批重复 slice_id / 重复 module_id 整批拒绝
+（收据条数即入库条数，不静默覆盖）；structure 否决的数字 target_id
+精确到行（decisions 留痕与实际否决行一致）。
+
 纯标准库；写 facts.db 受 M4 freshness 硬拒（调用方用 _open_facts_rw）。
 """
 
@@ -102,6 +106,26 @@ def _validate_one_slice(con: sqlite3.Connection, raw: object) -> list[dict]:
     return errors
 
 
+def _validate_slice_array(con: sqlite3.Connection, raw: list) -> list[dict]:
+    """整批 slices 验证：逐条 _validate_one_slice + 跨条 slice_id 查重。
+
+    同批重复 slice_id 原先静默后条覆盖前条（_ingest_slices DELETE+INSERT），
+    收据却计 accepted=N——收据对入库条数撒谎；整批拒绝才是原子语义。
+    """
+    errors: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        errors.extend(_validate_one_slice(con, item))
+        if isinstance(item, dict):
+            sid = item.get("slice_id")
+            if isinstance(sid, str) and sid.strip():
+                if sid in seen:
+                    errors.append(_err("SLICE_SCHEMA", f"duplicate slice_id in the same submission: {sid}", slice_id=sid))
+                else:
+                    seen.add(sid)
+    return errors
+
+
 def _validate_structure(con: sqlite3.Connection, raw: object) -> list[dict]:
     errors: list[dict] = []
     if not isinstance(raw, dict):
@@ -157,11 +181,17 @@ def _validate_structure(con: sqlite3.Connection, raw: object) -> list[dict]:
                 errors.append(_err("STRUCT_LAYER_CYCLE", f"may_depend_on contains a cycle: {cycle}"))
                 break
     seen_fid: dict[str, str] = {}
+    seen_mid: set[str] = set()
     for i, mod in enumerate(modules):
         if not isinstance(mod, dict):
             errors.append(_err("STRUCT_SCHEMA", f"modules[{i}] must be a JSON object"))
             continue
         mid = mod.get("module_id") if isinstance(mod.get("module_id"), str) else f"modules[{i}]"
+        if isinstance(mod.get("module_id"), str) and mod.get("module_id", "").strip():
+            if mid in seen_mid:
+                errors.append(_err("STRUCT_SCHEMA", f"duplicate module_id in the same payload: {mid}", module=mid))
+            else:
+                seen_mid.add(mid)
         for field, code in (("name", "STRUCT_EMPTY_NAME"), ("responsibility", "STRUCT_EMPTY_RESPONSIBILITY"),
                             ("module_id", "STRUCT_SCHEMA")):
             value = mod.get(field)
@@ -311,16 +341,13 @@ def _curate_file(con: sqlite3.Connection, path: Path, kind: str) -> dict:
         if not isinstance(raw, list):
             entry["errors"].append(_err("FILE_WRONG_SHAPE", "slices.json must be a JSON array"))
             return entry
-        for item in raw:
-            errors = _validate_one_slice(con, item)
-            if errors:
-                entry["rejected"] += 1
-                entry["errors"].extend(errors)
-        if entry["rejected"] == 0:
+        errors = _validate_slice_array(con, raw)
+        if errors:
+            entry["errors"].extend(errors)
+            entry["rejected"] = len(raw)
+        else:
             _ingest_slices(con, raw)
             entry["status"], entry["accepted"] = "accepted", len(raw)
-        else:
-            entry["rejected"] = len(raw)
     else:
         errors = _validate_structure(con, raw)
         if errors:
@@ -346,9 +373,7 @@ def curate_payload(con: sqlite3.Connection, kind: str, payload_json: str) -> dic
         if not isinstance(raw, list):
             return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": 1,
                     "errors": [_err("FILE_WRONG_SHAPE", "slices payload must be a JSON array")]}
-        errors: list[dict] = []
-        for item in raw:
-            errors.extend(_validate_one_slice(con, item))
+        errors: list[dict] = _validate_slice_array(con, raw)
         if errors:
             return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": len(raw), "errors": errors}
         _ingest_slices(con, raw)
@@ -404,11 +429,24 @@ def read_receipt(repo: Path) -> dict | None:
 
 
 def reject(con: sqlite3.Connection, kind: str, target_id: str, note: str = "") -> dict:
-    """用户否决已入库工件：status→rejected + decisions 留痕（v7 §3.2）。"""
+    """用户否决已入库工件：status→rejected + decisions 留痕（v7 §3.2）。
+
+    structure 的 target_id：整数字符串（如 MCP curate_reject 传精确行 id）
+    按该 id 精确否决，rowcount=0 诚实报错；非数字（CLI 惯例字面量
+    'structure'）否决最新一版（与 get_structure 的最新语义一致）。
+    decisions 恒记用户传入的原样 target_id。
+    """
     if kind == "slice":
         cur = con.execute("UPDATE slices SET status = 'rejected' WHERE slice_id = ?", (target_id,))
     elif kind == "structure":
-        cur = con.execute("UPDATE structure SET status = 'rejected' WHERE id = (SELECT MAX(id) FROM structure)")
+        try:
+            sid = int(target_id)
+        except ValueError:
+            sid = None
+        if sid is not None:
+            cur = con.execute("UPDATE structure SET status = 'rejected' WHERE id = ?", (sid,))
+        else:
+            cur = con.execute("UPDATE structure SET status = 'rejected' WHERE id = (SELECT MAX(id) FROM structure)")
     else:
         raise SystemExit(f"kind 必须是 slice 或 structure: {kind}")
     if cur.rowcount == 0:

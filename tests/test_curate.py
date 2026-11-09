@@ -408,3 +408,83 @@ def test_curate_no_ai_dir_still_revalidates(tmp_path):
         assert receipt["stale"] == {"slices": [], "structure": False}
     finally:
         con.close()
+
+
+# --------------------------------------- R-B 批：重复 id 拒绝 + 精确否决
+
+
+def test_curate_payload_duplicate_slice_id_rejected(tmp_path):
+    """同批 slices 数组重复 slice_id：整批拒绝（原先后条静默覆盖、收据谎报条数）。"""
+    repo = _mk_repo(tmp_path)
+    fids = _seed_chain(repo)
+    con = _con(repo)
+    try:
+        rows = [_slice(fids), _slice(fids)]  # 两条同 slice_id="test-flow"
+        receipt = curate_mod.curate_payload(con, "slices", json.dumps(rows, ensure_ascii=False))
+        assert receipt["status"] == "rejected"
+        assert receipt["rejected"] == 2
+        assert any(e["code"] == "SLICE_SCHEMA" and "duplicate" in e["detail"] for e in receipt["errors"])
+        assert con.execute("SELECT COUNT(*) FROM slices").fetchone()[0] == 0
+    finally:
+        con.close()
+
+
+def test_curate_file_duplicate_slice_id_rejected(tmp_path):
+    """CLI 文件路径同洞：重复 slice_id 整文件拒绝，不静默覆盖。"""
+    repo = _mk_repo(tmp_path)
+    fids = _seed_chain(repo)
+    ai = repo / ".vrp" / "ai"
+    ai.mkdir(parents=True)
+    (ai / "slices.json").write_text(json.dumps([_slice(fids), _slice(fids)], ensure_ascii=False), encoding="utf-8")
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate(repo, con)
+        entry = receipt["files"][0]
+        assert entry["status"] == "rejected"
+        assert any(e["code"] == "SLICE_SCHEMA" and "duplicate" in e["detail"] for e in entry["errors"])
+        assert con.execute("SELECT COUNT(*) FROM slices").fetchone()[0] == 0
+    finally:
+        con.close()
+
+
+def test_structure_duplicate_module_id_rejected(tmp_path):
+    """structure modules 重复 module_id：拒绝（载荷内模块身份必须唯一）。"""
+    repo = _mk_repo(tmp_path)
+    fids = _seed_chain(repo)
+    con = _con(repo)
+    try:
+        payload = _structure(fids)
+        payload["modules"].append(
+            {"module_id": "m1", "name": "重复", "responsibility": "r", "symbol_fids": ["fid-b"], "layer": "domain"}
+        )
+        receipt = curate_mod.curate_payload(con, "structure", json.dumps(payload, ensure_ascii=False))
+        assert receipt["status"] == "rejected"
+        assert any(e["code"] == "STRUCT_SCHEMA" and "duplicate" in e["detail"] for e in receipt["errors"])
+        assert con.execute("SELECT COUNT(*) FROM structure").fetchone()[0] == 0
+    finally:
+        con.close()
+
+
+def test_reject_structure_numeric_target_id(tmp_path):
+    """reject structure：数字 target_id 精确否决该行；未知 id 诚实报错；字面量仍否决最新。"""
+    repo = _mk_repo(tmp_path)
+    _seed_chain(repo)
+    con = _con(repo)
+    try:
+        for _ in range(2):
+            con.execute(
+                "INSERT INTO structure (payload_json, status, created_at) VALUES ('{\"modules\":[]}', 'active', 't')"
+            )
+        con.commit()
+        out = curate_mod.reject(con, "structure", "1", "精确否决第一版")
+        assert out["target_id"] == "1"
+        assert con.execute("SELECT status FROM structure WHERE id = 1").fetchone()[0] == "rejected"
+        assert con.execute("SELECT status FROM structure WHERE id = 2").fetchone()[0] == "active"
+        with pytest.raises(SystemExit):
+            curate_mod.reject(con, "structure", "999", "不存在的行")
+        curate_mod.reject(con, "structure", "structure", "CLI 惯例字面量")
+        assert con.execute("SELECT status FROM structure WHERE id = 2").fetchone()[0] == "rejected"
+        decisions = con.execute("SELECT target_id FROM decisions ORDER BY id").fetchall()
+        assert [d[0] for d in decisions] == ["1", "structure"]  # 999 失败不留痕
+    finally:
+        con.close()

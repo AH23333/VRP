@@ -323,6 +323,8 @@ def build_server(repo: Path) -> "MCPServer":
         _guard(curate_reject),
         name="curate_reject",
         description="User vetoes an ingested artifact (kind=slice|structure, target_id=slice_id or 'structure'): "
+        "for structure a numeric target_id vetoes that exact row id (unknown id errors), "
+        "non-numeric vetoes the latest version; "
         "status→rejected + decision logged; veto is the conservative direction, the agent may relay the user's decision",
     )
     server.add_tool(
