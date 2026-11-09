@@ -171,3 +171,30 @@ def test_run_etl_resolves_renamed_project(tmp_path, cache):
     con = sqlite3.connect(repo / ".vrp" / "facts.db")
     assert con.execute("SELECT qualified_name FROM symbols").fetchall() == [("p.a.old",)]
     con.close()
+
+
+def test_record_repo_path_survives_quote_bearing_column(tmp_path):
+    """R-D C4：畸形 store_meta 列名含引号——SQLite 标识符转义不产生语法错。"""
+    db = tmp_path / "weird.db"
+    con = sqlite3.connect(db)
+    con.execute('CREATE TABLE store_meta ("we""ird" TEXT PRIMARY KEY, v TEXT NOT NULL)')
+    con.execute('INSERT INTO store_meta VALUES ("db_uid", "u1")')
+    con.commit()
+    con.close()
+    s1_cbm._record_repo_path(db, str(tmp_path))  # must not raise
+    assert s1_cbm._recorded_repo_path(db) == str(tmp_path)
+
+
+def test_index_repository_rejects_separator_in_project(tmp_path, cache, monkeypatch):
+    """R-D C5：CBM 报告的 project 名含路径分隔符——拒绝（cache 子目录写/逃逸面）。"""
+    calls: list = []
+
+    def fake(args, timeout=3600):
+        calls.append(args)
+        return {"ok": True, "project": "evil/name"}
+
+    monkeypatch.setattr(s1_cbm, "run_cli", fake)
+    repo = _mk_repo(tmp_path, "a")
+    with pytest.raises(RuntimeError, match="unsafe project name"):
+        s1_cbm.index_repository(repo, "proj")
+    assert not (cache / "evil").exists()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -81,23 +82,23 @@ def census_scc(repo: Path) -> dict | None:
 
 def census_fallback(repo: Path) -> dict:
     counts: dict[str, dict] = {}
-    for path in repo.rglob("*"):
-        if not path.is_file():
-            continue
-        rel_parts = path.relative_to(repo).parts
-        if any(p in IGNORE_DIRS for p in rel_parts):
-            continue
-        lang = language_for_path(str(path))
-        if not lang:
-            continue
-        entry = counts.setdefault(lang, {"name": lang, "files": 0, "lines": 0, "code": 0})
-        entry["files"] += 1
-        try:
-            with path.open("rb") as fh:
-                entry["lines"] += sum(1 for _ in fh)
-        except OSError:
-            pass
-        entry["code"] = entry["lines"]
+    # os.walk 原地剪枝：IGNORE_DIRS 目录不深入（rglob 全遍历会走进
+    # .git/node_modules 深处，纯浪费时间——行为等价，计数不变）
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        for fname in files:
+            path = Path(root) / fname
+            lang = language_for_path(str(path))
+            if not lang:
+                continue
+            entry = counts.setdefault(lang, {"name": lang, "files": 0, "lines": 0, "code": 0})
+            entry["files"] += 1
+            try:
+                with path.open("rb") as fh:
+                    entry["lines"] += sum(1 for _ in fh)
+            except OSError:
+                pass
+            entry["code"] = entry["lines"]
     languages = sorted(counts.values(), key=lambda x: -x["code"])
     return {"tool": "fallback-ext", "languages": languages[:20]}
 
@@ -121,8 +122,11 @@ def discover_commands(repo: Path) -> dict:
     pkg = repo / "package.json"
     if pkg.exists():
         try:
-            scripts = json.loads(pkg.read_text(encoding="utf-8", errors="replace")).get("scripts", {})
+            data = json.loads(pkg.read_text(encoding="utf-8", errors="replace"))
         except (json.JSONDecodeError, OSError):
+            data = None
+        scripts = data.get("scripts", {}) if isinstance(data, dict) else {}
+        if not isinstance(scripts, dict):
             scripts = {}
         for key, value in scripts.items():
             slot = _SCRIPT_KEY_MAP.get(key)

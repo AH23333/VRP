@@ -139,3 +139,27 @@ def test_xcheck_no_vendor_unchanged(tmp_path, monkeypatch):
     assert summary["ca_excluded_symbols"] == 0
     assert summary["ca_excluded_calls"] == 0
     assert summary["cbm_excluded_calls"] == 0
+
+
+def test_xcheck_stale_ca_db_not_compared_when_index_not_fresh(tmp_path, monkeypatch):
+    """R-D X1（病根五残留收口）：index skipped/failed 时陈旧 ca.db 不比对。
+
+    旧版 index 非 indexed 仍用遗留 .code-atlas/index.db 比对——agreement%
+    失真（陈旧交叉索引），且 ledger 照写。
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _mk_ca_db(repo, with_vendor=False)
+    _mk_facts_db(repo, with_vendor=False)
+    monkeypatch.setattr(xcheck, "index_with_code_atlas",
+                        lambda repo, reindex=False, timeout=900: {
+                            "status": "skipped", "reason": "node not found"})
+    summary = xcheck.run_xcheck(repo, repo / ".vrp" / "facts.db")
+    assert summary["ledger_rows"] == 0
+    assert "reason" in summary and "not fresh" in summary["reason"]
+    assert "agreement_pct" not in summary  # 不产出失真 agreement
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        assert con.execute("SELECT COUNT(*) FROM discrepancy_ledger").fetchone()[0] == 0
+    finally:
+        con.close()

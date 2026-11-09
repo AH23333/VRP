@@ -37,18 +37,24 @@ def test_snapshot_and_restore_roundtrip(tmp_path):
     db = tmp_path / "facts.db"
     _build_db(db)
     snap = snapshot_owned(db)
-    assert len(snap["annotations"]) == 1
-    assert len(snap["gate_results"]) == 1
-    assert len(snap["runtime_evidence"]) == 1
-    assert snap["runtime_evidence"][0][2] == "test"
-    assert len(snap["findings_kept"]) == 1
-    assert snap["findings_kept"][0][3] == "s2-astgrep"
+    # R-D E1：快照每表 (cols, rows)——列名随行记录
+    ann_cols, ann_rows = snap["annotations"]
+    assert "qualified_name" in ann_cols and "status" in ann_cols
+    assert len(ann_rows) == 1
+    assert len(snap["gate_results"][1]) == 1
+    assert len(snap["runtime_evidence"][1]) == 1
+    rt_cols, rt_rows = snap["runtime_evidence"]
+    assert rt_rows[0][rt_cols.index("callee_key")] == "test"
+    assert len(snap["findings_kept"][1]) == 1
+    fk_cols, fk_rows = snap["findings_kept"]
+    assert fk_rows[0][fk_cols.index("source")] == "s2-astgrep"
 
     db.unlink()
     fresh = sqlite3.connect(db)
     fresh.executescript(SCHEMA.read_text(encoding="utf-8"))
-    restore_owned(fresh, snap)
+    warnings = restore_owned(fresh, snap)
     fresh.commit()
+    assert warnings == []  # 同 schema 恢复零警告
     ann = fresh.execute("SELECT qualified_name, status FROM annotations").fetchall()
     assert ann == [("m.go", "active")]
     srcs = [r[0] for r in fresh.execute("SELECT source FROM findings ORDER BY source")]
@@ -62,6 +68,50 @@ def test_snapshot_and_restore_roundtrip(tmp_path):
     ).fetchall()
     assert ledger == [("f-old", "p", "pkg.old", "pkg/x.py", "2026-11-06T00:00:00Z")]
     fresh.close()
+
+
+def test_restore_aligns_by_column_name_across_reordered_schema(tmp_path):
+    """R-D E1：schema 列序演化（列数同、顺序不同）——按名对齐不错位。"""
+    old = tmp_path / "old.db"
+    con = sqlite3.connect(old)
+    con.execute(
+        "CREATE TABLE gate_results (id INTEGER PRIMARY KEY, detail_json TEXT, gate TEXT, status TEXT)"
+    )
+    con.execute("INSERT INTO gate_results (detail_json, gate, status) VALUES ('{}', 'G9', 'pass')")
+    con.commit()
+    con.close()
+    snap = snapshot_owned(old)
+    fresh = sqlite3.connect(tmp_path / "fresh.db")
+    fresh.executescript(SCHEMA.read_text(encoding="utf-8"))
+    warnings = restore_owned(fresh, snap)
+    fresh.commit()
+    row = fresh.execute("SELECT gate, status, detail_json FROM gate_results").fetchone()
+    fresh.close()
+    assert warnings == []
+    assert row == ("G9", "pass", "{}")  # gate/status 不错位
+
+
+def test_restore_skips_not_null_spanning_table_with_warning(tmp_path):
+    """R-D E1：缺源列撞 NOT NULL 无默认（schema 演化跨列）——整表跳过+诚实警告。"""
+    old = tmp_path / "old.db"
+    con = sqlite3.connect(old)
+    # 假想旧版 fid_ledger 无 first_seen_at（新 schema NOT NULL 无默认）
+    con.execute(
+        "CREATE TABLE fid_ledger (fid TEXT PRIMARY KEY, project TEXT,"
+        " qualified_name TEXT, file_path TEXT)"
+    )
+    con.execute("INSERT INTO fid_ledger VALUES ('f-1', 'p', 'pkg.a', 'a.py')")
+    con.commit()
+    con.close()
+    snap = snapshot_owned(old)
+    fresh = sqlite3.connect(tmp_path / "fresh.db")
+    fresh.executescript(SCHEMA.read_text(encoding="utf-8"))
+    warnings = restore_owned(fresh, snap)
+    fresh.commit()
+    rows = fresh.execute("SELECT COUNT(*) FROM fid_ledger").fetchone()[0]
+    fresh.close()
+    assert rows == 0  # 违约束表不落位
+    assert any("fid_ledger" in w for w in warnings)
 
 
 def test_snapshot_missing_file(tmp_path):

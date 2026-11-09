@@ -130,21 +130,27 @@ def check_facts_freshness(con: sqlite3.Connection, repo: Path) -> None:
         )
 
 
-def snapshot_owned(db_path: Path) -> dict[str, list[tuple]]:
+def snapshot_owned(db_path: Path) -> dict[str, tuple[list[str], list[tuple]]]:
+    """OWNED_TABLES + 非 etl findings 快照。
+
+    每表记录 (cols, rows)——恢复端按列名对齐写入：schema 演化（升级加列/
+    调序）时旧快照按名落位，不错位、不硬崩（新列补 NULL，废弃列丢弃）。
+    """
     if not db_path.exists():
         return {}
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    snap: dict[str, list[tuple]] = {}
+    snap: dict[str, tuple[list[str], list[tuple]]] = {}
     try:
         for table in OWNED_TABLES:
             try:
-                snap[table] = con.execute(f"SELECT * FROM {table}").fetchall()
+                cur = con.execute(f"SELECT * FROM {table}")
+                cols = [d[0] for d in cur.description]
+                snap[table] = (cols, cur.fetchall())
             except sqlite3.OperationalError:
                 pass
         try:
-            snap["findings_kept"] = con.execute(
-                "SELECT * FROM findings WHERE source != 'etl'"
-            ).fetchall()
+            cur = con.execute("SELECT * FROM findings WHERE source != 'etl'")
+            snap["findings_kept"] = ([d[0] for d in cur.description], cur.fetchall())
         except sqlite3.OperationalError:
             pass
     finally:
@@ -152,19 +158,50 @@ def snapshot_owned(db_path: Path) -> dict[str, list[tuple]]:
     return snap
 
 
-def restore_owned(dst: sqlite3.Connection, snap: dict[str, list[tuple]]) -> None:
+def _restore_table(dst: sqlite3.Connection, table: str, cols: list[str], rows: list[tuple]) -> str | None:
+    """按列名对齐恢复：快照列名 → 新库列序映射（缺源补 NULL，废列丢弃）。
+
+    缺源列撞 NOT NULL 无默认（schema 演化跨列）时整表跳过（SAVEPOINT
+    回滚半写）并返回警告——诚实上报优于部分恢复或硬崩。
+    """
+    new_cols = [r[1] for r in dst.execute(f"PRAGMA table_info({table})")]
+    if not new_cols:
+        return f"{table}: removed from current schema, snapshot skipped"
+    pos = {c: i for i, c in enumerate(cols)}
+    mapped = [tuple(row[pos[c]] if c in pos else None for c in new_cols) for row in rows]
+    collist = ",".join(f'"{c}"' for c in new_cols)
+    placeholders = ",".join("?" * len(new_cols))
+    dst.execute("SAVEPOINT restore_table")
+    try:
+        dst.executemany(f"INSERT OR REPLACE INTO {table} ({collist}) VALUES ({placeholders})", mapped)
+    except sqlite3.IntegrityError:
+        dst.execute("ROLLBACK TO restore_table")
+        dst.execute("RELEASE restore_table")
+        return f"{table}: snapshot rows violate current schema constraints, skipped"
+    dst.execute("RELEASE restore_table")
+    return None
+
+
+def restore_owned(dst: sqlite3.Connection, snap: dict[str, tuple[list[str], list[tuple]]]) -> list[str]:
+    """恢复快照；返回诚实警告清单（schema 演化无法落位的表）。"""
+    warnings: list[str] = []
     for table in OWNED_TABLES:
-        rows = snap.get(table)
-        if not rows:
+        entry = snap.get(table)
+        if not entry:
             continue
-        cols = len(rows[0])
-        placeholders = ",".join("?" * cols)
-        dst.executemany(f"INSERT OR REPLACE INTO {table} VALUES ({placeholders})", rows)
+        cols, rows = entry
+        if rows:
+            warn = _restore_table(dst, table, cols, rows)
+            if warn:
+                warnings.append(warn)
     kept = snap.get("findings_kept")
     if kept:
-        cols = len(kept[0])
-        placeholders = ",".join("?" * cols)
-        dst.executemany(f"INSERT OR REPLACE INTO findings VALUES ({placeholders})", kept)
+        cols, rows = kept
+        if rows:
+            warn = _restore_table(dst, "findings", cols, rows)
+            if warn:
+                warnings.append(warn)
+    return warnings
 
 
 def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
@@ -189,12 +226,14 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
     dst = sqlite3.connect(tmp_db)
     try:
         dst.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        restore_owned(dst, snap)
+        restore_warnings = restore_owned(dst, snap)
 
         src = s1_cbm.connect_ro(db_path)
         hasher = _ContentHasher(repo)
 
         stats: dict[str, int] = {}
+        if restore_warnings:
+            stats["restore_warnings"] = "; ".join(restore_warnings)
         try:
             fid_by_id, file_by_id, replaced = _etl_symbols(dst, src, hasher, project, repo)
             stats["symbols"] = len(fid_by_id)

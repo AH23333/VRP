@@ -81,8 +81,12 @@ def _record_repo_path(db_path: Path, repo_path: str) -> None:
             cols = ["key", "value"]
         if len(cols) < 2:
             return
+        # 列名来自 db 自身 PRAGMA——标识符不能参数化，内插前按 SQLite
+        # 双引号规则转义（畸形列名含引号时不产生语法错/注入面）
+        c0 = str(cols[0]).replace('"', '""')
+        c1 = str(cols[1]).replace('"', '""')
         con.execute(
-            f'INSERT OR REPLACE INTO store_meta ("{cols[0]}", "{cols[1]}") VALUES (?, ?)',
+            f'INSERT OR REPLACE INTO store_meta ("{c0}", "{c1}") VALUES (?, ?)',
             (REPO_PATH_META_KEY, repo_path),
         )
         con.commit()
@@ -140,6 +144,10 @@ def index_repository(repo: Path, name: str, reindex: bool = False, timeout: int 
         ["index_repository", "--repo-path", str(repo), "--name", name], timeout=timeout
     )
     project = str(result.get("project") or name)
+    if "/" in project or "\\" in project:
+        # CBM 报告的 project 名直接拼 cache 路径——含分隔符会写出
+        # cache 子目录（路径逃逸面），宁可拒绝也不猜测
+        raise RuntimeError(f"cbm reported unsafe project name: {project!r}")
     db = cache_dir() / f"{project}.db"
     result["status"] = "indexed"
     result["project"] = project

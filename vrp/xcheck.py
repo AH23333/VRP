@@ -113,7 +113,18 @@ def _quad(sname: str, sfile: str, tname: str, tfile: str) -> tuple[str, str, str
 
 
 def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
+    """CA calls vs facts.db edges → discrepancy_ledger。
+
+    index 非 indexed（node/CA 缺失或失败）时不比对陈旧 ca_db——
+    R6' 病根五残留收口（陈旧交叉索引使 agreement% 失真）。
+    """
     index_result = index_with_code_atlas(repo, reindex=reindex)
+    if index_result.get("status") != "indexed":
+        return {
+            "index": index_result,
+            "ledger_rows": 0,
+            "reason": "ca index not fresh (skipped/failed) - stale db not compared",
+        }
     ca_db = repo / ".code-atlas" / "index.db"
     if not ca_db.exists():
         return {"index": index_result, "ledger_rows": 0}
