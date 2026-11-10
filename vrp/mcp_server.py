@@ -76,13 +76,21 @@ def _write_temp(tx_json: str) -> Path:
 
 
 def _open_facts_rw(repo: Path) -> sqlite3.Connection:
-    """curate 族写 facts.db：ensure_schema 自动迁移新表 + M4 freshness 硬拒。"""
+    """curate 族写 facts.db：ensure_schema 自动迁移新表 + M4 freshness 硬拒。
+
+    异常路径必须 con.close()——长驻 MCP 会话里句柄泄漏会在 Windows 上
+    累积文件锁（facts.db 无法删除/被后续访问阻塞）。
+    """
     facts = repo / ".vrp" / "facts.db"
     if not facts.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts}")
     con = sqlite3.connect(facts)
-    etl_mod.ensure_schema(con)
-    etl_mod.check_facts_freshness(con, repo)
+    try:
+        etl_mod.ensure_schema(con)
+        etl_mod.check_facts_freshness(con, repo)
+    except Exception:
+        con.close()
+        raise
     return con
 
 
@@ -188,7 +196,8 @@ def build_server(repo: Path) -> "MCPServer":
             tmp.unlink(missing_ok=True)
         tx_dir = repo / ".vrp" / "transactions"
         tx_dir.mkdir(parents=True, exist_ok=True)
-        path = tx_dir / f"{payload['id']}.json"
+        tid = s6_transact.TID_SAFE.sub("_", payload["id"])
+        path = tx_dir / f"{tid}.json"
         if path.exists() and not overwrite:
             raise SystemExit(
                 f"tx_submit: transaction exists (overwrite=True to replace): {path.name}"
@@ -206,7 +215,8 @@ def build_server(repo: Path) -> "MCPServer":
             tmp.unlink(missing_ok=True)
         tx_dir = repo / ".vrp" / "transactions"
         tx_dir.mkdir(parents=True, exist_ok=True)
-        path = tx_dir / f"{payload['id']}.json"
+        tid = s6_transact.TID_SAFE.sub("_", payload["id"])
+        path = tx_dir / f"{tid}.json"
         path.write_text(tx_json, encoding="utf-8")
         verdict = s6_transact.transact(repo, path, name or repo.name, confirm=False)
         return _dumps(verdict)

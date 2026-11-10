@@ -129,8 +129,12 @@ def _open_facts_rw(repo: Path):
     if not facts_path.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
     con = sqlite3.connect(facts_path)
-    etl_mod.ensure_schema(con)
-    etl_mod.check_facts_freshness(con, repo)
+    try:
+        etl_mod.ensure_schema(con)
+        etl_mod.check_facts_freshness(con, repo)
+    except Exception:
+        con.close()
+        raise
     return con, facts_path
 
 
@@ -691,7 +695,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (RuntimeError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
+    except (RuntimeError, ValueError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

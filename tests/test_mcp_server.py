@@ -544,3 +544,52 @@ def test_enforce_over_mcp(tmp_path, monkeypatch):
         assert row == ("P9", "layer-violation", "s7-enforce")
     finally:
         con.close()
+
+
+def test_tx_submit_malicious_id_stays_in_transactions(tmp_path):
+    """R-G M1: tx id 含路径片段时持久层文件名必须 TID_SAFE 清洗，不得逃出 transactions/。"""
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "tx_submit", {"tx_json": _tx_json("../escape-probe")})
+
+    out = _run(_drive(repo, {"submit": plan}))["submit"]
+    assert out["submitted"] is True, out
+    tx_dir = repo / ".vrp" / "transactions"
+    persisted = list(tx_dir.glob("*.json"))
+    assert len(persisted) == 1, f"expected exactly one persisted tx, got {persisted}"
+    assert not (repo / ".vrp" / "escape-probe.json").is_file(), "path escape outside transactions/"
+
+
+def test_tx_run_malicious_id_stays_in_transactions(tmp_path):
+    """R-G M1: tx_run 先持久后 transact，同一 TID_SAFE 文件名防线。"""
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "tx_run", {"tx_json": _tx_json("sub/../../evil-run")})
+
+    _run(_drive(repo, {"run": plan}))["run"]  # transact 自会失败（非 git 仓），只验文件落点
+    tx_dir = repo / ".vrp" / "transactions"
+    persisted = list(tx_dir.glob("*.json"))
+    assert len(persisted) == 1, f"expected exactly one persisted tx, got {persisted}"
+    assert not (repo / ".vrp" / "evil-run.json").is_file(), "path escape outside transactions/"
+    assert not (repo / "evil-run.json").is_file(), "path escape outside repo"
+
+
+def test_mcp_open_facts_rw_closes_handle_on_stale(tmp_path):
+    """R-G N2: freshness 硬拒路径必须关闭 sqlite 句柄。
+
+    长驻 MCP 会话每次 stale curate 调用泄一个句柄会在 Windows 上累积文件锁；
+    修复前 unlink 探测抛 PermissionError（仅 Windows 有守卫力，其他平台恒绿无害）。
+    """
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("UPDATE meta SET value = 'mismatch-head' WHERE key = 'git_head'")
+    con.commit()
+    con.close()
+    try:
+        mcp_server._open_facts_rw(repo)
+        raise AssertionError("expected RuntimeError from stale facts.db")
+    except RuntimeError:
+        pass
+    (repo / ".vrp" / "facts.db").unlink()  # leaked handle would lock this on Windows

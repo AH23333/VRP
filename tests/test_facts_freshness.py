@@ -61,6 +61,24 @@ def test_open_facts_rw_enforces_freshness(tmp_path, monkeypatch):
         cli._open_facts_rw(repo)
 
 
+def test_open_facts_rw_closes_handle_on_stale(tmp_path, monkeypatch):
+    """R-G N2: stale 硬拒路径必须 con.close()——未关句柄在 Windows 锁住 facts.db。
+
+    修复前 unlink 探测抛 PermissionError；仅 Windows 有守卫力，其他平台恒绿无害。
+    """
+    repo = tmp_path / "repo"
+    (repo / ".vrp").mkdir(parents=True)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    etl.ensure_schema(con)
+    con.execute("INSERT INTO meta (key, value) VALUES ('git_head', 'old-head')")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(etl, "current_git_head", lambda r: "new-head")
+    with pytest.raises(RuntimeError, match="stale"):
+        cli._open_facts_rw(repo)
+    (repo / ".vrp" / "facts.db").unlink()  # leaked handle would lock this on Windows
+
+
 def test_etl_records_git_head(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()

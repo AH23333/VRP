@@ -394,7 +394,12 @@ def nav_slice(repo: Path, slice_id: str) -> dict:
         if row is None:
             raise SystemExit(f"nav_slice: unknown slice_id: {slice_id}")
         name, summary, status, payload_json, created_at = row
-        payload = json.loads(payload_json)
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError:
+            raise SystemExit(
+                f"nav_slice: corrupt slice payload for {slice_id} - re-run curation to rebuild it"
+            )
         steps: list[dict] = []
         for i, step in enumerate(payload.get("steps", [])):
             fid = step.get("fid", "")

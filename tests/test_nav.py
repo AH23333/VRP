@@ -348,3 +348,20 @@ def test_query_facts_params_and_truncation(tmp_path):
     full = nav.query_facts(repo, "SELECT fid FROM symbols", max_rows=10)
     assert full["truncated"] is False
     assert full["rowcount"] == 2
+
+
+def test_nav_slice_corrupt_payload_clean_error(tmp_path):
+    """R-G N1: 坏 payload_json 给干净 corrupt 错误（与 _slices_of 同列容错口径），非裸 JSONDecodeError。"""
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, status, payload_json)"
+        " VALUES ('bad', 'n', 's', 'active', 'not-json{')"
+    )
+    con.commit()
+    con.close()
+    try:
+        nav.nav_slice(repo, "bad")
+        raise AssertionError("corrupt slice payload must raise SystemExit")
+    except SystemExit as exc:
+        assert "corrupt slice payload" in str(exc)
