@@ -266,10 +266,14 @@ WHERE c.name NOT IN ('main', 'run', 'app', 'index', 'setup', 'teardown', 'handle
   AND c.norm NOT GLOB '*.spec.js*'
   AND c.norm NOT GLOB '*.test.tsx*'
   AND c.norm NOT GLOB '*.spec.tsx*'
-  AND c.norm NOT GLOB '*__tests__/*'
-  AND c.norm NOT GLOB '*tests/*'
-  AND c.norm NOT GLOB '*test/*'
-  AND c.norm NOT GLOB '*spec/*'
+  AND c.norm NOT GLOB '__tests__/*'
+  AND c.norm NOT GLOB '*/__tests__/*'
+  AND c.norm NOT GLOB 'tests/*'
+  AND c.norm NOT GLOB '*/tests/*'
+  AND c.norm NOT GLOB 'test/*'
+  AND c.norm NOT GLOB '*/test/*'
+  AND c.norm NOT GLOB 'spec/*'
+  AND c.norm NOT GLOB '*/spec/*'
   AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = c.fid AND e.type IN ('CALLS', 'CALL_REFERENCE', 'MENTIONS', 'SPAWNS'))
   AND NOT EXISTS (SELECT 1 FROM usage_hints u WHERE u.dst_fid = c.fid)
   AND NOT EXISTS (SELECT 1 FROM test_linkage t WHERE t.target_fid = c.fid);

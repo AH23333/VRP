@@ -72,6 +72,18 @@ def test_content_repo_probe_ignores_ignored_dirs(tmp_path):
     assert probe["source_files"] == 0
 
 
+def test_content_repo_probe_ignores_build_underscore_dir(tmp_path):
+    """R-I：_build（Elm/FAKE/Sphinx 等标准产物目录名，HomeWork 实测命中）入 IGNORE_DIRS。"""
+    repo = tmp_path / "content2"
+    _mk_content_repo(repo)
+    (repo / "_build").mkdir()
+    (repo / "_build" / "shot.js").write_text("var s;\n", encoding="utf-8")
+    probe = s0_precheck.content_repo_probe(repo)
+    assert probe["detected"] is True
+    assert probe["source_files"] == 0
+    assert "_build/shot.js" not in str(probe)
+
+
 def test_precheck_includes_content_repo(tmp_path, monkeypatch):
     repo = tmp_path / "homework"
     _mk_content_repo(repo)

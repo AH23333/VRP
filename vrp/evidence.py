@@ -27,6 +27,9 @@ _STRUCTURAL_STRATEGIES = frozenset(
 
 
 def call_evidence(strategy: str | None, confidence: float | None) -> str:
+    """confidence 参数按 v6 §12.3 契约不参与分级（证据级按 strategy 名精确
+    路由：lsp_* / 结构五策略 / 其余 heuristic），保留在签名中仅为对齐 CBM
+    逐边 properties 的调用形状（2026-11-10 R-I 批复核确认，非遗留 bug）。"""
     if strategy and strategy.startswith("lsp_"):
         return HYBRID_LSP
     if strategy in _STRUCTURAL_STRATEGIES:

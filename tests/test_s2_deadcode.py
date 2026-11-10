@@ -48,6 +48,42 @@ def test_dead_code_candidates(facts_db):
     assert live[3] == "src/mod.py"
 
 
+def test_is_candidate_dir_segment_traps():
+    """R-I：目录段子串陷阱不产生假排除（latest/contests 等真实目录是候选）。"""
+    assert is_candidate("helper", "docs/latest/helper.py")
+    assert is_candidate("helper", "src/contests/helper.py")
+    assert is_candidate("helper", "skills/baseline-test/helper.js")
+    assert is_candidate("helper", "src/mytests/helper.py")
+
+
+def test_view_dir_glob_parity_with_python(facts_db):
+    """R-I：v_dead_code 目录 GLOB 与 is_candidate 段式语义对齐（quick 级守卫，deep 级 30x32 组合的日常护栏）。"""
+    rows = [
+        ("f-latest", "docs/latest/helper.py"),
+        ("f-contests", "src/contests/helper.py"),
+        ("f-tests", "src/tests/helper.py"),
+        ("f-test", "test/helper.ts"),
+        ("f-mytests", "src/mytests/helper.py"),
+    ]
+    for fid, fp in rows:
+        facts_db.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, content_hash)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (fid, "p", f"p.{fid}", "Function", "helper", fp, "h"),
+        )
+    facts_db.commit()
+    for fid, fp in rows:
+        in_view = facts_db.execute(
+            "SELECT COUNT(*) FROM v_dead_code WHERE fid = ?", (fid,)
+        ).fetchone()[0] == 1
+        assert in_view == is_candidate("helper", fp), f"drift: {fp}"
+    assert {r[0] for r in facts_db.execute("SELECT fid FROM v_dead_code")} == {
+        "f-latest",
+        "f-contests",
+        "f-mytests",
+    }
+
+
 def test_scan_writes_findings(facts_db):
     _seed(facts_db)
     before = facts_db.execute("SELECT COUNT(*) FROM findings").fetchone()[0]

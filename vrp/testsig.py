@@ -24,7 +24,7 @@ _TEST_SUBSTR = (
     ".test.tsx",
     ".spec.tsx",
 )
-_TEST_DIRS = ("__tests__/", "tests/", "test/", "spec/")
+_TEST_DIR_SEGMENTS = frozenset({"test", "tests", "spec", "__tests__"})
 
 
 def _basename(path: str) -> str:
@@ -32,11 +32,16 @@ def _basename(path: str) -> str:
     return path[slash + 1 :] if slash >= 0 else path
 
 
-# Decision (2026-11-03): substring matching below is the agreed test-path
-# criterion and is kept as-is. Coexisting with the GLOB patterns in
-# facts_schema (v_dead_code) is a known trade-off - do not change either
-# side unilaterally.
 def is_test_path(path: str) -> bool:
+    """目录段采用段式精确匹配（2026-11-10，R-I 批）：目录段必须整段等于
+    test/tests/spec/__tests__ 才算测试目录。旧子串语义（"test/" in norm）
+    对 docs/latest/、contests/、protest/、baseline-test/、mytests/ 等真实
+    目录恒真（实测 15 项目 147 个文件假阳性），与 s7 引擎族 _is_test 的
+    「子串污染防护」口径不一致，且 v_dead_code SQL 侧 '*test/*' GLOB 同假
+    阳性——本函数与 facts_schema v_dead_code 的目录 GLOB 于同一批改为
+    段式（Python/SQL 双侧协调变更，对齐由 view_alignment 30x32 组合锁定）。
+    文件名级规则（test_ 前缀/_test 与 *Test.* 等后缀/.test.ts 点式）不变。
+    """
     if not path:
         return False
     norm = path.replace("\\", "/")
@@ -47,12 +52,7 @@ def is_test_path(path: str) -> bool:
         return True
     if any(s in norm for s in _TEST_SUBSTR):
         return True
-    if any(d in norm for d in _TEST_DIRS):
-        return True
-    for d in _TEST_DIRS:
-        if norm.startswith(d):
-            return True
-    return False
+    return any(seg in _TEST_DIR_SEGMENTS for seg in norm.split("/")[:-1])
 
 
 def is_synthetic_path(path: str) -> bool:

@@ -71,6 +71,30 @@ def test_rust_ext():
     assert not is_rust("src/lib.rs.bak")
 
 
+def test_dir_segment_exact_matching():
+    """R-I：目录段段式精确匹配——子串陷阱（latest/contests/protest 等真实目录）不再误判。"""
+    assert not is_test_path("docs/latest/guide.md")
+    assert not is_test_path("src/contests/foo.py")
+    assert not is_test_path("protest/x.py")
+    assert not is_test_path("skills/ui2v-motions/baseline-test/index.html")
+    assert not is_test_path("verify/unwind/skills/uw-analyze-e2e-tests/SKILL.md")
+    assert not is_test_path("compatibility_test/README.md")
+    assert not is_test_path("itelmn/kallaway-t2-lb-spec/index.html")
+
+
+def test_dir_segment_genuine_dirs():
+    assert is_test_path("a/b/test/c.py")
+    assert is_test_path("deep/nested/tests/x.py")
+    assert is_test_path("root/spec/x.rb")
+
+
+def test_dir_segment_behavior_change_locked():
+    """R-I：段式语义行为变更锁定——mytests 目录/文件名 test 均不再命中（与 v_dead_code SQL 同批协调变更）。"""
+    assert not is_test_path("src/mytests/x.py")
+    assert not is_test_path("bin/test")
+    assert not is_test_path("tests")
+
+
 def test_rust_self_build_rule():
     # CBM emits TESTS=0 for Rust (probed 2026-11-04) but resolves test->lib
     # CALLS edges, so the ETL rebuilds test linkage for .rs the same way

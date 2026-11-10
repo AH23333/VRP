@@ -20,6 +20,7 @@ IGNORE_DIRS = {
     "venv",
     "target",
     "build",
+    "_build",
     "dist",
     ".code-atlas",
     ".codebase-memory",

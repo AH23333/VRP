@@ -49,6 +49,8 @@ def test_census_fallback_ignores_hidden_and_ignored_dirs(tmp_path):
     (repo / "node_modules" / "b.py").write_text("y = 2\n", encoding="utf-8")
     (repo / ".git").mkdir()
     (repo / ".git" / "c.py").write_text("z = 3\n", encoding="utf-8")
+    (repo / "_build").mkdir()
+    (repo / "_build" / "d.py").write_text("w = 4\n", encoding="utf-8")
     census = s0_precheck.census_fallback(repo)
     py = next(l for l in census["languages"] if l["name"] == "Python")
     assert py["files"] == 1
