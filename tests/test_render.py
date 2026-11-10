@@ -967,3 +967,61 @@ def test_render_chain_error_text_uses_stdout_json():
     assert render_chain._archify_error_text(proc) == "boom detail"
     proc2 = subprocess.CompletedProcess(["node"], 1, stdout="", stderr="plain err")
     assert render_chain._archify_error_text(proc2) == "plain err"
+
+
+# ------------------------------------------- _arch_id Unicode 守卫（R-H #79）
+# 病根：str.isalnum() 放过 Unicode 字母——中文目录/模块名（如 AI_Animation 的
+# 01_动效库）曾生成含中文 id，违反 archify $defs/id ^[a-zA-Z][a-zA-Z0-9_-]*$
+# （schema38，纯 ASCII）→ validate 拒 → L0 模块图降级。
+
+_ARCH_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+
+
+@pytest.mark.parametrize("raw", [
+    "01_动效库",       # 实测项目目录（数字开头 + 中文）
+    "动画模块",         # 纯中文模块 id
+    "src/组件",        # 路径型目录
+    "模块-Ⅻ",          # Unicode 数字/字母变体
+    "«quoted»",        # 全非法字符（空清洗兜底）
+])
+def test_arch_id_unicode_inputs_match_archify_pattern(raw):
+    assert _ARCH_ID_PATTERN.match(render._arch_id(raw))
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("api-gateway", "api-gateway"),
+    ("core", "core"),
+    ("01_tools", "n01_tools"),
+    ("src/comp", "src-comp"),
+])
+def test_arch_id_ascii_inputs_unchanged(raw, expected):
+    """ASCII 输入行为零变化（回归保护）。"""
+    assert render._arch_id(raw) == expected
+
+
+def test_architecture_ir_dir_fallback_unicode_dir(tmp_path):
+    """AI_Animation 场景：中文目录名 → L0 目录聚合兜底 IR 组件 id 仍须过 archify 约束。"""
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES ('f1', 'p', 'q', 'Function', 'n', '01_动效库/x.js', 1, 3, 'h')"
+    )
+    con.commit()
+    con.close()
+    con = _ro_con(repo)
+    ir = render.build_architecture_ir(repo, con)
+    con.close()
+    assert ir["meta"]["title"].startswith("L0 directory")
+    for comp in ir["components"]:
+        assert _ARCH_ID_PATTERN.match(comp["id"]), comp["id"]
+
+
+def test_build_sarif_information_uri_points_to_real_repo(tmp_path):
+    """SARIF driver.informationUri 须指向真实仓库（曾编造 DeusData URL，R-H #79）。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = _ro_con(repo)
+    sarif = render.build_sarif(repo, con, "0.0.0-test")
+    con.close()
+    assert sarif["runs"][0]["tool"]["driver"]["informationUri"] == "https://github.com/AH23333/VRP"

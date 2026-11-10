@@ -141,8 +141,12 @@ def _clean_component(comp: dict) -> dict:
 
 
 def _arch_id(raw: str) -> str:
-    """archify id 硬约束 ^[a-zA-Z][a-zA-Z0-9_-]*$：非法字符转 '-'，首字符非字母加前缀。"""
-    cleaned = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in str(raw))
+    """archify id 硬约束 ^[a-zA-Z][a-zA-Z0-9_-]*$（纯 ASCII，schema38）：非法字符转 '-'，
+    首字符非字母加前缀。str.isalnum 放过 Unicode 字母——中文目录/模块名（如 01_动效库）
+    曾生成含中文 id 被 validate 拒绝致 L0 降级（R-H #79），故须 isascii() 守卫。
+    """
+    cleaned = "".join(
+        ch if ch.isascii() and (ch.isalnum() or ch in "-_") else "-" for ch in str(raw))
     if not cleaned or not cleaned[0].isalpha():
         cleaned = "n" + cleaned
     return cleaned
@@ -367,7 +371,7 @@ def build_sarif(repo: Path, con: sqlite3.Connection, tool_version: str) -> dict:
             }],
         })
     run: dict = {
-        "tool": {"driver": {"name": "vrp", "version": tool_version, "informationUri": "https://github.com/DeusData/vibe-restruct-pipe"}},
+        "tool": {"driver": {"name": "vrp", "version": tool_version, "informationUri": "https://github.com/AH23333/VRP"}},
         "results": results,
     }
     if total > SARIF_FINDINGS_CAP:
