@@ -292,10 +292,19 @@ def _blank_noncode(text: str) -> tuple[str, dict[int, int]]:
 
 
 def _read(repo: Path, rel: str) -> str:
+    """读源文件并剥离头部 UTF-8 BOM。
+
+    perlunicode：脚本头部 UTF-8 BOM 字节 "completely ignored"——BOM'd
+    .pl/.pm 是合法源码。POD（=head1 等）/__END__/__DATA__ 均列 0
+    （i==0 或前置 \n）判定，BOM 未剥时行 1 构造全部失明（POD 块当代码、
+    __END__/__DATA__ 后尾节当代码），故须在读入口统一剥离；剥 1 字符使
+    位置统一 -1、行号不变。
+    """
     try:
-        return (repo / rel).read_text(encoding="utf-8", errors="replace")
+        text = (repo / rel).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    return text[1:] if text.startswith("\ufeff") else text
 
 
 def _parse_package(blanked: str) -> str | None:

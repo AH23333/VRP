@@ -442,6 +442,28 @@ def test_scan_ruby_no_module_orphan(tmp_path):
     assert files == 1  # 扫描计数仍诚实
 
 
+def test_scan_ruby_bom_line1_constructs(tmp_path):
+    """行 1 构造 + 头部 UTF-8 BOM：ruby parser_prepare 跳过 BOM（合法源码），
+    =begin/__END__/嵌套 opener 不得失明（修复前：块注释漏检→假边、
+    DATA 节污染图、嵌套容器裂为平级）。"""
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    (repo / "b1.rb").write_text(
+        '\ufeff=begin\nrequire "ghost"\n=end\nmodule B1\nend\n', encoding="utf-8"
+    )
+    (repo / "b2.rb").write_text(
+        "\ufeffmodule A\nmodule B\nend\nend\n", encoding="utf-8"
+    )
+    (repo / "b3.rb").write_text(
+        '\ufeff__END__\nmodule Ghost\nend\nrequire "ghost"\n', encoding="utf-8"
+    )
+    file_containers, require_rows, files, tests_excluded, timed_out = s7_enforce_ruby.scan_ruby(repo)
+    assert timed_out is False
+    assert files == 3
+    assert file_containers == {"b1.rb": ["B1"], "b2.rb": ["A::B"]}  # b3 DATA 节不污染
+    assert require_rows == []  # 块注释/DATA 内 require 不入图
+
+
 def test_scan_ruby_timeout(tmp_path):
     repo = _mk_ruby_repo(tmp_path)
     file_containers, require_rows, files, tests, timed_out = s7_enforce_ruby.scan_ruby(repo, timeout=0)
@@ -620,6 +642,23 @@ def test_run_ruby_violation_e2e(tmp_path):
     assert payload["imported"] == "Probe::Api"
     assert payload["chain"] == ["Probe::Storage", "Probe::Api"]
     assert payload["line"] == 1
+
+
+def test_run_ruby_bom_line1_module_e2e(tmp_path):
+    """行 1 module + BOM E2E：修复前 BOM 吞行 1 opener → 嵌套容器裂为
+    平级（Probe/Api）→ Probe::Api 叶失明 → 违例链断裂 0 违例。"""
+    repo = _mk_ruby_repo(tmp_path)
+    api = repo / "src" / "api" / "api.rb"
+    api.write_text("\ufeff" + api.read_text(encoding="utf-8"), encoding="utf-8")
+    con = _con(repo)
+    try:
+        out = s7_enforce_ruby.run_ruby(repo, con, json.loads(RUBY_STRUCTURE), "active", RUBY_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1  # 修复前 0（BOM 吞行 1 opener 致 Probe::Api 叶失明）
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
 
 
 def test_run_ruby_transitive_e2e(tmp_path):

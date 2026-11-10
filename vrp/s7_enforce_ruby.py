@@ -329,10 +329,19 @@ def _regex_end(text: str, i: int) -> int:
 
 
 def _read(repo: Path, rel: str) -> str:
+    """读源文件并剥离头部 UTF-8 BOM。
+
+    ruby parse.y parser_prepare 对任何解析入口（主脚本/require 文件）跳过
+    头部 EF BB BF（BOM 对词法器完全不可见）——BOM'd .rb 是合法源码。
+    =begin/__END__ 等列 0（i==0 或前置 \n）构造在 BOM 未剥时全部失明
+    （=begin 块当代码、__END__ 后 DATA 节当代码、行 1 opener 漏计致嵌套
+    容器路径错挂），故须在读入口统一剥离；剥 1 字符使位置统一 -1、行号不变。
+    """
     try:
-        return (repo / rel).read_text(encoding="utf-8", errors="replace")
+        text = (repo / rel).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    return text[1:] if text.startswith("\ufeff") else text
 
 
 # ------------------------------------------------------------------ 解析

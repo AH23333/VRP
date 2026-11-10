@@ -301,6 +301,25 @@ def test_scan_perl_layout(tmp_path):
     assert [r["target"] for r in import_rows] == ["Bar"]  # 测试/产物 use 不入列
 
 
+def test_scan_perl_bom_line1_constructs(tmp_path):
+    """行 1 构造 + 头部 UTF-8 BOM：perl 解释器完全忽略头部 BOM
+    （perlunicode，合法源码），POD/__END__ 列 0 判定不得失明
+    （修复前：POD 块/尾节内 use 当代码 → 假边）。"""
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    (repo / "p1.pl").write_text(
+        "\ufeff=pod\nuse Ghost;\n=cut\npackage Real;\n", encoding="utf-8"
+    )
+    (repo / "p2.pl").write_text(
+        "\ufeff__END__\nuse Ghost;\n", encoding="utf-8"
+    )
+    file_pkg, import_rows, files_scanned, tests_excluded, timed_out = s7_enforce_perl.scan_perl(repo)
+    assert timed_out is False
+    assert files_scanned == 2
+    assert file_pkg == {"p1.pl": "Real"}  # POD 内 use 不入图，package 仍识别
+    assert import_rows == []  # POD/尾节内 use 不入图
+
+
 def test_scan_perl_timeout(tmp_path):
     repo = _mk_perl_repo(tmp_path)
     _f, _r, _files, _e, timed_out = s7_enforce_perl.scan_perl(repo, timeout=0)
@@ -426,6 +445,29 @@ def test_run_perl_violation_e2e(tmp_path):
     assert payload["imported"] == "Logging"
     assert payload["chain"] == ["Queue", "Logging"]
     assert payload["line"] == 2
+
+
+def test_run_perl_bom_pod_line1_e2e(tmp_path):
+    """行 1 POD + BOM E2E：修复前 POD 列 0 判定失明 → 块内 use 当代码
+    → 幽灵边（假阳违例）。修复后 POD 正确空白化，0 违例。"""
+    repo = _mk_perl_repo(tmp_path)
+    (repo / "queue" / "Queue.pm").write_text(
+        "\ufeff=pod\nuse Logging;\n=cut\npackage Queue;\nuse Logging;\n1;\n",
+        encoding="utf-8",
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_perl.run_perl(repo, con, json.loads(PERL_STRUCTURE), "active", PERL_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    # POD 块外第 4 行 use Logging 是真依赖（queue → logging 仍为违例链锚）
+    assert out["violations"] == 1
+    row = sqlite3.connect(repo / ".vrp" / "facts.db").execute(
+        "SELECT start_line, payload_json FROM findings"
+    ).fetchone()
+    assert row[0] == 5  # 锚定真 use 行（第 5 行），非 POD 内幽灵行（第 2 行）
+    assert json.loads(row[1])["line"] == 5
 
 
 def test_run_perl_transitive_e2e(tmp_path):
