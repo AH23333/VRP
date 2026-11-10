@@ -28,11 +28,13 @@
   * 括号/向量/花括号单字符 token+原子 token（行号随 token）；
   * 递归遍历全部 list 形态，头部 ns/require/use/load/load-file 处理
     （`/` 成员访问守卫——`alias/require`/Java 方法不误触）；
-  * ns 形态：reader 元数据前缀（`^`/`^:kw`/`#^` 及其后元数据值形态）
-    跳过后取命名空间名（symbol/串）；`:require`/`:use`/
-    `:require-macros` 子句——每条目取向量头部命名空间（`:refer`/
-    `:as`/`:exclude` 参数不误取）；前缀列表 `[prefix [sub :as x] ...]`
-    递归拼接 prefix.sub；
+   * ns 形态：reader 元数据前缀（`^`/`^:kw`/`#^` 及其后元数据值形态）
+     跳过后取命名空间名（symbol/串）；`:require`/`:use`/
+     `:require-macros` 子句——条目判别镜像 clojure.core `libspec?`
+     （向量第二元素 keyword → 单 libspec；否则前缀列表）：单条目取向量
+     头部命名空间（`:refer`/`:as`/`:exclude` 参数不误取）；前缀列表
+     `[p sub1 [sub2 :as x]]` 逐项 load-lib 语义——裸 symbol 拼接
+     p.sub1（不载入 p）、向量后缀递归拼接 prefix.sub；
   * require/use 函数形态：`'sym`/`'[vec]`/串实参+`:reload` 族 flag 跳过；
   * reader 条件 `#?`/`#?@`（.cljc 双平台形态）：形树级展开——分支不
     区分全分支按序（`#?` 插入分支形态/`#?@` 拼接分支形态项 Splicing），
@@ -336,10 +338,14 @@ def _handle_prefixed(entry: dict, prefix: str, out_rows: list[dict]) -> None:
 def _handle_entry(entry: dict, out_rows: list[dict]) -> None:
     """require/use 条目 → 依赖行（kind='ns'）。
 
-    形态：symbol（裸命名空间）/串/向量 `[my.ns :as x :refer [a]]`（取头
-    部）/前缀列表 `[my.prefix [sub :as x]]`（头部+子向量递归拼接）；
-    `:refer`/`:as` 参数不误取（`:as` 后是 keyword，refer 向量头部是函
-    数名——仅取条目级向量头部+裸 symbol 条目）。
+    形态：symbol（裸命名空间）/串/向量。向量判别镜像 clojure.core
+    `libspec?`（core.clj:6122）反判定：第二元素为 keyword（`:as` 选项
+    起始）→ 单 libspec `[my.ns :as x :refer [a]]`（取头部，`:refer`/
+    `:as` 参数不误取）；否则 → **前缀列表** `[p sub1 sub2 [sub2b :as y]]`
+    ——逐项 `load-lib p`（core.clj:6244-6247）：裸 symbol 拼接 p.sub1/
+    p.sub2（官方 libs 文档 `(require '(clojure.contrib def except sql))`
+    三符号形态——**不载入 p 本身**），向量后缀 `_handle_prefixed` 递归；
+    keyword/串项跳过（`[p x :as y]` 真实 Clojure 抛异常——宽容跳过）。
     """
     if entry["k"] in ("sym", "str"):
         head = _entry_head(entry)
@@ -352,9 +358,21 @@ def _handle_entry(entry: dict, out_rows: list[dict]) -> None:
     head = _entry_head(items[0])
     if head is None:
         return
-    if len(items) >= 2 and items[1]["k"] == "seq":
+    if len(items) >= 2 and items[1]["k"] != "kw":
         for sub in items[1:]:
-            _handle_prefixed(sub, head, out_rows)
+            if sub["k"] == "sym":
+                w = _strip_reader_macros(sub["v"])
+                if (
+                    w
+                    and not w.startswith(":")
+                    and "/" not in w
+                    and not w.startswith(".")
+                ):
+                    out_rows.append(
+                        {"kind": "ns", "target": f"{head}.{w}", "line": sub["line"]}
+                    )
+            elif sub["k"] == "seq":
+                _handle_prefixed(sub, head, out_rows)
         return
     if "/" not in head and not head.startswith("."):
         out_rows.append({"kind": "ns", "target": head, "line": items[0]["line"]})

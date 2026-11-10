@@ -208,6 +208,30 @@ def test_extract_require_function_forms():
     ]
 
 
+def test_extract_prefix_list_bare_symbol_suffixes():
+    """前缀列表裸 symbol 后缀（clojure.core libspec? 反判定，core.clj:6122）：
+    [p x y] 载入 p.x/p.y 不载入 p；混合向量/裸 symbol 后缀；带引号函数形态；
+    单条目 :as 回归（别名值是裸 symbol——不误拼前缀）。"""
+    src = (
+        "(ns my.app\n"                       # 1
+        "  (:require [p x y]\n"              # 2
+        "            [p2 [x2 :as xx] y2]\n"  # 3
+        "            [q :as qq]))\n"         # 4
+        "(require '(p3 z))\n"                # 5
+    )
+    rows, ns_name = _extract(src)
+    assert ns_name["name"] == "my.app"
+    targets = sorted(r["target"] for r in rows)
+    assert targets == ["p.x", "p.y", "p2.x2", "p2.y2", "p3.z", "q"]
+    assert "p" not in targets and "p2" not in targets  # 前缀自身不载入（非幽灵目标）
+    assert "q.qq" not in targets  # :as 别名值不误拼前缀
+    line_of = {r["target"]: r["line"] for r in rows}
+    assert line_of["p.x"] == 2
+    assert line_of["p2.y2"] == 3
+    assert line_of["q"] == 4
+    assert line_of["p3.z"] == 5
+
+
 def test_extract_guards_and_nested():
     """`/` 成员访问守卫 + 关键字头非调用；嵌套 require 递归提取（条件 require）。"""
     src = (
@@ -522,6 +546,37 @@ def test_run_clj_transitive_e2e(tmp_path):
     assert by_importer["my-app.storage"]["chain"] == ["my-app.storage", "my-app.queue", "my-app.logging"]
     assert by_importer["my-app.storage"]["line"] == 2  # 锚定链尾直接边：queue.clj 第 2 行
     assert all(r[0] == "src/my_app/queue.clj" for r in rows)
+
+
+def test_run_clj_prefix_list_violation_e2e(tmp_path):
+    """E2E：违例边仅经裸 symbol 后缀前缀列表 `[my-app logging]` 可达——
+    修复前引擎误当单条目发幽灵目标 `my-app` 致 0 违例（违例链断裂）；
+    修复后 1 违例锚定真 require 行。"""
+    repo = _mk_clj_repo(tmp_path)
+    (repo / "src" / "my_app" / "queue.clj").write_text(
+        "(ns my-app.queue\n"
+        "  (:require [my-app logging]))\n"
+        "(defn run [] (logging/msg 1))\n",
+        encoding="utf-8",
+    )
+    con = _con(repo)
+    try:
+        out = s7_enforce_clj.run_clj(repo, con, json.loads(CLJ_STRUCTURE), "active", CLJ_CONTAINERS)
+    finally:
+        con.close()
+    assert out["status"] == "ok"
+    assert out["violations"] == 1
+    assert out["findings_written"] == 1
+    assert out["anchored"] == 1
+    row = sqlite3.connect(repo / ".vrp" / "facts.db").execute(
+        "SELECT file_path, start_line, payload_json FROM findings"
+    ).fetchone()
+    assert row[0] == "src/my_app/queue.clj"
+    assert row[1] == 2  # 锚定真 require 行（前缀列表行）
+    payload = json.loads(row[2])
+    assert payload["importer"] == "my-app.queue"
+    assert payload["imported"] == "my-app.logging"
+    assert payload["chain"] == ["my-app.queue", "my-app.logging"]
 
 
 def test_run_clj_reader_conditional_violation_e2e(tmp_path):

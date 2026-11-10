@@ -169,6 +169,27 @@ def test_iter_module_refs_map_colon_guard():
     assert s7_enforce_erlang._iter_module_refs(blanked) == []
 
 
+def test_iter_module_refs_fun_side_macro():
+    """fun 侧宏 `mod:?F(` 提取（模块名静态已知——边目标=模块无需宏展开）；
+    模块侧宏 `?M:f(` 守卫回归（目标未知不提取）；`?MODULE:fun(` 不误触。"""
+    src = (
+        "A = mymod:?F(x),\n"  # fun 侧宏——提取（合法：宏展开为 fun 名原子）
+        "B = mymod:?F,\n"  # 裸宏无 ( / arity——不提取
+        "C = mymod:?OTHER/2,\n"  # fun 侧宏 /arity 引用——提取
+        "D = ?M:f(x),\n"  # 模块侧宏——目标未知不提取（守卫回归）
+        "E = ?MODULE:go(),\n"  # ?MODULE 同守卫
+        "F = other:'Quoted'(x),\n"  # 带引号 fun 原子回归
+        "ok.\n"
+    )
+    blanked = s7_enforce_erlang._blank_noncode(src)
+    rows = s7_enforce_erlang._iter_module_refs(blanked)
+    assert rows == [
+        {"target": "mymod", "line": 1},
+        {"target": "mymod", "line": 3},
+        {"target": "other", "line": 6},
+    ]
+
+
 def test_is_test_conventions():
     assert s7_enforce_erlang._is_test("test/a.erl")  # test/ 目录
     assert s7_enforce_erlang._is_test("tests/a.erl")  # tests/ 目录
