@@ -9,8 +9,6 @@ in v1. CBM linkages per v6 s6:
 from __future__ import annotations
 
 import json
-import os
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -18,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import s0_precheck, s1_cbm
+from . import procs, s0_precheck, s1_cbm
 
 RUNTIME_SLOTS = ("build", "test", "lint", "typecheck")
 TAIL_BYTES = 2000
@@ -28,22 +26,6 @@ FREEZE_KIND = "freeze"
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _kill_tree(proc: subprocess.Popen) -> None:
-    if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-            capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    else:
-        # child runs with start_new_session=True -> it is its own process
-        # group leader; kill the whole group so grandchildren die too.
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
 
 
 def _run_one(repo: Path, command: str, timeout: int) -> dict:
@@ -67,7 +49,7 @@ def _run_one(repo: Path, command: str, timeout: int) -> dict:
         out, err = proc.communicate(timeout=timeout)
         rc = proc.returncode
     except subprocess.TimeoutExpired:
-        _kill_tree(proc)
+        procs.kill_tree(proc)
         out, err = proc.communicate()
         timed_out = True
         rc = -1

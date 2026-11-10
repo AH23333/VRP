@@ -423,6 +423,26 @@ def test_staleness_detected_when_behind(tmp_path):
     assert st["behind"] == 1 and st["head"] == _head(repo) and st["facts_head"] == old
 
 
+def test_staleness_git_calls_pin_utf8_replace(tmp_path, monkeypatch):
+    """R-L：两处 git 调用必须显式 encoding/errors——text=True 落 locale
+    严格解码，读线程吞解码异常静默丢输出（stdout=None → .strip() 崩）。"""
+    repo = _mk_git_repo(tmp_path)
+    captured: list[dict] = []
+    real_run = subprocess.run
+
+    def spy_run(cmd, **kwargs):
+        captured.append(kwargs)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(render.subprocess, "run", spy_run)
+    st = render._staleness(repo, "0" * 40)
+    assert st is not None  # "0"*40 != HEAD → 两条 git 调用都触发
+    assert len(captured) == 2
+    assert all(
+        k.get("encoding") == "utf-8" and k.get("errors") == "replace" for k in captured
+    )
+
+
 def test_report_carries_stale_banner(tmp_path, monkeypatch):
     monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
     repo = _mk_git_repo(tmp_path)

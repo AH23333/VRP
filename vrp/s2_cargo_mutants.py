@@ -32,9 +32,10 @@ findings, evidence) stays in s2_mutate_run.
 from __future__ import annotations
 
 import json
-import subprocess
 from collections import Counter
 from pathlib import Path
+
+from . import procs
 
 OUT_DIR_NAME = ".vrp/cargo-mutants-out"
 REPORT_NAME = ".vrp/cargo-mutants-out/mutants.out/outcomes.json"
@@ -64,17 +65,8 @@ def run_cargo_mutants(bin_path: str, repo: Path, files: list[str], timeout: int)
     cmd = [bin_path, "mutants", "-o", OUT_DIR_NAME, "--no-times"]
     for f in files:
         cmd += ["-f", f]
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
+    rr = procs.run_tree(cmd, cwd=repo, timeout=timeout)
+    if rr["timed_out"]:
         return {
             "ok": False,
             "returncode": None,
@@ -83,10 +75,10 @@ def run_cargo_mutants(bin_path: str, repo: Path, files: list[str], timeout: int)
         }
     return {
         # rc 0 = all caught, 2 = some missed, 1 = engine error
-        "ok": proc.returncode >= 0 and (proc.returncode & 1) == 0,
-        "returncode": proc.returncode,
-        "stdout_tail": (proc.stdout or "")[-500:],
-        "stderr_tail": (proc.stderr or "")[-500:],
+        "ok": rr["returncode"] >= 0 and (rr["returncode"] & 1) == 0,
+        "returncode": rr["returncode"],
+        "stdout_tail": rr["stdout"][-500:],
+        "stderr_tail": rr["stderr"][-500:],
     }
 
 

@@ -25,12 +25,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
 
-from . import s2_cargo_mutants, s2_mutate, s2_stryker
+from . import procs, s2_cargo_mutants, s2_mutate, s2_stryker
 
 SOURCE = "mutate-run"
 PATHOLOGY = "P8"
@@ -79,37 +78,32 @@ def rc_ok(returncode: int) -> bool:
 
 def run_mutmut(bin_path: str, repo: Path, files: list[str], timeout: int) -> dict:
     runner = f'"{sys.executable}" -m pytest -x -q'
-    try:
-        proc = subprocess.run(
-            [
-                bin_path,
-                "run",
-                "--paths-to-mutate",
-                ",".join(files),
-                "--runner",
-                runner,
-                "--tests-dir",
-                ".",
-                # mutmut default 2.0 relabels killed-but-slow runs as
-                # 'suspicious' under batch load (rc==1 yet >2x baseline);
-                # 10.0 keeps reconcile deterministic in loaded pipelines
-                "--test-time-multiplier",
-                "10.0",
-                "--no-progress",
-            ],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
+    rr = procs.run_tree(
+        [
+            bin_path,
+            "run",
+            "--paths-to-mutate",
+            ",".join(files),
+            "--runner",
+            runner,
+            "--tests-dir",
+            ".",
+            # mutmut default 2.0 relabels killed-but-slow runs as
+            # 'suspicious' under batch load (rc==1 yet >2x baseline);
+            # 10.0 keeps reconcile deterministic in loaded pipelines
+            "--test-time-multiplier",
+            "10.0",
+            "--no-progress",
+        ],
+        cwd=repo,
+        timeout=timeout,
+    )
+    if rr["timed_out"]:
         return {"ok": False, "returncode": None, "stderr_tail": f"mutmut timed out after {timeout}s"}
     return {
-        "ok": rc_ok(proc.returncode),
-        "returncode": proc.returncode,
-        "stderr_tail": (proc.stderr or "")[-500:],
+        "ok": rc_ok(rr["returncode"]),
+        "returncode": rr["returncode"],
+        "stderr_tail": rr["stderr"][-500:],
     }
 
 

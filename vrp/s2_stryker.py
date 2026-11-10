@@ -34,9 +34,10 @@ import json
 import os
 import shutil
 import stat
-import subprocess
 from collections import Counter
 from pathlib import Path
+
+from . import procs
 
 CONF_NAME = ".vrp/stryker.conf.json"
 REPORT_NAME = ".vrp/stryker-report.json"
@@ -91,17 +92,8 @@ def write_config(repo: Path, files: list[str]) -> Path:
 
 def run_stryker(bin_path: str, repo: Path, files: list[str], timeout: int) -> dict:
     conf = write_config(repo, files)
-    try:
-        proc = subprocess.run(
-            [bin_path, "run", CONF_NAME],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
+    rr = procs.run_tree([bin_path, "run", CONF_NAME], cwd=repo, timeout=timeout)
+    if rr["timed_out"]:
         return {
             "ok": False,
             "returncode": None,
@@ -109,12 +101,12 @@ def run_stryker(bin_path: str, repo: Path, files: list[str], timeout: int) -> di
             "stderr_tail": f"stryker timed out after {timeout}s",
         }
     return {
-        "ok": proc.returncode == 0,
-        "returncode": proc.returncode,
+        "ok": rr["returncode"] == 0,
+        "returncode": rr["returncode"],
         # Stryker logs the actual failure reason (e.g. which test broke the
         # initial dry-run) to stdout; the ConfigError stack lands on stderr
-        "stdout_tail": (proc.stdout or "")[-500:],
-        "stderr_tail": (proc.stderr or "")[-500:],
+        "stdout_tail": rr["stdout"][-500:],
+        "stderr_tail": rr["stderr"][-500:],
     }
 
 

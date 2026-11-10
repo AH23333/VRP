@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import sys
 
 from vrp import s2_mutate_run
 from vrp.s2_mutate_run import (
@@ -10,6 +11,7 @@ from vrp.s2_mutate_run import (
     read_cache,
     reconcile,
     run,
+    run_mutmut,
     write_findings,
     write_runtime_evidence,
 )
@@ -47,6 +49,41 @@ def test_find_mutmut_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("VRP_MUTMUT_BIN", str(tmp_path / "missing.exe"))
     monkeypatch.setattr("shutil.which", lambda name: None)
     assert find_mutmut() is None
+
+
+def test_run_mutmut_cmd_and_kwargs(tmp_path, monkeypatch):
+    """R-L：run_mutmut 经 procs.run_tree 树杀执行，命令面/参数原样保持。"""
+    seen: dict = {}
+
+    def fake_run_tree(cmd, cwd=None, timeout=None):
+        seen["cmd"] = list(cmd)
+        seen["cwd"] = cwd
+        seen["timeout"] = timeout
+        return {"returncode": 0, "timed_out": False, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("vrp.procs.run_tree", fake_run_tree)
+    rr = run_mutmut("fake-mutmut", tmp_path, ["a.py", "b.py"], 600)
+    assert rr["ok"] is True and rr["returncode"] == 0
+    assert seen["cmd"] == [
+        "fake-mutmut", "run", "--paths-to-mutate", "a.py,b.py",
+        "--runner", f'"{sys.executable}" -m pytest -x -q',
+        "--tests-dir", ".", "--test-time-multiplier", "10.0", "--no-progress",
+    ]
+    assert seen["cwd"] == tmp_path
+    assert seen["timeout"] == 600
+
+
+def test_run_mutmut_timeout_honest_dict(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "vrp.procs.run_tree",
+        lambda cmd, cwd=None, timeout=None: {
+            "returncode": -1, "timed_out": True, "stdout": "", "stderr": "",
+        },
+    )
+    rr = run_mutmut("fake-mutmut", tmp_path, ["a.py"], 600)
+    assert rr["ok"] is False
+    assert rr["returncode"] is None
+    assert rr["stderr_tail"] == "mutmut timed out after 600s"
 
 
 def _make_cache(path):

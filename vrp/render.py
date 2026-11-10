@@ -1399,6 +1399,7 @@ def _staleness(repo: Path, facts_head: str) -> dict | None:
         head = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace",
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -1412,6 +1413,7 @@ def _staleness(repo: Path, facts_head: str) -> dict | None:
         count = subprocess.run(
             ["git", "-C", str(repo), "rev-list", "--count", f"{facts_head}..{current}"],
             capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace",
         )
         if count.returncode == 0:
             behind = int(count.stdout.strip())

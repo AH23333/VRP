@@ -1,5 +1,4 @@
 import json
-import subprocess
 
 from vrp import s2_cargo_mutants
 from vrp.s2_cargo_mutants import (
@@ -36,19 +35,14 @@ def test_find_cargo_mutants_home_default_then_which(tmp_path, monkeypatch):
 def test_run_cargo_mutants_cmd_and_rc2_ok(tmp_path, monkeypatch):
     seen: dict = {}
 
-    def fake_run(cmd, cwd, capture_output, text, encoding, errors, timeout):
+    def fake_run_tree(cmd, cwd=None, timeout=None):
         seen["cmd"] = list(cmd)
         seen["cwd"] = cwd
         seen["timeout"] = timeout
+        return {"returncode": 2, "timed_out": False,
+                "stdout": "12 mutants tested: 4 missed, 8 caught", "stderr": ""}
 
-        class P:
-            returncode = 2
-            stdout = "12 mutants tested: 4 missed, 8 caught"
-            stderr = ""
-
-        return P()
-
-    monkeypatch.setattr("vrp.s2_cargo_mutants.subprocess.run", fake_run)
+    monkeypatch.setattr("vrp.procs.run_tree", fake_run_tree)
     rr = run_cargo_mutants("fake-cargo-mutants", tmp_path, ["src/a.rs", "src/b.rs"], 300)
     # rc 2 = some missed - still a valid run (rc 1 = engine error is not)
     assert rr["ok"] is True and rr["returncode"] == 2
@@ -61,15 +55,12 @@ def test_run_cargo_mutants_cmd_and_rc2_ok(tmp_path, monkeypatch):
 
 
 def test_run_cargo_mutants_rc1_not_ok(tmp_path, monkeypatch):
-    def fake_run(cmd, cwd, capture_output, text, encoding, errors, timeout):
-        class P:
-            returncode = 1
-            stdout = ""
-            stderr = "baseline tests failed"
-
-        return P()
-
-    monkeypatch.setattr("vrp.s2_cargo_mutants.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "vrp.procs.run_tree",
+        lambda cmd, cwd=None, timeout=None: {
+            "returncode": 1, "timed_out": False, "stdout": "", "stderr": "baseline tests failed",
+        },
+    )
     rr = run_cargo_mutants("fake-cargo-mutants", tmp_path, ["src/a.rs"], 300)
     assert rr["ok"] is False
     assert rr["returncode"] == 1
@@ -77,10 +68,12 @@ def test_run_cargo_mutants_rc1_not_ok(tmp_path, monkeypatch):
 
 
 def test_run_cargo_mutants_timeout(tmp_path, monkeypatch):
-    def fake_run(cmd, cwd, capture_output, text, encoding, errors, timeout):
-        raise subprocess.TimeoutExpired(cmd, timeout)
-
-    monkeypatch.setattr("vrp.s2_cargo_mutants.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "vrp.procs.run_tree",
+        lambda cmd, cwd=None, timeout=None: {
+            "returncode": -1, "timed_out": True, "stdout": "", "stderr": "",
+        },
+    )
     rr = run_cargo_mutants("fake-cargo-mutants", tmp_path, ["src/a.rs"], 300)
     assert rr["ok"] is False
     assert rr["returncode"] is None

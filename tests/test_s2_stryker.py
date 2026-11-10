@@ -1,7 +1,6 @@
 import json
 import os
 import stat
-import subprocess
 
 from vrp import s2_stryker
 from vrp.s2_stryker import (
@@ -51,19 +50,13 @@ def test_write_config_bom_free_with_json_reporter(tmp_path):
 def test_run_stryker_passes_positional_config(tmp_path, monkeypatch):
     seen: dict = {}
 
-    def fake_run(cmd, cwd, capture_output, text, encoding, errors, timeout):
+    def fake_run_tree(cmd, cwd=None, timeout=None):
         seen["cmd"] = list(cmd)
         seen["cwd"] = cwd
         seen["timeout"] = timeout
+        return {"returncode": 0, "timed_out": False, "stdout": "", "stderr": ""}
 
-        class P:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        return P()
-
-    monkeypatch.setattr("vrp.s2_stryker.subprocess.run", fake_run)
+    monkeypatch.setattr("vrp.procs.run_tree", fake_run_tree)
     rr = run_stryker("fake-stryker", tmp_path, ["src/a.ts"], 120)
     assert rr["ok"] is True and rr["returncode"] == 0
     assert seen["cmd"] == ["fake-stryker", "run", CONF_NAME]
@@ -72,10 +65,12 @@ def test_run_stryker_passes_positional_config(tmp_path, monkeypatch):
 
 
 def test_run_stryker_timeout(tmp_path, monkeypatch):
-    def fake_run(cmd, cwd, capture_output, text, encoding, errors, timeout):
-        raise subprocess.TimeoutExpired(cmd, timeout)
-
-    monkeypatch.setattr("vrp.s2_stryker.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "vrp.procs.run_tree",
+        lambda cmd, cwd=None, timeout=None: {
+            "returncode": -1, "timed_out": True, "stdout": "", "stderr": "",
+        },
+    )
     rr = run_stryker("fake-stryker", tmp_path, ["src/a.ts"], 120)
     assert rr["ok"] is False
     assert rr["returncode"] is None
