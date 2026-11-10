@@ -17,7 +17,7 @@
   （随链捕获为 a.b._，前缀解析时剥落）；Scala 3 通配 `import a.b.*`（* 不入链）；
   选择器 `import a.b.{C, D}` / 重命名 `{C => D}` / 成员通配 `import a.b.C._`
   （选择器与通配均在链后截断）。import/package 目标与关键字同行
-  （review 批修正：`\s+` 改 `[ \t]+`——Scala 换行即语句终止，无续行运算符，
+  （review 批修正：`\\s+` 改 `[ \t]+`——Scala 换行即语句终止，无续行运算符，
   原 `import\ncom.probe.Foo` 残缺文本被跨行捕获为伪边/伪包）。
 - package 声明排除 `package object` 子句（review 批修正：`package a { package
   object b }` 原 `(?!object)` 缺失把 object 误捕获为包名段 → a.object 错包；

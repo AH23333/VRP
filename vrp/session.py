@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import html as html_mod
 import json
+import os
 import sqlite3
 import subprocess
 from datetime import datetime, timezone
@@ -127,8 +128,18 @@ def _find_active(repo: Path) -> tuple[dict, Path] | None:
 
 
 def _write_session(sdir: Path, doc: dict) -> None:
+    """原子写（tmp + os.replace，etl H2 同型保证）：session_end 覆写既有
+    珍贵状态——非原子 write_text 先截断后写，半写崩溃会使 _list_sessions
+    静默跳过（扫描容错按设计）、活动会话孤儿化（begin/end.db 无人认领）；
+    半写只允许发生在 tmp，目标文件要么旧要么新。"""
     path = sdir / "session.json"
-    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _next_session_id(sessions_root: Path, now: datetime) -> str:

@@ -1,6 +1,7 @@
 """R3.5' session 测试：快照/计数 diff/verdict 窗口/双图并排报告/复现性/降级。"""
 
 import json
+import pathlib
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -272,6 +273,62 @@ def test_report_real_archify(tmp_path):
     html = (sdir / "report.html").read_text(encoding="utf-8")
     assert 'iframe src="html/begin.html"' in html
     assert 'iframe src="html/end.html"' in html
+
+
+# ----------------------------------------------------------------- 原子写
+
+
+def _flaky_write_text_factory(monkeypatch):
+    """对名字以 session.json 开头的目标（含 .tmp）模拟磁盘半写崩溃：
+    截断写一半再抛 OSError——真实崩溃的字节级效果（R-M repro C1/C7 同型）。"""
+    real = pathlib.Path.write_text
+
+    def flaky(self, data, encoding=None, errors=None, newline=None):
+        if self.name.startswith("session.json"):
+            with open(self, "w", encoding="utf-8", newline=newline) as f:
+                f.write(data[: max(1, len(data) // 2)])
+            raise OSError("simulated crash mid-write")
+        return real(self, data, encoding=encoding, errors=errors, newline=newline)
+
+    monkeypatch.setattr(pathlib.Path, "write_text", flaky)
+
+
+def test_write_session_crash_preserves_old(tmp_path, monkeypatch):
+    """覆写半写崩溃：既有 session.json 必须原样保留（tmp+os.replace，etl H2 同型）。"""
+    sdir = tmp_path / ".vrp" / "sessions" / "20260101-000000"
+    sdir.mkdir(parents=True)
+    old_doc = {"id": "20260101-000000", "began_at": "2026-01-01T00:00:00+00:00",
+               "ended_at": None, "note": "precious begin state"}
+    (sdir / "session.json").write_text(
+        json.dumps(old_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    old_bytes = (sdir / "session.json").read_bytes()
+    _flaky_write_text_factory(monkeypatch)
+    with pytest.raises(OSError):
+        session._write_session(sdir, dict(old_doc, ended_at="2026-01-02T00:00:00+00:00"))
+    assert (sdir / "session.json").read_bytes() == old_bytes
+    assert [p.name for p in sdir.iterdir()] == ["session.json"]
+
+
+def test_write_session_failed_first_write_no_file(tmp_path, monkeypatch):
+    """首写半写崩溃：session.json 不存在（不留半写垃圾——无旧档时目录必须干净）。"""
+    sdir = tmp_path / ".vrp" / "sessions" / "20260101-000000"
+    sdir.mkdir(parents=True)
+    _flaky_write_text_factory(monkeypatch)
+    with pytest.raises(OSError):
+        session._write_session(sdir, {"id": "20260101-000000"})
+    assert not (sdir / "session.json").exists()
+    assert list(sdir.iterdir()) == []
+
+
+def test_write_session_success_no_tmp_leftover(tmp_path):
+    """成功路径回归：内容正确 + 目录无 .tmp 残留。"""
+    sdir = tmp_path / ".vrp" / "sessions" / "20260101-000000"
+    sdir.mkdir(parents=True)
+    doc = {"id": "20260101-000000", "ended_at": "2026-01-02T00:00:00+00:00"}
+    session._write_session(sdir, doc)
+    on_disk = json.loads((sdir / "session.json").read_text(encoding="utf-8"))
+    assert on_disk["ended_at"] == "2026-01-02T00:00:00+00:00"
+    assert [p.name for p in sdir.iterdir()] == ["session.json"]
 
 
 # ----------------------------------------------------------------- CLI
