@@ -199,13 +199,23 @@ CREATE TABLE IF NOT EXISTS baseline (
 );
 
 DROP VIEW IF EXISTS v_hotspots;
+-- P-3（跨项目实测 archify 案例）：fan_in_same_file = 同文件内 fan-in 边数；
+-- fan_in_same_file_pct = 其占 fan_in 比例。CBM 对跨文件同名符号（浏览器全局桩
+-- 如 requestAnimationFrame）合并计数产生假热点（fan-in 1000 而文件仅 329 行、
+-- 真实同文件调用 37）——低 pct + 高 fan_in 即"跨文件同名合并假象"信号，辅助
+-- 人工快速识别（诊断列，非自动裁决）。
 CREATE VIEW v_hotspots AS
-SELECT fid, qualified_name, label, file_path, fan_in, fan_out, hint_in, tests, (fan_in + hint_in + tests) AS score FROM (
+SELECT fid, qualified_name, label, file_path, fan_in, fan_out, hint_in, tests,
+       fan_in_same_file, (fan_in + hint_in + tests) AS score,
+       ROUND(100.0 * fan_in_same_file / MAX(fan_in, 1), 1) AS fan_in_same_file_pct
+FROM (
     SELECT s.fid AS fid, s.qualified_name AS qualified_name, s.label AS label, s.file_path AS file_path,
            (SELECT COUNT(*) FROM edges e WHERE e.dst_fid = s.fid) AS fan_in,
            (SELECT COUNT(*) FROM edges e WHERE e.src_fid = s.fid) AS fan_out,
            (SELECT COUNT(*) FROM usage_hints u WHERE u.dst_fid = s.fid) AS hint_in,
-           (SELECT COUNT(*) FROM test_linkage t WHERE t.target_fid = s.fid) AS tests
+           (SELECT COUNT(*) FROM test_linkage t WHERE t.target_fid = s.fid) AS tests,
+           (SELECT COUNT(*) FROM edges e JOIN symbols ss ON ss.fid = e.src_fid
+             WHERE e.dst_fid = s.fid AND ss.file_path = s.file_path) AS fan_in_same_file
     FROM symbols s
     WHERE s.file_path != ''
       AND s.file_path NOT GLOB '<*'

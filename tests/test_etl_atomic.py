@@ -59,7 +59,8 @@ def test_run_etl_mid_failure_keeps_old_db(tmp_path, monkeypatch, cbm_repo):
         etl.run_etl(repo, "proj", out_db=out_db)
 
     assert out_db.read_bytes() == good_bytes, "old facts.db must survive a mid-run failure"
-    leftovers = [p.name for p in out_db.parent.iterdir() if p.name != "facts.db"]
+    # artifact-hints.json（P-1）是合法持久产物（首次成功 etl 写出），非临时文件
+    leftovers = [p.name for p in out_db.parent.iterdir() if p.name not in ("facts.db", "artifact-hints.json")]
     assert leftovers == [], f"temp files left behind: {leftovers}"
 
     state["fail"] = False

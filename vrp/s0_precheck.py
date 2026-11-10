@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .evidence import language_for_path
+from .evidence import EXT_LANGUAGES, language_for_path
 
 IGNORE_DIRS = {
     ".git",
@@ -25,6 +25,64 @@ IGNORE_DIRS = {
     ".codebase-memory",
     ".vrp",
 }
+
+# P-2（跨项目实测 HomeWork 案例）：内容仓库探针。JSON/HTML/PDF 等内容文件
+# 占绝对多数、零源码文件、无构建系统标记的仓库（课件/笔记/素材站）对代码
+# 分析不适用——precheck 提前给出结论，'vrp run' 据此跳过注定失败的大内存
+# 索引尝试。判定保守（三条件缺一不可），提示语义而非硬门：单命令
+# 'vrp index' / 'vrp etl' 仍可手动执行。
+CONTENT_EXTS = frozenset(
+    {
+        ".json", ".html", ".htm", ".pdf", ".md", ".markdown", ".txt", ".rst",
+        ".xml", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".ipynb",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
+        ".mp3", ".mp4", ".wav", ".flac", ".avi", ".mov", ".mkv",
+        ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".epub",
+        ".zip", ".tar", ".gz", ".7z", ".rar",
+    }
+)
+# 源码判定复用 evidence.EXT_LANGUAGES（单一事实源），剔除数据/标记格式：
+# 它们同时出现在内容仓与代码仓，不能作为"这是代码仓"的证据。
+_DATA_MARKUP_EXTS = frozenset({".json", ".yaml", ".yml", ".toml", ".md"})
+SOURCE_EXTS = frozenset(EXT_LANGUAGES) - _DATA_MARKUP_EXTS
+BUILD_MARKER_FILES = (
+    "package.json", "pyproject.toml", "Cargo.toml", "go.mod", "Makefile",
+    "CMakeLists.txt", "pom.xml", "build.gradle", "build.gradle.kts",
+    "Gemfile", "composer.json", "mix.exs", "deno.json", "meson.build",
+)
+
+
+def content_repo_probe(repo: Path) -> dict:
+    """P-2 内容仓库探针（heuristic hint，非硬门）。
+
+    detected=True 仅当三条件同时满足：内容文件占比 > 90%、零源码文件
+    （SOURCE_EXTS 任一出现即豁免——最强守卫，防误杀）、根目录无构建系统
+    标记（package.json/Cargo.toml 等任一存在即否决）。
+    """
+    repo = repo.resolve()
+    total = content = source = 0
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        for fname in files:
+            total += 1
+            ext = Path(fname).suffix.lower()
+            if ext in CONTENT_EXTS:
+                content += 1
+            elif ext in SOURCE_EXTS:
+                source += 1
+    markers = [name for name in BUILD_MARKER_FILES if (repo / name).exists()]
+    markers += sorted(p.name for p in repo.glob("*.csproj"))
+    markers += sorted(p.name for p in repo.glob("*.sln"))
+    share = round(100.0 * content / total, 1) if total else 0.0
+    detected = bool(total) and share > 90.0 and source == 0 and not markers
+    return {
+        "detected": detected,
+        "total_files": total,
+        "content_files": content,
+        "source_files": source,
+        "content_share_pct": share,
+        "build_markers": markers,
+    }
 
 
 def _run(cmd: list[str], cwd: Path) -> tuple[int, str]:
@@ -180,6 +238,7 @@ def precheck(repo: Path) -> dict:
     if census is None:
         census = census_fallback(repo)
     result["languages"] = census
+    result["content_repo"] = content_repo_probe(repo)
     out_dir = repo / ".vrp"
     out_dir.mkdir(exist_ok=True)
     payload = json.dumps(result, ensure_ascii=False, indent=2)

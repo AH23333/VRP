@@ -65,6 +65,25 @@ def cmd_run(args) -> int:
     pre = s0_precheck.precheck(repo)
     _print_step("S0 precheck", {"name": pre["name"], "repo": pre["repo"], "commands": pre["commands"]})
 
+    # P-2：内容仓库（课件/素材站类）对代码分析不适用——跳过 S1/S1.5/xcheck
+    # 编排。提示语义而非硬门：单命令 'vrp index' / 'vrp etl' / 'vrp xcheck'
+    # 仍可手动执行（返回 rc=0：这是成功的不适用判定，不是错误）。
+    cr = pre.get("content_repo") or {}
+    if cr.get("detected"):
+        _print_step(
+            "content-repo",
+            {
+                "conclusion": "code analysis not applicable - content repository",
+                "content_share_pct": cr.get("content_share_pct"),
+                "content_files": cr.get("content_files"),
+                "total_files": cr.get("total_files"),
+                "source_files": cr.get("source_files"),
+                "skipped": "S1 cbm index, S1.5 etl, S1 xcheck",
+                "override": "run 'vrp index' + 'vrp etl' + 'vrp xcheck' manually to force",
+            },
+        )
+        return 0
+
     idx = s1_cbm.index_repository(repo, name, reindex=args.reindex)
     _print_step("S1 cbm index", idx)
 

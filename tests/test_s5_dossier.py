@@ -66,6 +66,30 @@ def test_hotspots(con):
     assert top["score"] == 1
 
 
+def test_hotspots_fan_in_same_file(con):
+    """P-3：fan_in_same_file/pct 区分同文件与跨文件 fan-in——CBM 跨文件同名
+    符号合并计数假象（archify requestAnimationFrame fan-in 1000 而真实同文件
+    调用 37）的辅助判读列。"""
+    # fa 在 src/one.ts：已有入边来自 fb（src/two.ts，跨文件）
+    # 再加同文件入边 fd（src/one.ts）→ fan_in=2，same_file=1，pct=50.0
+    con.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES ('fd','p','mod.d','Function','d','src/one.ts',1,2,'hash-4')"
+    )
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES ('fd','fa','CALLS','E2')")
+    con.commit()
+    rows = s5_dossier.hotspots(con)
+    top = next(r for r in rows if r["qualified_name"] == "mod.a")
+    assert top["fan_in"] == 2
+    assert top["fan_in_same_file"] == 1
+    assert top["fan_in_same_file_pct"] == 50.0
+    # 全跨文件符号：same_file=0，pct=0.0（MAX(fan_in,1) 防除零）
+    other = next(r for r in rows if r["qualified_name"] == "mod.b")
+    assert other["fan_in"] == 1
+    assert other["fan_in_same_file"] == 0
+    assert other["fan_in_same_file_pct"] == 0.0
+
+
 def test_mutual_cycles(con):
     pairs = s5_dossier.mutual_cycles(con)
     assert pairs == [{"symbol_a": "mod.a", "symbol_b": "mod.b"}]

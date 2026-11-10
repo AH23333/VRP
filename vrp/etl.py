@@ -239,6 +239,9 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
             stats["symbols"] = len(fid_by_id)
             stats.update(_etl_edges(dst, src, project, fid_by_id, file_by_id, replaced))
             stats.update(_etl_coverage(dst, src, project))
+            # P-1: 产物噪音提示（在 tmp 库上计算，落盘在 os.replace 之后）
+            noise = detect_artifact_noise(dst)
+            stats["artifact_hints"] = len(noise["hints"])
             # F2 (curate drift governance): this rebuild is THE moment fids rotate,
             # so the restored curate artifacts are revalidated here - drifted ones
             # get marked stale and the "fake active" window closes. Covers all
@@ -257,6 +260,11 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
         dst.close()
         tmp_db.unlink(missing_ok=True)
         raise
+
+    # P-1: hints 落盘 .vrp/artifact-hints.json（提示性产物，每次 etl 覆写）
+    (out_db.parent / "artifact-hints.json").write_text(
+        json.dumps(noise, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     stats["facts_db"] = str(out_db)
     return stats
@@ -463,6 +471,163 @@ def _etl_coverage(dst: sqlite3.Connection, src: sqlite3.Connection, project: str
         hash_rows.append((_norm(r[0]), r[1]))
     dst.executemany("INSERT OR REPLACE INTO file_hashes (file_path, hash) VALUES (?,?)", hash_rows)
     return {"coverage_gaps": len(out), "file_hashes": len(hash_rows)}
+
+
+# P-1（跨项目实测 10/15 项目命中）：产物噪音启发式——生成物/构建产物/压缩库
+# 常占索引符号 50%-98%（archify 生成 HTML 页、docs/_build、*.min.js、site/
+# web 双轨入库），是 similar_to 噪音与假热点的主体。只提示（hints 写
+# .vrp/artifact-hints.json）绝不自动排除：排除决策留给用户，数据保持原样。
+ARTIFACT_DIR_SEGMENTS = frozenset({"_build", "dist", "build", "site", "coverage"})
+MINIFIED_SUFFIXES = (".min.js", ".min.css", ".min.mjs")
+DENSE_FILE_MIN_SYMBOLS = 200
+DENSE_FILE_MAX_LINE = 20
+UNIFORM_HTML_MIN_FILES = 5
+UNIFORM_HTML_MIN_SYMBOLS = 20
+ARTIFACT_HINT_CAP = 20
+
+
+def detect_artifact_noise(con: sqlite3.Connection) -> dict:
+    """P-1 产物噪音提示（heuristic hints，非裁决，不排除任何数据）。
+
+    四类独立规则（每类各自成 hint）：
+    1. artifact_dir_name   路径含构建产物目录段（_build/dist/build/site/
+                           coverage，按匹配段子树聚合）
+    2. minified_or_dense   .min.js/.min.css/.min.mjs 命名，或 ≥200 符号挤在
+                           ≤20 行（压缩/生成代码签名）
+    3. uniform_html_pages  目录内 ≥5 个 HTML 文件符号数全等且 ≥20（生成页
+                           签名，如 archify 358×N viewer 页）
+    4. same_hash_copies    逐字节相同的多路径入库副本（file_hashes 重复
+                           hash，单一聚合 hint + 代表例）
+
+    已知局限（诚实边界）：单行超长的 minified 检测需逐文件读内容，成本不
+    成比例，不做——仅靠命名与行密度近似。
+    """
+    total = con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+    if total == 0:
+        return {"total_symbols": 0, "indexed_files": 0, "hints": []}
+
+    rows = con.execute(
+        "SELECT file_path, COUNT(*), MAX(start_line) FROM symbols"
+        " WHERE file_path != '' AND file_path NOT GLOB '<*' AND file_path NOT GLOB '>*'"
+        " GROUP BY file_path"
+    ).fetchall()
+
+    def share(n: int) -> float:
+        return round(100.0 * n / total, 1)
+
+    hints: list[dict] = []
+
+    # 1) 构建产物目录段（子树聚合：site/ 覆盖 site/2020/01/... 深层页）
+    subtree: dict[str, dict] = {}
+    for fpath, n, _ml in rows:
+        segs = _norm(fpath).split("/")
+        hit = next((i for i, seg in enumerate(segs[:-1]) if seg in ARTIFACT_DIR_SEGMENTS), None)
+        if hit is None:
+            continue
+        prefix = "/".join(segs[: hit + 1])
+        entry = subtree.setdefault(prefix, {"files": 0, "symbols": 0})
+        entry["files"] += 1
+        entry["symbols"] += n
+    for d, entry in sorted(subtree.items(), key=lambda kv: -kv[1]["symbols"])[:ARTIFACT_HINT_CAP]:
+        hints.append(
+            {
+                "kind": "artifact_dir_name",
+                "dir": d,
+                "files": entry["files"],
+                "symbols": entry["symbols"],
+                "symbol_share_pct": share(entry["symbols"]),
+                "note": "build-output directory name - likely generated content indexed as code;"
+                " consider excluding from the index",
+            }
+        )
+
+    # 2) minified / dense 文件（按直接父目录聚合）
+    dense: dict[str, dict] = {}
+    for fpath, n, ml in rows:
+        norm = _norm(fpath)
+        is_min = norm.lower().endswith(MINIFIED_SUFFIXES)
+        is_dense = ml is not None and n >= DENSE_FILE_MIN_SYMBOLS and ml <= DENSE_FILE_MAX_LINE
+        if not (is_min or is_dense):
+            continue
+        d = norm.rsplit("/", 1)[0] if "/" in norm else "."
+        entry = dense.setdefault(d, {"files": 0, "symbols": 0, "examples": []})
+        entry["files"] += 1
+        entry["symbols"] += n
+        if len(entry["examples"]) < 5:
+            entry["examples"].append(norm.rsplit("/", 1)[-1])
+    for d, entry in sorted(dense.items(), key=lambda kv: -kv[1]["symbols"])[:ARTIFACT_HINT_CAP]:
+        hints.append(
+            {
+                "kind": "minified_or_dense_files",
+                "dir": d,
+                "files": entry["files"],
+                "symbols": entry["symbols"],
+                "symbol_share_pct": share(entry["symbols"]),
+                "examples": entry["examples"],
+                "note": "minified naming or 200+ symbols within 20 lines - bundled/generated code,"
+                " weak signal for structural analysis",
+            }
+        )
+
+    # 3) uniform HTML 生成页签名
+    html_counts: dict[str, list[int]] = {}
+    for fpath, n, _ml in rows:
+        norm = _norm(fpath)
+        if not norm.lower().endswith((".html", ".htm")):
+            continue
+        d = norm.rsplit("/", 1)[0] if "/" in norm else "."
+        html_counts.setdefault(d, []).append(n)
+    for d, counts in sorted(html_counts.items()):
+        if len(counts) < UNIFORM_HTML_MIN_FILES or len(set(counts)) != 1:
+            continue
+        per_file = counts[0]
+        if per_file < UNIFORM_HTML_MIN_SYMBOLS:
+            continue
+        hints.append(
+            {
+                "kind": "uniform_html_pages",
+                "dir": d,
+                "files": len(counts),
+                "symbols_per_file": per_file,
+                "symbols": len(counts) * per_file,
+                "symbol_share_pct": share(len(counts) * per_file),
+                "note": "multiple HTML pages with identical symbol counts - generated page"
+                " signature (report/viewer output)",
+            }
+        )
+
+    # 4) 同 hash 副本（单一聚合 hint + 代表例）
+    dup = con.execute(
+        "SELECT COUNT(*), COALESCE(SUM(c), 0) FROM"
+        " (SELECT COUNT(*) AS c FROM file_hashes WHERE hash != '' GROUP BY hash HAVING COUNT(*) > 1)"
+    ).fetchone()
+    dup_clusters, dup_files = int(dup[0]), int(dup[1])
+    if dup_clusters:
+        examples = []
+        for (h,) in con.execute(
+            "SELECT hash FROM file_hashes WHERE hash != '' GROUP BY hash HAVING COUNT(*) > 1"
+            " ORDER BY COUNT(*) DESC LIMIT 3"
+        ):
+            paths = [
+                r[0]
+                for r in con.execute(
+                    "SELECT file_path FROM file_hashes WHERE hash = ? ORDER BY file_path LIMIT 2", (h,)
+                )
+            ]
+            if len(paths) == 2:
+                examples.append(paths)
+        hints.append(
+            {
+                "kind": "same_hash_copies",
+                "clusters": dup_clusters,
+                "files": dup_files,
+                "examples": examples,
+                "note": "byte-identical file copies committed at multiple paths"
+                " (double-tracked output)",
+            }
+        )
+
+    return {"total_symbols": total, "indexed_files": len(rows), "hints": hints}
 
 
 def _write_meta(dst: sqlite3.Connection, cbm_name: str, store_meta: dict, repo: Path, stats: dict):

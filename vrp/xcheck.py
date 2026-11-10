@@ -108,6 +108,17 @@ def _excluded_path(rel: str) -> bool:
     return any(seg in EXCLUDED_SEGMENTS for seg in _norm(rel).split("/"))
 
 
+# P-1b（跨项目实测）：压缩/生成 JS 的调用提取两侧天然分歧（minified 代码
+# 的解析丢边制造 ca_only 噪音）。扩展名对称排除 .min.js/.min.css/.min.mjs，
+# 计数公开入 summary，不静默。单行超长检测需逐文件读内容——成本不成比
+# 例，不做（诚实边界）。
+MINIFIED_SUFFIXES = (".min.js", ".min.css", ".min.mjs")
+
+
+def _minified_path(rel: str) -> bool:
+    return _norm(rel).lower().endswith(MINIFIED_SUFFIXES)
+
+
 def _quad(sname: str, sfile: str, tname: str, tfile: str) -> tuple[str, str, str, str]:
     return (sname, _norm(sfile), tname, _norm(tfile))
 
@@ -136,18 +147,28 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
         ca_sym = {}
         ca_excluded_ids: set = set()
         ca_excluded_symbols = 0
+        ca_minified_ids: set = set()
+        ca_minified_symbols = 0
         for r in ca.execute("SELECT s.id, s.name, f.path FROM symbols s JOIN files f ON s.file_id = f.id"):
             if _excluded_path(r[2]):
                 ca_excluded_ids.add(r[0])
                 ca_excluded_symbols += 1
                 continue
+            if _minified_path(r[2]):
+                ca_minified_ids.add(r[0])
+                ca_minified_symbols += 1
+                continue
             ca_sym[r[0]] = (r[1], _norm(r[2]))
         ca_excluded_files = sum(1 for r in ca.execute("SELECT path FROM files") if _excluded_path(r[0]))
         ca_edges: dict[tuple, tuple] = {}
         ca_excluded_calls = 0
+        ca_minified_calls = 0
         for r in ca.execute("SELECT src_symbol_id, dst_symbol_id, confidence, provenance FROM edges WHERE kind='calls'"):
             if r[0] in ca_excluded_ids or r[1] in ca_excluded_ids:
                 ca_excluded_calls += 1
+                continue
+            if r[0] in ca_minified_ids or r[1] in ca_minified_ids:
+                ca_minified_calls += 1
                 continue
             s = ca_sym.get(r[0])
             t = ca_sym.get(r[1])
@@ -159,6 +180,8 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
         cbm_calls: dict[tuple, str] = {}
         cbm_usage: set[tuple] = set()
         cbm_excluded_calls = 0
+        cbm_minified_calls = 0
+        cbm_minified_usage = 0
         name_of: dict[str, str] = {}
         file_of: dict[str, str] = {}
         for fid, name, file_path in facts.execute("SELECT fid, name, file_path FROM symbols"):
@@ -173,12 +196,18 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
             if _excluded_path(file_of[r[0]]) or _excluded_path(file_of[r[1]]):
                 cbm_excluded_calls += 1
                 continue
+            if _minified_path(file_of[r[0]]) or _minified_path(file_of[r[1]]):
+                cbm_minified_calls += 1
+                continue
             quad = _quad(name_of[r[0]], file_of[r[0]], name_of[r[1]], file_of[r[1]])
             cbm_calls[quad] = r[3] or ""
         for r in facts.execute("SELECT src_fid, dst_fid FROM usage_hints"):
             if r[0] not in name_of or r[1] not in name_of:
                 continue
             if _excluded_path(file_of[r[0]]) or _excluded_path(file_of[r[1]]):
+                continue
+            if _minified_path(file_of[r[0]]) or _minified_path(file_of[r[1]]):
+                cbm_minified_usage += 1
                 continue
             cbm_usage.add(_quad(name_of[r[0]], file_of[r[0]], name_of[r[1]], file_of[r[1]]))
 
@@ -224,6 +253,10 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
             "ca_calls": len(ca_edges),
             "cbm_calls": len(cbm_calls),
             "cbm_excluded_calls": cbm_excluded_calls,
+            "ca_minified_symbols": ca_minified_symbols,
+            "ca_minified_calls": ca_minified_calls,
+            "cbm_minified_calls": cbm_minified_calls,
+            "cbm_minified_usage": cbm_minified_usage,
             "agreement": agreement,
             "agreement_pct": round(100.0 * agreement / len(ca_edges), 1) if ca_edges else None,
             "ca_only": sum(1 for r in ledger if r[0] == "ca_only"),
