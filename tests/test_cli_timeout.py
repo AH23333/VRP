@@ -53,3 +53,34 @@ def test_main_lets_guidance_system_exit_propagate(tmp_path):
 
     with pytest.raises(SystemExit, match="not a directory"):
         cli.main(["status", str(tmp_path / "missing-repo")])
+
+
+def test_open_facts_rw_ki_closes_connection(tmp_path, monkeypatch):
+    """R-P：cli._open_facts_rw 窗口 Ctrl-C（KeyboardInterrupt 非 Exception
+    子类）同样走 con.close() 后重抛；修前 KI 绕过清理泄漏句柄，Windows 锁
+    facts.db。unlink 探测仅 Windows 有守卫力，其他平台恒绿无害。"""
+    import sqlite3
+
+    from vrp import etl
+
+    from pathlib import Path
+
+    repo = tmp_path / "repo"
+    (repo / ".vrp").mkdir(parents=True)
+    facts = repo / ".vrp" / "facts.db"
+    schema = Path(cli.__file__).parent / "schema" / "facts_schema.sql"
+    con = sqlite3.connect(facts)
+    con.executescript(schema.read_text(encoding="utf-8"))
+    con.commit()
+    con.close()
+
+    def _ki(con_, repo_):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(etl, "check_facts_freshness", _ki)
+    try:
+        cli._open_facts_rw(repo)
+        raise AssertionError("expected KeyboardInterrupt")
+    except KeyboardInterrupt:
+        pass
+    facts.unlink()  # leaked handle would lock this on Windows

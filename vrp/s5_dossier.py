@@ -419,7 +419,9 @@ def build_dossier(
     try:
         tmp.write_text(json.dumps(dossier, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, out)
-    except Exception:
+    except (Exception, KeyboardInterrupt):
+        # Ctrl-C 同样走 tmp 清理（KI 非 Exception 子类，只捕 Exception 会
+        # 让 dossier.json.tmp-<pid> 带着内容泄漏——pid 后缀异名永不清理）。
         tmp.unlink(missing_ok=True)
         raise
     dossier["out"] = str(out)

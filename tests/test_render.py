@@ -255,6 +255,28 @@ def test_timeline_ir_all_unreadable_returns_none(tmp_path):
     assert render.build_timeline_ir(verdicts) is None
 
 
+def test_timeline_ir_sanitizes_event_ids(tmp_path):
+    """R-P：事件 id 必须过 _arch_id 清洗——common $defs/id 约束
+    ^[a-zA-Z][a-zA-Z0-9_-]*$（字母开头纯 ASCII），verdict tid 却是任意
+    字符串（MCP 层 TID_SAFE 只清洗文件名不变形 id 字段）；原始 tid 直出
+    曾使 archify validate 拒、html/timeline.html 整段降级消失（与 R-O at
+    字段同链换字段复发）。title 保留原始 tid 供人类辨认（诚实面）。
+    """
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _mk_verdict(repo, "2026-cleanup", verdict_at="2026-11-04T09:00:00+00:00")
+    _mk_verdict(repo, "v1.2 fix", verdict_at="2026-11-04T10:00:00+00:00")
+    _mk_verdict(repo, "修复-01", verdict_at="2026-11-04T11:00:00+00:00")
+    verdicts = s6_transact.load_verdicts(repo)
+    ir = render.build_timeline_ir(verdicts)
+    id_re = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+    assert [e["id"] for e in ir["events"]] == ["n2026-cleanup", "v1-2-fix", "n---01"]
+    assert all(id_re.match(e["id"]) for e in ir["events"])  # 全 pattern 合规
+    titles = " | ".join(e["title"] for e in ir["events"])
+    for raw in ("2026-cleanup", "v1.2 fix", "修复-01"):
+        assert raw in titles  # 诚实面：原始 tid 人类可辨
+
+
 # ----------------------------------------------------------------- Mermaid
 
 

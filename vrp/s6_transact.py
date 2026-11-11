@@ -430,7 +430,19 @@ def transact(
 
     try:
         apply_edits(repo, tx["edits"])
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, KeyboardInterrupt) as exc:
+        # Ctrl-C 与异常同样走恢复边界（KI 非 Exception 子类，窄捕会让
+        # apply 窗口的 Ctrl-C 绕过 rollback 裸逃——running 残行 + 无 verdict）。
+        # KI 恢复后仍写 verdict 再原样重抛（保 Ctrl-C 退出语义）。
+        if isinstance(exc, KeyboardInterrupt):
+            rollback = rollback_edits(repo, tx["edits"])
+            finish(
+                "rolled_back",
+                [{"gate": "G0", "status": "fail", "detail": {"reason": "apply-edits", "error": "KeyboardInterrupt (user interrupt)"}}],
+                "G0",
+                {"rollback": rollback},
+            )
+            raise
         rollback = rollback_edits(repo, tx["edits"])
         return finish(
             "rolled_back",
@@ -527,14 +539,22 @@ def transact(
                 failed = failed or "G5"
             else:
                 gates.append({"gate": "G5", "status": "pass", "detail": {"pre": pre_dead, "post": post_dead}})
-    except Exception as exc:
+    except (Exception, KeyboardInterrupt) as exc:
         # Crash between apply_edits and commit: restore the tree, mark the
         # transaction aborted, and still write a verdict (H1).
+        # Ctrl-C（KeyboardInterrupt）同样走恢复边界——KI 非 Exception 子类，
+        # 只捕 Exception 会让 gate 窗口的 Ctrl-C 绕过 rollback 裸逃：
+        # 脏树 + "running" 残行 + 无 verdict。恢复后原样重抛（保 Ctrl-C
+        # 退出语义），内部异常仍按原路径 return verdict。
         rollback = rollback_edits(repo, tx["edits"])
         post_db.unlink(missing_ok=True)
         crashed = f"G{len(gates) + 1}"
-        gates.append({"gate": crashed, "status": "fail", "detail": {"reason": "gate-crash", "error": str(exc)[:500]}})
-        return finish("aborted", gates, crashed, {"rollback": rollback})
+        error_text = str(exc)[:500] if not isinstance(exc, KeyboardInterrupt) else "KeyboardInterrupt (user interrupt)"
+        gates.append({"gate": crashed, "status": "fail", "detail": {"reason": "gate-crash", "error": error_text}})
+        verdict = finish("aborted", gates, crashed, {"rollback": rollback})
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return verdict
 
     if failed is not None:
         rollback = rollback_edits(repo, tx["edits"])

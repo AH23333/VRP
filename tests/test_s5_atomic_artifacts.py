@@ -60,6 +60,21 @@ def test_dossier_mid_failure_keeps_old_artifact(repo, facts, monkeypatch):
     assert _tmp_leftovers(out) == []
 
 
+def test_dossier_ki_cleans_tmp_and_reraises(repo, facts, monkeypatch):
+    """R-P：dossier 落盘窗口 Ctrl-C（KeyboardInterrupt 非 Exception 子类）
+    同样走 tmp 清理边界后重抛；修前 KI 绕过清理裸逃，
+    dossier.json.tmp-<pid> 泄漏（pid 异名后续运行永不清理）。"""
+    def _ki(src, dst):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(s5_dossier.os, "replace", _ki)
+    with pytest.raises(KeyboardInterrupt):
+        s5_dossier.build_dossier(repo, facts, "p", skip_external=True)
+    out = repo / ".vrp" / "dossier.json"
+    assert not out.exists()  # 首写被中断：无残缺成品
+    assert _tmp_leftovers(out) == []
+
+
 def _fake_repomix(rc, payload=b"<xml>new</xml>", raise_exc=None):
     def fake(cmd, **kwargs):
         out_arg = Path(cmd[5])

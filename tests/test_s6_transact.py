@@ -345,6 +345,75 @@ def test_transact_rescan_crash_aborts_and_rolls_back(tmp_path, monkeypatch):
     con.close()
 
 
+def test_transact_gate_window_ki_aborts_and_rolls_back(tmp_path, monkeypatch):
+    """R-P：gates 窗口 Ctrl-C（KeyboardInterrupt 非 Exception 子类）同样走
+    H1 恢复边界——rollback + aborted verdict + DB 记账后原样重抛（保
+    Ctrl-C 退出语义）；不得裸逃留脏树/"running" 残行/无 verdict。"""
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    before = (repo / "a.py").read_text(encoding="utf-8")
+    _patch_pipeline(monkeypatch, [("f2", "p.a.new")])
+
+    def ki_index(repo_, name, reindex=False, timeout=3600):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(s6_transact.s1_cbm, "index_repository", ki_index)
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-ki",
+            "type": "T1",
+            "summary": "ki in gate window",
+            "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+            "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+        },
+    )
+    with pytest.raises(KeyboardInterrupt):
+        s6_transact.transact(repo, tx, "proj")
+    assert (repo / "a.py").read_text(encoding="utf-8") == before  # 树回滚
+    assert s6_transact.git_clean(repo)
+    assert not (repo / ".vrp" / "facts.db.post-tx-ki").exists()
+    verdict = json.loads((repo / ".vrp" / "verdicts" / "tx-ki.json").read_text(encoding="utf-8"))
+    assert verdict["status"] == "aborted"
+    assert verdict["failed_gate"] == "G1"
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    assert con.execute("SELECT status FROM transactions WHERE tid = 'tx-ki'").fetchone()[0] == "aborted"
+    con.close()
+
+
+def test_transact_apply_ki_rolled_back_and_reraised(tmp_path, monkeypatch):
+    """R-P：apply_edits 窗口 Ctrl-C 同样走恢复边界（修前窄捕
+    RuntimeError/OSError 让 KI 绕过 rollback 裸逃）——rolled_back verdict
+    + DB 记账后重抛，不得留 "running" 残行/无 verdict。"""
+    repo = _mk_repo(tmp_path)
+    _mk_facts(repo, [("f1", "p.a.old", "old", "a.py")])
+    before = (repo / "a.py").read_text(encoding="utf-8")
+
+    def ki_apply(repo_, edits):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(s6_transact, "apply_edits", ki_apply)
+    tx = _write_tx(
+        tmp_path,
+        {
+            "id": "tx-ki-apply",
+            "type": "T1",
+            "summary": "ki at apply",
+            "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+            "edits": [{"file": "a.py", "op": "modify", "content": "def new():\n    return 1\n"}],
+        },
+    )
+    with pytest.raises(KeyboardInterrupt):
+        s6_transact.transact(repo, tx, "proj")
+    assert (repo / "a.py").read_text(encoding="utf-8") == before  # 树未被改动
+    verdict = json.loads((repo / ".vrp" / "verdicts" / "tx-ki-apply.json").read_text(encoding="utf-8"))
+    assert verdict["status"] == "rolled_back"
+    assert verdict["failed_gate"] == "G0"
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    assert con.execute("SELECT status FROM transactions WHERE tid = 'tx-ki-apply'").fetchone()[0] == "rolled_back"
+    con.close()
+
+
 def test_transact_dirty_tree_refused_by_cli(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / "a.py").write_text("dirty = True\n", encoding="utf-8")

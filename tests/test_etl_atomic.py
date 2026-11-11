@@ -1,4 +1,5 @@
 """H2: run_etl must be atomic — a mid-run failure must not destroy the old facts.db."""
+import os
 import sqlite3
 
 import pytest
@@ -68,3 +69,24 @@ def test_run_etl_mid_failure_keeps_old_db(tmp_path, monkeypatch, cbm_repo):
     con = sqlite3.connect(out_db)
     assert con.execute("SELECT qualified_name FROM symbols").fetchall() == [("p.a.old",)]
     con.close()
+
+
+def test_run_etl_ki_cleans_tmp_and_reraises(tmp_path, monkeypatch, cbm_repo):
+    """R-P：run_etl 中途 Ctrl-C（KeyboardInterrupt 非 Exception 子类）同样走
+    清理边界——dst.close() + tmp 清理后重抛；修前 KI 绕过清理裸逃，
+    .vrp/facts.db.tmp-<pid> 带打开句柄泄漏（Windows 锁死文件，pid 异名
+    后续运行永不清理）。"""
+    repo = cbm_repo
+    out_db = repo / ".vrp" / "facts.db"
+    etl.run_etl(repo, "proj", out_db=out_db)  # 健康基线
+    good_bytes = out_db.read_bytes()
+
+    def _ki(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(etl, "_etl_coverage", _ki)
+    with pytest.raises(KeyboardInterrupt):
+        etl.run_etl(repo, "proj", out_db=out_db)
+    tmp = out_db.with_name(f"{out_db.name}.tmp-{os.getpid()}")
+    assert not tmp.exists(), "Ctrl-C 后 tmp facts.db 不得残留"
+    assert out_db.read_bytes() == good_bytes  # 老库不受影响

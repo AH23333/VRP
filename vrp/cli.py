@@ -151,7 +151,9 @@ def _open_facts_rw(repo: Path):
     try:
         etl_mod.ensure_schema(con)
         etl_mod.check_facts_freshness(con, repo)
-    except Exception:
+    except (Exception, KeyboardInterrupt):
+        # Ctrl-C 同样走 con.close()（KI 非 Exception 子类，只捕 Exception
+        # 会绕过清理泄漏句柄——Windows 上锁住 facts.db）。
         con.close()
         raise
     return con, facts_path

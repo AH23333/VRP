@@ -7,6 +7,7 @@ import anyio
 from mcp import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 
+from vrp import etl
 from vrp import mcp_server
 
 SCHEMA = Path(__file__).parent.parent / "vrp" / "schema" / "facts_schema.sql"
@@ -591,5 +592,23 @@ def test_mcp_open_facts_rw_closes_handle_on_stale(tmp_path):
         mcp_server._open_facts_rw(repo)
         raise AssertionError("expected RuntimeError from stale facts.db")
     except RuntimeError:
+        pass
+    (repo / ".vrp" / "facts.db").unlink()  # leaked handle would lock this on Windows
+
+
+def test_mcp_open_facts_rw_ki_closes_handle(tmp_path, monkeypatch):
+    """R-P：_open_facts_rw 窗口 Ctrl-C（KeyboardInterrupt 非 Exception 子类）
+    同样走 con.close()（长驻 MCP 会话句柄泄漏在 Windows 上累积文件锁）；
+    修前 KI 绕过清理裸逃。unlink 探测同 N2（仅 Windows 有守卫力）。"""
+    repo = _mk_repo(tmp_path)
+
+    def _ki(con, repo_):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(etl, "check_facts_freshness", _ki)
+    try:
+        mcp_server._open_facts_rw(repo)
+        raise AssertionError("expected KeyboardInterrupt")
+    except KeyboardInterrupt:
         pass
     (repo / ".vrp" / "facts.db").unlink()  # leaked handle would lock this on Windows

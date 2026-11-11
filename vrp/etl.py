@@ -256,7 +256,11 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
             src.close()
         dst.close()
         os.replace(tmp_db, out_db)
-    except Exception:
+    except (Exception, KeyboardInterrupt):
+        # 清理后重抛边界对 Ctrl-C 同样成立：KeyboardInterrupt 不是 Exception
+        # 子类，只捕 Exception 会让 KI 绕过 dst.close()/tmp 清理裸逃——
+        # .vrp/facts.db.tmp-<pid> 带着打开的句柄泄漏（Windows 上锁死文件，
+        # pid 后缀异名后续运行也永不清理）。恢复清理后原样重抛。
         dst.close()
         tmp_db.unlink(missing_ok=True)
         raise

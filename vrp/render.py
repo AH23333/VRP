@@ -329,6 +329,13 @@ def build_timeline_ir(verdicts: list[dict]) -> dict | None:
     html/timeline.html 降级消失（timeline 无 mermaid 兜底）。诚实面不动：
     CLI verdicts 清单与 session_report 表格仍完整展示 unreadable 占位。
     全部无时间戳时返回 None（空 events 被 archify minItems 拒，不出 timeline）。
+
+    事件 id 必须过 _arch_id 清洗：common.schema.json $defs/id 约束
+    ^[a-zA-Z][a-zA-Z0-9_-]*$（字母开头纯 ASCII），而 verdict tid 是任意
+    字符串（MCP 层 TID_SAFE 只清洗文件名，id 字段不变形）——数字开头/
+    含点/非 ASCII tid 直出会使 archify validate 拒、timeline 整段降级
+    （与上方 at 字段同链换字段复发）。title 保留原始 tid 供人类辨认；
+    清洗碰撞（两 tid 同清洗值）可接受——schema 无 uniqueness 约束。
     """
     events = []
     for v in verdicts[:VERDICTS_CAP]:
@@ -336,7 +343,7 @@ def build_timeline_ir(verdicts: list[dict]) -> dict | None:
         if not at:
             continue
         events.append({
-            "id": v.get("tid", "unknown"),
+            "id": _arch_id(v.get("tid", "unknown")),
             "at": at,
             "title": f"{v.get('tid', '?')} [{v.get('type', '?')}] {v.get('status', '?')}",
             "lane": "verdicts",

@@ -88,7 +88,9 @@ def _open_facts_rw(repo: Path) -> sqlite3.Connection:
     try:
         etl_mod.ensure_schema(con)
         etl_mod.check_facts_freshness(con, repo)
-    except Exception:
+    except (Exception, KeyboardInterrupt):
+        # Ctrl-C 同样走 con.close()（KI 非 Exception 子类，只捕 Exception
+        # 会绕过清理泄漏句柄——长驻 MCP 会话里 Windows 文件锁累积）。
         con.close()
         raise
     return con
