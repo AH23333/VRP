@@ -143,6 +143,8 @@ def test_sequence_ir(tmp_path):
     ir = render.build_sequence_ir(repo, con, "flow")
     con.close()
     assert [p["id"] for p in ir["participants"]] == ["a", "b", "c"]
+    # sublabel=文件名非全路径（archify 缩字下限仍超宽即拒，深路径仓可越限）
+    assert all(p["sublabel"] == "x.py" for p in ir["participants"])
     assert len(ir["messages"]) == 2
     assert ir["messages"][0]["y"] == 160 and ir["messages"][1]["y"] == 210  # 等距
     assert ir["segments"][0]["label"] == "幕一"

@@ -281,7 +281,12 @@ def build_sequence_ir(repo: Path, con: sqlite3.Connection, slice_id: str) -> dic
         seen.add(pid)
         entry = {"id": pid, "type": "backend", "label": label}
         if sym is not None and sym["file_path"]:
-            entry["sublabel"] = sym["file_path"]
+            # archify shrinks participant sublabels toward a 6-7px floor and
+            # validation rejects what still overflows the <=190px participant
+            # box (text-fit contract); a full repo-relative path can exceed
+            # that floor in deep repos, a file name cannot — the label above
+            # already carries the symbol name.
+            entry["sublabel"] = Path(sym["file_path"]).name
         elif sym is None:
             entry["sublabel"] = "symbol drifted"
         participants.append(entry)
