@@ -77,7 +77,7 @@ PATHOLOGY = "P9"
 KIND = "layer-violation"
 DEFAULT_TIMEOUT = 600
 
-_RULE_TEXT = re.compile(r"^\s*(.+?)\s*(?:不许|不能|禁止|must\s+not)\s*import\s*(.+?)\s*$")
+_RULE_KEYWORDS = re.compile(r"不许|不能|禁止|must\s+not")
 _STATS = re.compile(r"Contracts:\s+(\d+)\s+kept,\s+(\d+)\s+broken")
 _VIOLATION = re.compile(r"^-\s+(\S+)\s+->\s+(\S+)\s+\(l\.(\d+)[^)]*\)$")
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -177,6 +177,33 @@ def _forbidden_pairs(payload: dict) -> list[tuple[str, str]]:
     return sorted(pairs)
 
 
+def _rule_text_pair(text: str) -> tuple[str, str] | None:
+    """规则文本 → (from_layer, to_layer)；不可解析 → None。
+
+    语义与旧单正则 _RULE_TEXT（^\\s*(.+?)\\s*(?:不许|不能|禁止|must\\s+not)\\s*
+    import\\s*(.+?)\\s*$）逐字保留：最早可用关键字切分（关键字后须字面
+    import）、两组剥首尾空白、组非空且不跨行（旧 (.+?) 无 re.S）。
+
+    R-Q：旧惰性组+\\s* 形状在缺 import 近失配上 O(M²)（惰性组逐位前进 →
+    \\s* 贪吃 M 空格 → 下游失配 → \\s* 逐位退回 → 重扫；possessive 只消除
+    退回重试不消除逐位重扫，治不了本形状）——关键字 finditer（线性）+
+    字符串切分等价替换。
+    """
+    for m in _RULE_KEYWORDS.finditer(text):
+        after = text[m.end():]
+        j = 0
+        while j < len(after) and after[j].isspace():
+            j += 1
+        if not after.startswith("import", j):
+            continue
+        frm = text[:m.start()].strip()
+        to = after[j + len("import"):].strip()
+        if not frm or "\n" in frm or not to or "\n" in to:
+            continue
+        return frm, to
+    return None
+
+
 def _rule_pair(rule: dict, layer_names: set[str]) -> tuple[str, str] | None:
     """rule 对象 → (from_layer, to_layer)；from/to 字段优先，文本模式兜底。"""
     a, b = rule.get("from_layer"), rule.get("to_layer")
@@ -185,9 +212,9 @@ def _rule_pair(rule: dict, layer_names: set[str]) -> tuple[str, str] | None:
     text = rule.get("rule")
     if not isinstance(text, str):
         return None
-    m = _RULE_TEXT.match(text)
-    if m and m.group(1) in layer_names and m.group(2) in layer_names:
-        return m.group(1), m.group(2)
+    pair = _rule_text_pair(text)
+    if pair and pair[0] in layer_names and pair[1] in layer_names:
+        return pair
     return None
 
 

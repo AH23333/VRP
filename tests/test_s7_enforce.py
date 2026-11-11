@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -763,3 +764,39 @@ def test_cli_enforce_timeout_flag_accepted(tmp_path, monkeypatch, capsys):
     rc = cli.main(["enforce", str(repo), "--timeout", "33"])
     assert rc == 0
     assert seen == [33]
+
+
+# ---------------------------------------------------------------- R-Q ReDoS 回归
+
+
+def test_rule_text_pair_semantics():
+    """R-Q：_rule_text_pair 语义基线（与旧 _RULE_TEXT 单正则逐字对齐，探针 C1b 固化）。"""
+    cases = [
+        ("core 不许 import app", ("core", "app")),
+        ("  core 不许 import app", ("core", "app")),
+        ("api 层不能 import store", ("api 层", "store")),
+        ("A must not import B", ("A", "B")),
+        ("core 不许import app", ("core", "app")),
+        ("a 不许 b 不能 import c", ("a 不许 b", "c")),  # 左先关键字缺 import → 次关键字
+        ("a 不许 import b", ("a", "b")),  # 单字符 from
+        ("a must  not import b", ("a", "b")),  # must\s+not 多空白
+        ("a\nb 不许 import c", None),  # 组不跨行（旧 (.+?) 无 re.S）
+        ("a 不许 import b\nc", None),
+        ("a 禁止 import", None),  # to 空
+        ("不许 import app", None),  # from 空
+        ("a xport b", None),  # 无关键字
+    ]
+    for text, want in cases:
+        assert s7_enforce._rule_text_pair(text) == want, text
+
+
+def test_rule_text_pair_redos_near_miss_linear():
+    """R-Q 回归：缺 import 近失配必须线性（旧 _RULE_TEXT 惰性组+\\s* O(M²) 空间串重扫）。
+
+    旧模式实测（探针 C1a）：M=6000 → 380ms、4x 尺寸 29.4x 时间；M=60000 外推
+    ~38s 挂起。线性实现 ~ms；10s 上限给旧二次行为留足红余量。
+    """
+    text = "a" * 32 + " " * 60000 + "must not "  # 关键字在但缺 import
+    t0 = time.perf_counter()
+    assert s7_enforce._rule_text_pair(text) is None
+    assert time.perf_counter() - t0 < 10.0

@@ -6,6 +6,7 @@
 import json
 import shutil
 import sqlite3
+import time
 from pathlib import Path
 
 from vrp import cli, s7_enforce, s7_enforce_rs
@@ -754,3 +755,19 @@ def test_cli_enforce_rs_wiring(tmp_path, capsys):
     assert out["engine"] == "rs-use-parser"
     assert out["findings_written"] == 1
     assert out["anchored"] == 1
+
+
+# ---------------------------------------------------------------- R-Q ReDoS 回归
+
+
+def test_is_test_cfg_redos_near_miss_linear():
+    """R-Q 回归：多 ')' 后缀垃圾近失配必须线性（旧惰性组+\\s* O(K·M²) 空间串重扫）。
+
+    旧单正则实测（探针 C2a）：K=8、M=3200 → 266ms、4x 尺寸 25.9x 时间；
+    本用例 K=4、M=40000 外推 ~21s 挂起。线性实现 ~ms；10s 上限给旧二次行为
+    留足红余量。语义由既有 test_is_test_cfg_variants 钉住。
+    """
+    inner = "cfg(" + ("a" * 4 + " " * 40000 + ")" + "b") * 4
+    t0 = time.perf_counter()
+    assert s7_enforce_rs._is_test_cfg(inner) is False
+    assert time.perf_counter() - t0 < 10.0

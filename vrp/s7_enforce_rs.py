@@ -493,24 +493,40 @@ def _attr_end(text: str, i: int) -> int | None:
     return None
 
 
+_CFG_HEAD_RE = re.compile(r"^\s*cfg\s*\(")
+_ALL_HEAD_RE = re.compile(r"^all\s*\(")
+
+
 def _is_test_cfg(inner: str) -> bool:
     """cfg 属性内容 → 是否测试门控：cfg(test) / cfg(all(..., test, ...))。
 
     顶层谓词精确匹配（not(test)/feature 条件不算——按生产代码计，保守方向）。
+
+    语义与旧单正则（^\\s*cfg\\s*\\(\\s*(.*?)\\s*\\)\\s*$ re.S + ^all\\s*\\((.*)\\)$
+    re.S）逐字保留：中段=首 ( 后至末 )（剥首尾空白）、闭括号必须是末个非空白
+    字符、all 参数深度感知逗号切分。
+
+    R-Q：旧惰性组+\\s* 形状在多 ')' 后缀垃圾的近失配上 O(M²)（惰性组逐位
+    前进 → \\s* 贪吃 M 空格 → \\s*+\\)$ 失配 → \\s* 逐位退回 → 重扫；possessive
+    只消除退回重试不消除逐位重扫）——前缀正则（线性）+ 字符串结构判定等价替换。
     """
-    m = re.match(r"^\s*cfg\s*\(\s*(.*?)\s*\)\s*$", inner, re.S)
+    m = _CFG_HEAD_RE.match(inner)
     if not m:
         return False
-    cond = m.group(1)
+    stripped = inner[m.end():].rstrip()
+    if not stripped.endswith(")"):
+        return False
+    cond = stripped[:-1].strip()
     if cond == "test":
         return True
-    m2 = re.match(r"^all\s*\((.*)\)$", cond, re.S)
-    if not m2:
+    m2 = _ALL_HEAD_RE.match(cond)
+    if not m2 or not cond.endswith(")"):
         return False
+    args_src = cond[m2.end():-1]
     depth = 0
     args: list[str] = []
     cur: list[str] = []
-    for ch in m2.group(1):
+    for ch in args_src:
         if ch == "(":
             depth += 1
         elif ch == ")":
