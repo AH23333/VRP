@@ -70,12 +70,13 @@ def _seed(repo: Path) -> None:
     con.close()
 
 
-def _mk_verdict(repo: Path, tid: str = "tx-1", status: str = "needs_confirmation") -> None:
+def _mk_verdict(repo: Path, tid: str = "tx-1", status: str = "needs_confirmation",
+                verdict_at: str = "2026-11-04T10:00:00+00:00") -> None:
     d = repo / ".vrp" / "verdicts"
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{tid}.json").write_text(json.dumps({
         "tid": tid, "type": "T2-rename", "summary": "s", "status": status,
-        "verdict_at": "2026-11-04T10:00:00+00:00", "gates": [], "confidence": 0.9,
+        "verdict_at": verdict_at, "gates": [], "confidence": 0.9,
     }), encoding="utf-8")
 
 
@@ -212,12 +213,46 @@ def test_timeline_ir_follows_verdict_at_order(tmp_path):
     """R-C F-3：时间线事件按 load_verdicts 顺序（verdict_at 升序），与 docstring 一致。"""
     repo = _mk_repo(tmp_path)
     _seed(repo)
-    _mk_verdict(repo, "tx-3", "2026-11-04T11:00:00+00:00")
-    _mk_verdict(repo, "tx-1", "2026-11-04T09:00:00+00:00")
-    _mk_verdict(repo, "tx-2", "2026-11-04T10:00:00+00:00")
+    _mk_verdict(repo, "tx-3", verdict_at="2026-11-04T11:00:00+00:00")
+    _mk_verdict(repo, "tx-1", verdict_at="2026-11-04T09:00:00+00:00")
+    _mk_verdict(repo, "tx-2", verdict_at="2026-11-04T10:00:00+00:00")
     verdicts = s6_transact.load_verdicts(repo)
     ir = render.build_timeline_ir(verdicts)
     assert [e["id"] for e in ir["events"]] == ["tx-1", "tx-2", "tx-3"]
+
+
+def test_timeline_ir_skips_unreadable_placeholders(tmp_path):
+    """R-O：损坏 verdict 文件的 unreadable 占位（verdict_at=""）不进时间线。
+
+    at 空串违反 archify timeline schema 的 ISO 8601 pattern（必须带 Z 或
+    ±HH:MM 偏移），一个半写/损坏 verdict 文件曾使整段 timeline validate
+    失败、html/timeline.html 降级消失（timeline 无 mermaid 兜底）；机制
+    不变量：timeline 事件必须是时间事实，损坏占位不是。诚实面不动：
+    load_verdicts 清单仍完整含 unreadable 条目。
+    """
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _mk_verdict(repo, "tx-1")  # 默认 needs_confirmation + 有效 verdict_at
+    vdir = repo / ".vrp" / "verdicts"
+    (vdir / "tx-bad.json").write_text("{not json", encoding="utf-8")  # 半写/损坏
+    verdicts = s6_transact.load_verdicts(repo)
+    assert [v["status"] for v in verdicts] == ["unreadable", "needs_confirmation"]  # 诚实面完整
+    ir = render.build_timeline_ir(verdicts)
+    assert [e["id"] for e in ir["events"]] == ["tx-1"]  # 仅时间事实进时间线
+    at_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$")
+    assert all(at_re.match(e["at"]) for e in ir["events"])  # 全 pattern 合规
+
+
+def test_timeline_ir_all_unreadable_returns_none(tmp_path):
+    """R-O：全部占位无时间戳 → None（空 events 被 archify minItems 拒，不出 timeline）。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    vdir = repo / ".vrp" / "verdicts"
+    vdir.mkdir(parents=True, exist_ok=True)
+    (vdir / "tx-bad.json").write_text("{not json", encoding="utf-8")
+    verdicts = s6_transact.load_verdicts(repo)
+    assert verdicts and verdicts[0]["status"] == "unreadable"  # 前置：确实全是占位
+    assert render.build_timeline_ir(verdicts) is None
 
 
 # ----------------------------------------------------------------- Mermaid

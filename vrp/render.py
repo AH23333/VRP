@@ -318,19 +318,32 @@ _KIND_BY_STATUS = {
 }
 
 
-def build_timeline_ir(verdicts: list[dict]) -> dict:
+def build_timeline_ir(verdicts: list[dict]) -> dict | None:
     """verdict 时间线 IR：事件按 load_verdicts 顺序（verdict_at 升序）呈现；
     kind 由状态映射（alert/recovery/change）。
+
+    无 verdict_at 的占位（load_verdicts 对损坏 verdict 文件的 "unreadable"
+    条目 verdict_at=""）不进时间线：timeline 事件必须是时间事实，损坏占位
+    不是——at 空串违反 archify timeline schema 的 ISO 8601 pattern（必须带
+    Z 或 ±HH:MM 偏移），一个损坏文件曾使整段 timeline validate 失败、
+    html/timeline.html 降级消失（timeline 无 mermaid 兜底）。诚实面不动：
+    CLI verdicts 清单与 session_report 表格仍完整展示 unreadable 占位。
+    全部无时间戳时返回 None（空 events 被 archify minItems 拒，不出 timeline）。
     """
     events = []
     for v in verdicts[:VERDICTS_CAP]:
+        at = v.get("verdict_at") or ""
+        if not at:
+            continue
         events.append({
             "id": v.get("tid", "unknown"),
-            "at": v.get("verdict_at", "1970-01-01T00:00:00"),
+            "at": at,
             "title": f"{v.get('tid', '?')} [{v.get('type', '?')}] {v.get('status', '?')}",
             "lane": "verdicts",
             "kind": _KIND_BY_STATUS.get(v.get("status", ""), "change"),
         })
+    if not events:
+        return None
     return {
         "schema_version": 1,
         "diagram_type": "timeline",
