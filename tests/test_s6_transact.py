@@ -707,3 +707,45 @@ def test_transact_commit_failure_aborted_not_fake_committed(tmp_path, monkeypatc
         assert con.execute("SELECT status FROM transactions WHERE tid = 'tx-noop'").fetchone()[0] == "aborted"
     finally:
         con.close()
+
+
+def test_rollback_edits_str_file_symmetry(tmp_path):
+    """R-N：apply_edits 接受 str file（JSON 直出形态），rollback 同型不能崩。"""
+    repo = _mk_repo(tmp_path)
+    s6_transact.apply_edits(repo, [{"file": "a.py", "op": "modify", "content": "broken\n"}])
+    assert (repo / "a.py").read_text(encoding="utf-8") == "broken\n"
+    restored = s6_transact.rollback_edits(repo, [{"file": "a.py", "op": "modify"}])
+    assert (repo / "a.py").read_text(encoding="utf-8") == "def old():\n    return 1\n"
+    assert "restored a.py" in restored
+
+
+@pytest.mark.parametrize(
+    "fail_step,expect",
+    [("add", "git add failed"), ("reset", "git reset failed")],
+)
+def test_git_commit_all_step_failure_poison_guard(tmp_path, monkeypatch, fail_step, expect):
+    """R-N：add/reset 失败必须响亮报错并禁止 commit（旧索引毒内容拦截）。
+
+    add -A 的 rc 原先未查：index.lock 争用下静默放过，commit 提交旧索引
+    ——别人 staged 未提交的内容被毒化进事务提交。守卫：失败步响亮报错、
+    HEAD 不动、毒内容不入提交。
+    """
+    repo = _mk_repo(tmp_path)
+    (repo / "evil.py").write_text("evil\n", encoding="utf-8")
+    subprocess.run(["git", "add", "evil.py"], cwd=repo, check=True, capture_output=True)
+    head_before = s6_transact.git_head(repo)
+
+    real_git = s6_transact._git
+
+    def fake_git(repo_arg, *args):
+        if args[0] == fail_step:
+            return subprocess.CompletedProcess(["git", *args], 1, "", f"fatal: simulated {fail_step} failure")
+        return real_git(repo_arg, *args)
+
+    monkeypatch.setattr(s6_transact, "_git", fake_git)
+    with pytest.raises(RuntimeError, match=expect):
+        s6_transact.git_commit_all(repo, "m")
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, encoding="utf-8"
+    )
+    assert proc.stdout.strip() == head_before  # 没有新提交，毒内容未入历史

@@ -166,6 +166,21 @@ def test_census_scc_none_iff_scc_missing(tmp_path):
         assert census is None
 
 
+def test_git_snapshot_dirty_files_nonascii(tmp_path):
+    """R-N：非 ASCII 路径 dirty_files 保真（core.quotepath=false，不八进制转义）。
+
+    repo 级钉 core.quotepath=true（git 默认）：本机全局配置 quotepath=false
+    会掩盖修复面（环境性绿），钉默认值让守卫在任意机器配置下都真检验。
+    """
+    repo = _init_repo(tmp_path / "nonascii-repo")
+    (repo / "文档.txt").write_text("中文\n", encoding="utf-8")
+    git(repo, "config", "core.quotepath", "true")
+    snap = s0_precheck.git_snapshot(repo)
+    assert snap["dirty"] is True
+    assert snap["dirty_count"] == 1
+    assert snap["dirty_files"] == ["文档.txt"]
+
+
 def test_precheck_end_to_end(tmp_path):
     repo = _init_repo(tmp_path / "precheck-repo")
     result = s0_precheck.precheck(repo)

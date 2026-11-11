@@ -114,7 +114,9 @@ def git_snapshot(repo: Path) -> dict:
         return {"is_repo": False}
     rc_head, head = _run(["git", "rev-parse", "HEAD"], repo)
     rc_branch, branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
-    rc_status, status = _run(["git", "status", "--porcelain"], repo)
+    # -c core.quotepath=false：非 ASCII 路径原样输出（默认引号+八进制转义，
+    # dirty_files 会显示乱码——R-N）。dirty 布尔判定不受影响，保真路径字面量。
+    rc_status, status = _run(["git", "-c", "core.quotepath=false", "status", "--porcelain"], repo)
     dirty_files = [line[3:] for line in status.splitlines() if line.strip()]
     return {
         "is_repo": rc_head == 0,

@@ -193,7 +193,9 @@ def _git_show(repo: Path, rel: str) -> str | None:
             errors="replace",
             timeout=60,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):
+        # OSError（git 不在 PATH）按契约降级 None（"no-preimage"），
+        # 与 etl.current_git_head 同型——R-N 补齐错误面。
         return None
     return proc.stdout if proc.returncode == 0 else None
 

@@ -372,3 +372,14 @@ def test_module_docstring_documents_probe():
     assert "0-based" in doc
     assert "cross-file" in doc
     assert "lhs-only" in doc
+
+
+def test_git_show_oserror_degrades_none(tmp_path, monkeypatch):
+    """R-N：git 缺失（OSError）按契约降级 None（no-preimage），不向上崩。"""
+    repo = _mk_repo(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise FileNotFoundError("git not found (simulated)")
+
+    monkeypatch.setattr(s6_difftastic.subprocess, "run", boom)
+    assert s6_difftastic._git_show(repo, "a.py") is None

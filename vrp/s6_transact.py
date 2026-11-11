@@ -152,7 +152,10 @@ def _is_vrp_artifact(path: str) -> bool:
 
 
 def git_clean(repo: Path) -> bool:
-    proc = _git(repo, "status", "--porcelain")
+    # -c core.quotepath=false：非 ASCII 路径原样输出（默认会被引号+八进制
+    # 转义，解析出的路径是乱码——R-N）。verdict 两态下本就正确，此 flag
+    # 保真路径字面量。
+    proc = _git(repo, "-c", "core.quotepath=false", "status", "--porcelain")
     if proc.returncode != 0:
         return False
     for line in proc.stdout.splitlines():
@@ -167,9 +170,20 @@ def git_head(repo: Path) -> str:
 
 
 def git_commit_all(repo: Path, message: str) -> str:
-    _git(repo, "add", "-A")
+    """add/reset/commit 三步 rc 全查（R-N：add rc 未查的事务完整性洞）。
+
+    git add -A 失败（index.lock 争用等）若静默放过，commit 会提交旧索引——
+    索引里若有别人 staged 未提交的内容就被静默毒化进事务提交；即使索引
+    干净也会以误导性的 "nothing to commit" 报错掩盖真根因。reset 失败
+    同理（工件目录混进事务提交）。三步任一失败响亮报错，事务不做半步。
+    """
+    proc = _git(repo, "add", "-A")
+    if proc.returncode != 0:
+        raise RuntimeError(f"git add failed: {proc.stderr.strip()[:500]}")
     for artifact in (".vrp", ".codebase-memory", ".code-atlas"):
-        _git(repo, "reset", "-q", "HEAD", "--", artifact)
+        proc = _git(repo, "reset", "-q", "HEAD", "--", artifact)
+        if proc.returncode != 0:
+            raise RuntimeError(f"git reset failed ({artifact}): {proc.stderr.strip()[:500]}")
     proc = _git(repo, "commit", "-m", message)
     if proc.returncode != 0:
         raise RuntimeError(f"git commit failed: {proc.stderr.strip()[:500]}")
@@ -203,7 +217,9 @@ def rollback_edits(repo: Path, edits: list[dict]) -> list[str]:
                 target.unlink()
             restored.append(f"deleted {edit['file']}")
         else:
-            proc = _git(repo, "checkout", "HEAD", "--", edit["file"].as_posix())
+            # Path() 包一层：apply_edits 接受 str file（JSON 直出形态），
+            # 回滚是恢复路径，不能在类型上崩（R-N API 对称性）。
+            proc = _git(repo, "checkout", "HEAD", "--", Path(edit["file"]).as_posix())
             if proc.returncode != 0:
                 restored.append(f"RESTORE FAILED {edit['file']}: {proc.stderr.strip()[:200]}")
             else:
