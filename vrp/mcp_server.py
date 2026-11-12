@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 from . import nav, s6_transact
+from . import dbpath
 from . import curate as curate_mod
 from . import etl as etl_mod
 from . import render as render_mod
@@ -165,7 +166,7 @@ def build_server(repo: Path) -> "MCPServer":
         facts = repo / ".vrp" / "facts.db"
         if not facts.exists():
             raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts}")
-        con = sqlite3.connect(f"file:{facts}?mode=ro", uri=True)
+        con = dbpath.ro_connect(facts)
         try:
             return _dumps(curate_mod.drift_report(con))
         finally:

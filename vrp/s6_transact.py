@@ -48,6 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import s0_precheck, s1_cbm, s2_deadcode, s4_freeze, s6_difftastic, etl
+from . import dbpath
 from .s5_cabrief import call_code_atlas
 
 TX_TYPES = ("T1", "T2", "T3", "T4")
@@ -376,7 +377,7 @@ def transact(
     try:
         pre_qns = _qn_set(con)
         pre_edges = _usage_edges(con)
-        pre_con = sqlite3.connect(f"file:{facts_db}?mode=ro", uri=True)
+        pre_con = dbpath.ro_connect(facts_db)
         try:
             pre_dead = len(s2_deadcode.dead_code_candidates(pre_con))
         finally:
@@ -458,7 +459,7 @@ def transact(
     try:
         s1_cbm.index_repository(repo, name, reindex=True)
         etl.run_etl(repo, name, out_db=post_db)
-        post = sqlite3.connect(f"file:{post_db}?mode=ro", uri=True)
+        post = dbpath.ro_connect(post_db)
         try:
             post_qns = _qn_set(post)
             post_edges = _usage_edges(post)
@@ -529,7 +530,7 @@ def transact(
             gates.append({"gate": "G4", "status": "skipped", "detail": {"reason": f"no equivalence claim for {tx['type']}"}})
 
         if failed is None and tx["type"] in ("T2", "T4"):
-            post = sqlite3.connect(f"file:{post_db}?mode=ro", uri=True)
+            post = dbpath.ro_connect(post_db)
             try:
                 post_dead = len(s2_deadcode.dead_code_candidates(post))
             finally:

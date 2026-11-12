@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import render as render_mod
+from . import dbpath
 from . import s6_transact
 
 SESSIONS_DIR = ".vrp/sessions"
@@ -47,7 +48,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _open_ro(db: Path) -> sqlite3.Connection:
-    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db)
     con.row_factory = sqlite3.Row
     return con
 

@@ -46,6 +46,7 @@ import sqlite3
 import subprocess
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
+from . import dbpath
 
 ARCHIFY_TIMEOUT = 300
 ARCHIFY_RENDER_TIMEOUT = 900
@@ -1264,7 +1265,7 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
     if not db.exists():
         notes.append("facts.db missing - module chain skipped")
         return result
-    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db)
     con.row_factory = sqlite3.Row
     try:
         structure = _load_structure(con)

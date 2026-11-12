@@ -30,6 +30,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import procs, s2_cargo_mutants, s2_mutate, s2_stryker
+from . import dbpath
 
 SOURCE = "mutate-run"
 PATHOLOGY = "P8"
@@ -108,7 +109,7 @@ def run_mutmut(bin_path: str, repo: Path, files: list[str], timeout: int) -> dic
 
 
 def read_cache(cache: Path) -> list[dict]:
-    con = sqlite3.connect(f"file:{cache}?mode=ro", uri=True)
+    con = dbpath.ro_connect(cache)
     try:
         rows = con.execute(
             'SELECT sf.filename, l.line_number, m."index", m.status FROM Mutant m'

@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from . import etl as etl_mod
+from . import dbpath
 from . import testsig
 
 BUILTINISH = frozenset(
@@ -140,7 +141,7 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
     if not ca_db.exists():
         return {"index": index_result, "ledger_rows": 0}
 
-    ca = sqlite3.connect(f"file:{ca_db}?mode=ro", uri=True)
+    ca = dbpath.ro_connect(ca_db)
     ca.row_factory = sqlite3.Row
     facts = sqlite3.connect(facts_db)
     try:

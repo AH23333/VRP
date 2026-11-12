@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
+from . import dbpath
 from . import curate as curate_mod
 from . import evidence as ev
 from . import s1_cbm, testsig
@@ -138,7 +139,7 @@ def snapshot_owned(db_path: Path) -> dict[str, tuple[list[str], list[tuple]]]:
     """
     if not db_path.exists():
         return {}
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db_path)
     snap: dict[str, tuple[list[str], list[tuple]]] = {}
     try:
         for table in OWNED_TABLES:

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from . import dbpath
 
 MODULE_SYMBOL_CAP = 200
 MODULE_FINDINGS_CAP = 20
@@ -43,7 +44,7 @@ def _connect_ro(repo: Path) -> sqlite3.Connection:
     db = Path(repo) / ".vrp" / "facts.db"
     if not db.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {db}")
-    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db)
     con.row_factory = sqlite3.Row
     return con
 

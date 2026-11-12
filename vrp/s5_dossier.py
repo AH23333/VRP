@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import s1_cbm, s2_deadcode, s5_cabrief, s5_rawpack, s5_repomap, s6_transact
+from . import dbpath
 
 DEFAULT_BUDGET = 32000
 SCC_REPORT_CAP = 20
@@ -322,7 +323,7 @@ def build_dossier(
     if task not in TASK_PROFILES:
         raise ValueError(f"unknown task: {task!r} (expected one of {', '.join(TASK_PROFILES)})")
     caps = {section: max(1, int(budget * share)) for section, share in TASK_PROFILES[task].items()}
-    con = sqlite3.connect(f"file:{facts_db}?mode=ro", uri=True)
+    con = dbpath.ro_connect(facts_db)
     con.row_factory = None
     try:
         views_payload = {

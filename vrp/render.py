@@ -32,6 +32,7 @@ import subprocess
 from pathlib import Path
 
 from . import render_chain
+from . import dbpath
 from . import s6_transact
 
 REPORT_DIR = ".vrp/report"
@@ -82,7 +83,7 @@ def _connect_ro(repo: Path) -> sqlite3.Connection:
     db = Path(repo) / ".vrp" / "facts.db"
     if not db.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {db}")
-    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db)
     con.row_factory = sqlite3.Row
     return con
 

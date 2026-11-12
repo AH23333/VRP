@@ -53,6 +53,7 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 from shutil import which
+from . import dbpath
 
 _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_BIN = _ROOT / "work" / "difftastic" / "difft.exe"
@@ -165,7 +166,7 @@ def _symbol_spans(db_path: Path, qns: set[str]) -> dict[str, tuple[str, int, int
     spans: dict[str, tuple[str, int, int]] = {}
     if not qns:
         return spans
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db_path)
     try:
         placeholders = ",".join("?" for _ in qns)
         rows = con.execute(

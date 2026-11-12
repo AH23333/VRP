@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
+from . import dbpath
 
 DEFAULT_INSTALL = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "codebase-memory-mcp" / "codebase-memory-mcp.exe"
 
@@ -174,7 +175,7 @@ CBM_SCHEMA_CONTRACT: dict[str, tuple[str, ...]] = {
 
 
 def verify_cbm_schema(db_path: Path) -> None:
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db_path)
     try:
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         problems: list[str] = []
@@ -199,7 +200,7 @@ def verify_cbm_schema(db_path: Path) -> None:
 
 
 def read_store_meta(db_path: Path) -> dict:
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db_path)
     try:
         cur = con.execute("SELECT * FROM store_meta")
         cols = [d[0] for d in cur.description]
@@ -217,6 +218,6 @@ def read_store_meta(db_path: Path) -> dict:
 
 
 def connect_ro(db_path: Path) -> sqlite3.Connection:
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(db_path)
     con.row_factory = sqlite3.Row
     return con

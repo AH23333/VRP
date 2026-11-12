@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from . import dbpath
 from . import etl as etl_mod
 from . import curate as curate_mod
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
@@ -122,7 +123,7 @@ def cmd_mutate_plan(args) -> int:
     facts_path = repo / ".vrp" / "facts.db"
     if not facts_path.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
-    con = sqlite3.connect(f"file:{facts_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(facts_path)
     try:
         targets = s2_mutate.mutation_targets(con, args.budget)
     finally:
@@ -372,7 +373,7 @@ def cmd_drift(args) -> int:
     facts_path = repo / ".vrp" / "facts.db"
     if not facts_path.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
-    con = sqlite3.connect(f"file:{facts_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(facts_path)
     try:
         result = curate_mod.drift_report(con)
     finally:
@@ -387,7 +388,7 @@ def cmd_remap(args) -> int:
     facts_path = repo / ".vrp" / "facts.db"
     if not facts_path.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
-    con = sqlite3.connect(f"file:{facts_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(facts_path)
     try:
         report = curate_mod.drift_report(con)
     finally:
@@ -415,7 +416,7 @@ def cmd_refresh(args) -> int:
     _print_step("S1 xcheck", xc)
 
     facts_path = repo / ".vrp" / "facts.db"
-    con = sqlite3.connect(f"file:{facts_path}?mode=ro", uri=True)
+    con = dbpath.ro_connect(facts_path)
     try:
         drift = curate_mod.drift_report(con)
     finally:
@@ -473,7 +474,7 @@ def cmd_status(args) -> int:
     if not facts_db.exists():
         print(json.dumps({"facts_db": None}))
         return 0
-    con = sqlite3.connect(f"file:{facts_db}?mode=ro", uri=True)
+    con = dbpath.ro_connect(facts_db)
     try:
         meta = dict(con.execute("SELECT key, value FROM meta"))
         counts = {}
