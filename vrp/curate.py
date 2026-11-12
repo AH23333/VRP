@@ -448,7 +448,7 @@ def reject(con: sqlite3.Connection, kind: str, target_id: str, note: str = "") -
         else:
             cur = con.execute("UPDATE structure SET status = 'rejected' WHERE id = (SELECT MAX(id) FROM structure)")
     else:
-        raise SystemExit(f"kind 必须是 slice 或 structure: {kind}")
+        raise SystemExit(f"kind must be slice or structure: {kind}")
     if cur.rowcount == 0:
         raise SystemExit(f"no rejectable artifact found: {kind} {target_id}")
     con.execute(
