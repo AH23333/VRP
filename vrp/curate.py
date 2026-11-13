@@ -325,7 +325,7 @@ def curate(repo: Path, con: sqlite3.Connection) -> dict:
     receipt["stale"] = _revalidate_ingested(con)
     receipt_path = repo / RECEIPT_NAME
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
-    receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
+    receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     return receipt
 
 
@@ -714,7 +714,7 @@ def _remap_file(path: Path, remapping: dict[str, str]) -> tuple[dict, set[str]]:
                 else:
                     _map_fid(fid)
     if replaced:
-        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     entry["remapped"] = len(replaced)
     return entry, remaining
 

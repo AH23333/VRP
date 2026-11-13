@@ -916,7 +916,7 @@ def inject_chrome(html_path: Path, clicks: dict[str, str],
         "</script>")
     inject = "\n".join(parts)
     h = h.replace("</body>", inject + "\n</body>", 1)
-    html_path.write_text(h, encoding="utf-8")
+    html_path.write_text(h, encoding="utf-8", newline="\n")
 
 
 # ---------------------------------------------------------------- S3 角色网格
@@ -1398,7 +1398,7 @@ def write_file_page(out_dir: Path, lines: list[str], fpath: str,
     meta = " · ".join(meta_bits)
     doc = _code_page_doc(fpath, fpath, meta, rows_html, chips_html, crumbs, action,
                          slices_html=slices_html, extra_js=slice_js)
-    (out_dir / f"{file_page_stem_of(fpath)}.html").write_text(doc, encoding="utf-8")
+    (out_dir / f"{file_page_stem_of(fpath)}.html").write_text(doc, encoding="utf-8", newline="\n")
     return this_page
 
 
@@ -1543,7 +1543,7 @@ def write_slice_page(out_dir: Path, sid: str, sl: dict,
         f"{notes_html}"
         "</main></body></html>")
     this_page = slice_page_stem(sid) + ".html"
-    (out_dir / this_page).write_text(doc, encoding="utf-8")
+    (out_dir / this_page).write_text(doc, encoding="utf-8", newline="\n")
     return this_page
 
 
@@ -1659,7 +1659,7 @@ def _render_diagram(mjs: Path, mod_staging: Path, ir: dict,
     """单图：写 IR → validate → render 进模块暂存区。返回 (html, 错误)。"""
     ir_dir = mod_staging / "ir"
     ir_path = ir_dir / f"{name}.json"
-    ir_path.write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8")
+    ir_path.write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     try:
         proc = subprocess.run(
             ["node", str(mjs), "validate", dtype, str(ir_path), "--json"],
@@ -2393,4 +2393,4 @@ def write_index(out_dir: Path, cards: list[dict], layers: list[dict] | None = No
         + "".join(secs)
         + slices_html
         + "</div></body></html>")
-    (out_dir / "index.html").write_text(doc, encoding="utf-8")
+    (out_dir / "index.html").write_text(doc, encoding="utf-8", newline="\n")

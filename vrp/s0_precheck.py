@@ -269,5 +269,5 @@ def precheck(repo: Path) -> dict:
     out_dir = repo / ".vrp"
     out_dir.mkdir(exist_ok=True)
     payload = json.dumps(result, ensure_ascii=False, indent=2)
-    (out_dir / "precheck.json").write_text(payload, encoding="utf-8")
+    (out_dir / "precheck.json").write_text(payload, encoding="utf-8", newline="\n")
     return result

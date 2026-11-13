@@ -163,7 +163,7 @@ def reconcile(targets: list[dict], mutants: list[dict]) -> tuple:
 def write_report(repo: Path, payload: dict) -> Path:
     out = repo / ".vrp" / "mutation-report.json"
     out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     return out
 
 

@@ -269,7 +269,7 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
     # P-1: hints 落盘 .vrp/artifact-hints.json（提示性产物，每次 etl 覆写）
     (out_db.parent / "artifact-hints.json").write_text(
         json.dumps(noise, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    , newline="\n")
 
     stats["facts_db"] = str(out_db)
     return stats

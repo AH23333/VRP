@@ -118,7 +118,7 @@ def load_config(repo: Path, env: dict | None = None) -> LlmConfig:
 
 def _post_json(url: str, headers: dict, body: dict, timeout: int) -> tuple[int, str]:
     req = urllib.request.Request(
-        url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST"
+        url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), headers=headers, method="POST"
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.status, resp.read().decode("utf-8", "replace")

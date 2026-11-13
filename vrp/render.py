@@ -1606,11 +1606,11 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         _dumps_canonical({**irs, index_hash_key: index_ir}).encode("utf-8")
     ).hexdigest()
     for name, ir in irs.items():
-        (out / "ir" / f"{name}.json").write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8")
+        (out / "ir" / f"{name}.json").write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     (out / "ir" / f"{index_name}.json").write_text(
         json.dumps(index_ir, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (out / "findings.sarif").write_text(json.dumps(sarif, ensure_ascii=False, indent=2), encoding="utf-8")
+    , newline="\n")
+    (out / "findings.sarif").write_text(json.dumps(sarif, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
 
     artifacts: list[str] = [f"ir/architecture.json", f"ir/{index_name}.json", "findings.sarif"]
     if use_chain:
@@ -1619,10 +1619,10 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
 
     # Mermaid 源（零依赖，恒出）
     mmd_arch = mermaid_architecture(arch_ir)
-    (out / "architecture.mmd").write_text(mmd_arch, encoding="utf-8")
+    (out / "architecture.mmd").write_text(mmd_arch, encoding="utf-8", newline="\n")
     artifacts.append("architecture.mmd")
     for name, ir in seq_irs.items():
-        (out / f"slice-{name}.mmd").write_text(mermaid_sequence(ir), encoding="utf-8")
+        (out / f"slice-{name}.mmd").write_text(mermaid_sequence(ir), encoding="utf-8", newline="\n")
         artifacts.append(f"slice-{name}.mmd")
 
     # archify 工具组（缺失/失败降级 Mermaid-only，不阻塞）

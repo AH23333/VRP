@@ -50,5 +50,5 @@ def write_plan(repo: Path, targets: list[dict]) -> Path:
     out_dir = repo / ".vrp"
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "mutation-plan.json"
-    out.write_text(json.dumps(targets, ensure_ascii=False, indent=2), encoding="utf-8")
+    out.write_text(json.dumps(targets, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     return out

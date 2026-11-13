@@ -227,3 +227,40 @@ def test_xcheck_no_minified_counters_zero(tmp_path, monkeypatch):
     assert summary["ca_minified_calls"] == 0
     assert summary["cbm_minified_calls"] == 0
     assert summary["cbm_minified_usage"] == 0
+
+
+def test_xcheck_ledger_detail_nonascii_unescaped(tmp_path, monkeypatch):
+    """R-Z：ledger detail_json 非 ASCII 符号名/路径原样落库（ensure_ascii=False）。
+
+    同族一致性先例：s2_p4 ledger detail 全 pin；xcheck 旧裸 dumps 使同表
+    detail_json 转义/原样两态并存（DB 内可读性割裂 + 下游 grep 面失真）。
+    CA 独有边（facts 无对应）落 ca_only 行，detail 携带四元组。
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _mk_ca_db(repo)
+    ca = sqlite3.connect(repo / ".code-atlas" / "index.db")
+    ca.execute("INSERT INTO files (id, path) VALUES (9, '重构.py')")
+    ca.execute("INSERT INTO symbols (id, name, file_id) VALUES (10, '中文函数', 9)")
+    ca.execute("INSERT INTO symbols (id, name, file_id) VALUES (11, '目标函数', 9)")
+    ca.execute("INSERT INTO edges VALUES (10, 11, 'calls', 0.9, 'heuristic')")
+    ca.commit()
+    ca.close()
+    _mk_facts_db(repo)
+    monkeypatch.setattr(xcheck, "index_with_code_atlas",
+                        lambda repo, reindex=False, timeout=900: {"status": "indexed"})
+    xcheck.run_xcheck(repo, repo / ".vrp" / "facts.db")
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        details = [
+            r[0]
+            for r in con.execute(
+                "SELECT detail_json FROM discrepancy_ledger WHERE category = 'ca_only'"
+            )
+        ]
+        assert len(details) == 1
+        assert "中文函数" in details[0]
+        assert "重构.py" in details[0]
+        assert "\\u4e2d" not in details[0]  # ensure_ascii=True 的转义形态不得回潮
+    finally:
+        con.close()

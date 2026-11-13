@@ -224,6 +224,42 @@ def test_chat_network_error():
         chat(_cfg(), [{"role": "user", "content": "x"}], transport=post)
 
 
+def test_post_json_wire_body_cjk_unescaped(monkeypatch):
+    """R-Z：请求体 wire 字节 CJK 原样（ensure_ascii=False）——转义形态 wire 体积 ~2x。
+
+    transport 注入在 dict 层（chat 的测试面），序列化发生在 _post_json 内部，
+    故在此 monkeypatch urlopen 捕获 Request.data 做 wire 级断言。
+    """
+    captured = {}
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"choices": []}'
+
+    def fake_urlopen(req, timeout=None):
+        captured["data"] = req.data
+        return _Resp()
+
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
+    status, text = llm_client._post_json(
+        "http://llm.example/v1/chat/completions",
+        {"Authorization": "Bearer k"},
+        {"messages": [{"role": "user", "content": "重构中文提示"}]},
+        30,
+    )
+    assert (status, text) == (200, '{"choices": []}')
+    assert "重构中文提示".encode("utf-8") in captured["data"]
+    assert b"\\u91cd" not in captured["data"]  # ensure_ascii=True 的转义形态不得回潮
+
+
 def test_chat_bad_response_shape():
     post, _ = _fake_transport([(200, '{"unexpected": true}')])
     with pytest.raises(ValueError, match="choices"):

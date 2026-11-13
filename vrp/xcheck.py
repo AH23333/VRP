@@ -219,7 +219,7 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
                 agreement += 1
                 continue
             src_name, src_file, dst_name, dst_file = quad
-            detail = json.dumps({"src_name": src_name, "src_file": src_file, "dst_name": dst_name, "dst_file": dst_file})
+            detail = json.dumps({"src_name": src_name, "src_file": src_file, "dst_name": dst_name, "dst_file": dst_file}, ensure_ascii=False)
             if dst_name in BUILTINISH:
                 ledger.append(("ca_only_builtin_target", f"{src_name}@{src_file}", f"{dst_name}@{dst_file}", None, conf, prov, detail))
             else:
@@ -230,7 +230,7 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
             if quad in ca_edges:
                 continue
             src_name, src_file, dst_name, dst_file = quad
-            detail = json.dumps({"src_name": src_name, "src_file": src_file, "dst_name": dst_name, "dst_file": dst_file, "strategy": strategy})
+            detail = json.dumps({"src_name": src_name, "src_file": src_file, "dst_name": dst_name, "dst_file": dst_file, "strategy": strategy}, ensure_ascii=False)
             if testsig.is_test_path(src_file):
                 cbm_only_test += 1
                 ledger.append(("cbm_only_test_source", f"{src_name}@{src_file}", f"{dst_name}@{dst_file}", "CALLS", None, None, detail))
@@ -271,7 +271,7 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
         facts.commit()
 
         out = repo / ".vrp" / "xcheck.json"
-        out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
         return summary
     finally:
         ca.close()

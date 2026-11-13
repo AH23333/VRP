@@ -86,6 +86,7 @@ def write_config(repo: Path, files: list[str]) -> Path:
             ensure_ascii=False,
         ),
         encoding="utf-8",
+        newline="\n",
     )
     return conf
 

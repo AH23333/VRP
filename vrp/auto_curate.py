@@ -81,11 +81,11 @@ def _utc_now() -> str:
 
 
 def _write_json(path: Path, payload) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8", newline="\n")
 
 
 def _write_text(path: Path, text: str) -> None:
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def _symbol_edge_material(con: sqlite3.Connection) -> str:
@@ -395,7 +395,7 @@ def run_auto_curate(
     }
     _write_json(audit / "summary.json", summary)
     log_path = repo / ".vrp" / "auto" / "log.jsonl"
-    with log_path.open("a", encoding="utf-8") as f:
+    with log_path.open("a", encoding="utf-8", newline="\n") as f:
         f.write(
             json.dumps(
                 {

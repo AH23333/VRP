@@ -418,7 +418,7 @@ def build_dossier(
     # leaves the previous dossier.json intact (H2 pattern).
     tmp = out.with_name(f"{out.name}.tmp-{os.getpid()}")
     try:
-        tmp.write_text(json.dumps(dossier, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(dossier, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
         os.replace(tmp, out)
     except (Exception, KeyboardInterrupt):
         # Ctrl-C 同样走 tmp 清理（KI 非 Exception 子类，只捕 Exception 会

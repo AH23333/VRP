@@ -69,9 +69,11 @@ def _guard(fn):
 
 
 def _write_temp(tx_json: str) -> Path:
-    fd, name = tempfile.mkstemp(suffix=".json", text=True)
+    # text=False：fd 不带 CRT O_TEXT 标志（Python io 绕过 CRT，无双重翻译，
+    # 但标志本身是平台尾巴）；换行翻译统一由 TextIOWrapper 的 newline 钉住。
+    fd, name = tempfile.mkstemp(suffix=".json")
     tmp = Path(name)
-    with open(fd, "w", encoding="utf-8") as f:
+    with open(fd, "w", encoding="utf-8", newline="\n") as f:
         f.write(tx_json)
     return tmp
 
@@ -205,7 +207,7 @@ def build_server(repo: Path) -> "MCPServer":
             raise SystemExit(
                 f"tx_submit: transaction exists (overwrite=True to replace): {path.name}"
             )
-        path.write_text(tx_json, encoding="utf-8")
+        path.write_text(tx_json, encoding="utf-8", newline="\n")
         return _dumps(
             {"submitted": True, "path": str(path), "id": payload["id"], "type": payload["type"]}
         )
@@ -220,7 +222,7 @@ def build_server(repo: Path) -> "MCPServer":
         tx_dir.mkdir(parents=True, exist_ok=True)
         tid = s6_transact.TID_SAFE.sub("_", payload["id"])
         path = tx_dir / f"{tid}.json"
-        path.write_text(tx_json, encoding="utf-8")
+        path.write_text(tx_json, encoding="utf-8", newline="\n")
         verdict = s6_transact.transact(repo, path, name or repo.name, confirm=False)
         return _dumps(verdict)
 

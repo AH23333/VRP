@@ -364,6 +364,32 @@ def test_render_report_reproducible_no_timestamp(tmp_path, monkeypatch):
     assert r1["ir_sha256"] == r2["ir_sha256"]
 
 
+def test_render_report_artifacts_lf_newlines(tmp_path, monkeypatch):
+    """R-Z：报告成品统一 LF（newline pin 行为面）——Windows 裸 text 写会渗 CRLF。
+
+    扫描面含 ir/*.json + findings.sarif + *.mmd + report.html + 模块/符号页
+    （_seed_files 使 render_chain 页面写站进执行面；源码片段经 read_text
+    通用换行归一后以 LF 落盘）。
+    """
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    _seed_files(repo)
+    _mk_verdict(repo)
+    result = render.render_report(repo)
+    out = Path(result["report"]).parent
+    assert (out / "findings.sarif").is_file()
+    assert (out / "ir" / "architecture.json").is_file()
+    assert (out / "modules").is_dir()
+    offenders = [
+        str(p.relative_to(out))
+        for p in sorted(out.rglob("*"))
+        if p.is_file() and b"\r\n" in p.read_bytes()
+    ]
+    assert not offenders, f"report artifacts contain CRLF: {offenders}"
+
+
 def test_render_report_git_head_missing_graceful(tmp_path, monkeypatch):
     """render 只读无 M4（决策点 tx_run 自有 M4 兜底）：meta 空不崩，git_head=''。"""
     monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)

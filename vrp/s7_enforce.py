@@ -869,7 +869,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     root_packages = sorted({m.split(".")[0] for c in contracts for m in c["source_modules"] + c["forbidden_modules"]})
     config = repo / CONF_NAME
     config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(build_config(contracts, root_packages), encoding="utf-8")
+    config.write_text(build_config(contracts, root_packages), encoding="utf-8", newline="\n")
     try:
         result = _execute(bin_path, repo, config, timeout)
     finally:

@@ -284,7 +284,7 @@ def run_ts(
         }
     config = repo / CONF_NAME
     config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(build_config(contracts), encoding="utf-8")
+    config.write_text(build_config(contracts), encoding="utf-8", newline="\n")
     try:
         result = _execute(bin_path, repo, CONF_NAME, targets, timeout)
     finally:
