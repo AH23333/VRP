@@ -97,18 +97,19 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | G0 | apply 前置校验 | `gate/G0/apply-edits` |
 | G1 | 提交后重索引（旁路 ETL） | `gate/G1/parse-errors` |
 | G2 | lint/typecheck | `gate/G2/static-check` |
-| G3 | 测试套件 | `gate/G3/test-failed` |
+| G3 | 测试套件 | `gate/G3/test` |
 | G4 | 声明等价：**五信号**——符号集/使用边/悬垂引用/verify_changes/**difftastic 结构 diff**（同符号体内偷改可抓） | `undeclared-change` `edge-mismatch` `dangling-reference` `verify-broken` `structural-change` |
-| G5 | 死代码单调性 | `gate/G5/deadcode-increase` |
+| G5 | 死代码单调性 | `gate/G5/dead-code-increase` |
+| G6 | git 提交失败→回滚树+诚实 aborted 裁决（提交先于记账：如全 no-op edits 无可提交，绝不留 DB=committed 却无 git 提交的假象） | `gate/G6/commit-failed` |
 
 外部信号缺失/超时一律诚实降级（skipped / 诚实记录），不伪造结果。
 
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 402 例 ~60-100s（默认排除 deep）
-python -m pytest -m deep -q                # 深度层 1410 例 ~10min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 1812 例（阶段性完工验收）
+python -m pytest -q                        # 快速层 1292 例 ~4-8min（默认排除 deep）
+python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
+python -m pytest -m "deep or not deep" -q  # 全量 2815 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -117,7 +118,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 1812 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 268 例全绿才放行（~35-40s）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1292 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）
 
 ## 外部工具（可选，缺失则降级）
@@ -129,10 +130,14 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《产品目标.md》——定位与成功判据（主流程四环）
 - 《构想v6-核验后S1-S5定稿.md》——S1-S5 权威技术方案（§12-13 为实测/实施记录）
 - 《构想v7-AI梳理层与S7-S8定稿.md》——**当前权威**：主流程四环/MCP 接口层/curate/S7-S8/批次 R1'-R4'
+- 《构想v8-多层级下钻展示层.md》——展示层当前权威：多层级下钻（网格/代码页/rel 条/目录树），V-0→V-0.9 全程实录
+- 《渲染层方案.md》——archify 渲染层方案
+- 《跨项目实测报告-2026-11-10.md》——跨项目实测
 - 《契约/事务契约.md》——事务 schema/G 码对照/生产指南（AI 生产方必读）
+- 《契约/梳理工件契约.md》——梳理工件（slices/structure）schema 唯一权威格式说明（AI 生产方必读，配置 skills/vrp-curation/ 生产指南）
 - 《交接文档.md》——接手即读（环境/E2E 基准数字/代码地图/下一步）
 - 《踩坑历史.md》——实测坑与纪律
-- 构想 v0-v6——历史方案，只读
+- 构想 v1-v6——历史方案，只读
 
 ## 平台
 
