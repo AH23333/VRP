@@ -19,6 +19,12 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _write_session_doc(repo: Path, session_id: str, content: str) -> None:
+    sdir = repo / session.SESSIONS_DIR / session_id
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "session.json").write_text(content, encoding="utf-8")
+
+
 def _mk_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / ".vrp").mkdir(parents=True)
@@ -210,6 +216,24 @@ def test_report_unknown_session(tmp_path):
     repo = _mk_repo(tmp_path)
     with pytest.raises(SystemExit, match="unknown session"):
         session.session_report(repo, "nope-0000")
+
+
+def test_read_session_nondict_doc_clean_error(tmp_path):
+    """R-X：合法 JSON 非 dict 的 session.json 同 unreadable 语义给干净 SystemExit，非裸 AttributeError。"""
+    repo = _mk_repo(tmp_path)
+    _write_session_doc(repo, "s-0001", "[1, 2]")
+    with pytest.raises(SystemExit, match="unreadable session.json"):
+        session._read_session(repo, "s-0001")
+
+
+def test_list_sessions_nondict_doc_skipped_good_kept(tmp_path):
+    """R-X：_list_sessions 扫描容错列加入合法 JSON 非 dict（旧代码会把它当 dict 返回，
+    AttributeError 延迟到 _find_active 才炸——离因果远）。好会话不受累。"""
+    repo = _mk_repo(tmp_path)
+    _write_session_doc(repo, "s-0001", '"just a string"')
+    _write_session_doc(repo, "s-0002", json.dumps({"id": "s-0002", "ended_at": None}))
+    listed = session._list_sessions(repo)
+    assert [doc["id"] for doc, _sdir in listed] == ["s-0002"]
 
 
 def test_report_default_latest_ended(tmp_path, monkeypatch):

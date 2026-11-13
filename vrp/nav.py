@@ -325,9 +325,13 @@ def _slices_of(con: sqlite3.Connection, fid: str) -> list[dict]:
         (like,),
     ).fetchall():
         try:
-            steps = json.loads(payload_json).get("steps", [])
+            payload = json.loads(payload_json)
         except json.JSONDecodeError:
             continue
+        # 合法 JSON 但非 dict 的 payload（手改库/异源写入）同列容错跳过，
+        # 不让 AttributeError 击穿 membership 检索（R-X：与 render/render_chain
+        # 消费点 isinstance 守卫同口径）。
+        steps = payload.get("steps", []) if isinstance(payload, dict) else []
         for i, step in enumerate(steps):
             if isinstance(step, dict) and step.get("fid") == fid:
                 out.append({"slice_id": slice_id, "name": name, "step": i})
@@ -398,6 +402,11 @@ def nav_slice(repo: Path, slice_id: str) -> dict:
         try:
             payload = json.loads(payload_json)
         except json.JSONDecodeError:
+            raise SystemExit(
+                f"nav_slice: corrupt slice payload for {slice_id} - re-run curation to rebuild it"
+            )
+        # 合法 JSON 非 dict：同 corrupt 语义给干净错误（R-X），非裸 AttributeError。
+        if not isinstance(payload, dict):
             raise SystemExit(
                 f"nav_slice: corrupt slice payload for {slice_id} - re-run curation to rebuild it"
             )

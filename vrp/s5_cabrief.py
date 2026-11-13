@@ -37,6 +37,9 @@ def _read_response(stdout, want_id: int) -> dict | None:
             message = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(message, dict):
+            # 合法 JSON 标量/数组行（日志噪音的一种形态）同列跳过（R-X）
+            continue
         if message.get("id") == want_id:
             return message
     return None

@@ -54,6 +54,14 @@ def test_send_and_read_roundtrip(tmp_path):
         proc.wait(timeout=10)
 
 
+def test_read_response_skips_nondict_and_noise_lines():
+    """R-X：合法 JSON 非 dict 行（标量/数组，异源 stdout 噪音的一种形态）与坏 JSON
+    行同列跳过——旧代码 42.get("id") 裸抛 AttributeError，打穿整个 cabrief。"""
+    lines = iter(["42\n", '"noise"\n', "not-json\n", '{"jsonrpc": "2.0", "id": 7, "result": {}}\n'])
+    response = s5_cabrief._read_response(lines, 7)
+    assert response["id"] == 7
+
+
 @pytest.mark.skipif(s5_cabrief.ca_js_path() is None, reason="code-atlas dist not installed")
 def test_repo_map_brief_real():
     repo = Path(__file__).parent.parent / "verify" / "code-atlas-lusiem"

@@ -365,3 +365,43 @@ def test_nav_slice_corrupt_payload_clean_error(tmp_path):
         raise AssertionError("corrupt slice payload must raise SystemExit")
     except SystemExit as exc:
         assert "corrupt slice payload" in str(exc)
+
+
+def test_nav_slice_nondict_payload_clean_error(tmp_path):
+    """R-X：合法 JSON 非 dict payload 同 corrupt 语义给干净 SystemExit，非裸 AttributeError。
+
+    旧代码 json.loads 成功后 payload.get("steps") 对 list 裸抛
+    AttributeError（离因果远）；语义上与 'not-json{' 同为"坏 payload"。
+    """
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, status, payload_json)"
+        " VALUES ('nondict', 'n', 's', 'active', '[1, 2]')"
+    )
+    con.commit()
+    con.close()
+    try:
+        nav.nav_slice(repo, "nondict")
+        raise AssertionError("non-dict slice payload must raise SystemExit")
+    except SystemExit as exc:
+        assert "corrupt slice payload" in str(exc)
+
+
+def test_slices_of_nondict_payload_skipped_good_still_found(tmp_path):
+    """R-X：_slices_of 对合法 JSON 非 dict 跳过（同 JSONDecodeError 容错列），好 slice 不受累。"""
+    repo = _mk_repo(tmp_path)
+    fid = _add_symbol(repo, "f-nx", "pkg.a", "a", "pkg/x.py", 3)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.executemany(
+        "INSERT INTO slices (slice_id, name, summary, status, payload_json) VALUES (?, 'n', 's', 'active', ?)",
+        [("bad-nondict", json.dumps([fid])), ("good-flow", json.dumps({"steps": [{"fid": fid}]}))],
+    )
+    con.commit()
+    con.close()
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        found = nav._slices_of(con, fid)
+    finally:
+        con.close()
+    assert [s["slice_id"] for s in found] == ["good-flow"]

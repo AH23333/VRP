@@ -381,6 +381,25 @@ def test_curate_payload_mcp_path(tmp_path):
         con.close()
 
 
+def test_list_slices_nondict_payload_steps_zero_not_crash(tmp_path):
+    """R-X：合法 JSON 非 dict 的 slice payload（手改库/legacy）列表页 steps 记 0，非裸
+    AttributeError——curate.py:399 旧链式 json.loads(...).get 为 census 漏网、
+    守卫 test_no_chained_json_loads_get_in_vrp 抓到的第 7 站。"""
+    repo = _mk_repo(tmp_path)
+    con = _con(repo)
+    try:
+        con.execute(
+            "INSERT INTO slices (slice_id, name, summary, status, payload_json)"
+            " VALUES ('legacy', 'n', 's', 'active', '[1, 2]')"
+        )
+        con.commit()
+        listed = curate_mod.list_slices(con)
+    finally:
+        con.close()
+    assert listed[0]["slice_id"] == "legacy"
+    assert listed[0]["steps"] == 0
+
+
 def test_curate_receipt_read_back(tmp_path):
     repo = _mk_repo(tmp_path)
     fids = _seed_chain(repo)

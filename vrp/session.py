@@ -100,6 +100,10 @@ def _read_session(repo: Path, session_id: str) -> tuple[dict, Path]:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise SystemExit(f"unreadable session.json for {session_id}: {exc}") from exc
+    # 合法 JSON 非 dict 同 unreadable 语义（R-X）：下游 doc["id"] 族的
+    # AttributeError/TypeError 离因果远、报错怪，边界处给干净 SystemExit。
+    if not isinstance(doc, dict):
+        raise SystemExit(f"unreadable session.json for {session_id}: not a JSON object")
     return doc, path.parent
 
 
@@ -116,6 +120,8 @@ def _list_sessions(repo: Path) -> list[tuple[dict, Path]]:
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(doc, dict):  # 合法 JSON 非 dict 同列跳过（R-X）
             continue
         out.append((doc, sdir))
     return out

@@ -396,9 +396,12 @@ def list_slices(con: sqlite3.Connection) -> list[dict]:
     out: list[dict] = []
     for slice_id, name, summary, status, created_at, payload_json in rows:
         try:
-            steps = len(json.loads(payload_json).get("steps", []))
+            payload = json.loads(payload_json)
         except json.JSONDecodeError:
             steps = 0
+        else:
+            # 合法 JSON 非 dict 同列 steps=0（R-X）：AttributeError 会击穿整个列表页
+            steps = len(payload.get("steps", [])) if isinstance(payload, dict) else 0
         out.append({"slice_id": slice_id, "name": name, "summary": summary, "status": status,
                     "steps": steps, "created_at": created_at})
     return out

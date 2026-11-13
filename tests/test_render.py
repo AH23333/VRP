@@ -159,6 +159,25 @@ def test_sequence_ir_unknown_slice(tmp_path):
     con.close()
 
 
+def test_sequence_ir_nondict_payload_skips_not_crashes(tmp_path):
+    """R-X：合法 JSON 非 dict payload 走 docstring 的 SystemExit 契约（调用方跳过该
+    slice），非裸 AttributeError——旧代码会击穿 render_report 的 except SystemExit
+    跳过面崩整报告。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, status, payload_json)"
+        " VALUES ('nondict', 'n', 's', 'active', '[1, 2]')"
+    )
+    con.commit()
+    con.close()
+    con = _ro_con(repo)
+    with pytest.raises(SystemExit, match="corrupt payload"):
+        render.build_sequence_ir(repo, con, "nondict")
+    con.close()
+
+
 def test_timeline_ir(tmp_path):
     verdicts = [
         {"tid": "tx-1", "type": "T2", "status": "committed", "verdict_at": "2026-11-04T10:00:00+00:00"},

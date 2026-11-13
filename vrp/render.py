@@ -267,6 +267,13 @@ def build_sequence_ir(repo: Path, con: sqlite3.Connection, slice_id: str) -> dic
         payload = json.loads(row[1])
     except json.JSONDecodeError as e:
         raise SystemExit(f"render_slice: corrupt payload for slice_id: {slice_id} ({e})")
+    # 合法 JSON 非 dict：走同一 SystemExit 契约（docstring：坏 payload →
+    # 调用方跳过该 slice），AttributeError 会击穿 except SystemExit 的
+    # 跳过面崩整报告（R-X）。
+    if not isinstance(payload, dict):
+        raise SystemExit(
+            f"render_slice: corrupt payload for slice_id: {slice_id} (not a JSON object)"
+        )
     steps = payload.get("steps", [])
     participants = []
     seen: set[str] = set()
