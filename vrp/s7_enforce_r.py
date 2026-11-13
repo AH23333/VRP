@@ -83,7 +83,7 @@ from .s7_enforce import (
 )
 
 R_SUFFIXES = (".r",)
-SKIP_DIRS = {"renv", "packrat", "node_modules", "vendor"}
+SKIP_DIRS = frozenset({"renv", "packrat", "node_modules", "vendor"})
 TEST_SEGMENTS = ("test", "tests", "testthat")
 _KEYWORDS = ("source", "library", "require", "loadNamespace", "requireNamespace")
 

@@ -82,7 +82,7 @@ from .s7_enforce import (
 )
 
 OCAML_SUFFIXES = (".ml", ".mli")
-SKIP_DIRS = {"_build", "_opam", "node_modules", "vendor"}
+SKIP_DIRS = frozenset({"_build", "_opam", "node_modules", "vendor"})
 TEST_SEGMENTS = ("test", "tests")
 
 

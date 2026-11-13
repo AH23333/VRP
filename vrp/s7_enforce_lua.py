@@ -66,10 +66,10 @@ from .s7_enforce import (
 )
 
 LUA_SUFFIX = ".lua"
-SKIP_DIRS = {"node_modules", "vendor"}  # .luarocks 走隐藏目录排除
-_TEST_DIRS = {"spec", "test", "tests"}
+SKIP_DIRS = frozenset({"node_modules", "vendor"})  # .luarocks 走隐藏目录排除
+_TEST_DIRS = frozenset({"spec", "test", "tests"})
 _WS = " \t\r\n"
-_IDENT_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
+_IDENT_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
 
 _REQUIRE_RE = re.compile(r"(?<![A-Za-z0-9_])require(?![A-Za-z0-9_])")
 

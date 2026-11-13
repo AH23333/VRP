@@ -58,8 +58,8 @@ from .s7_enforce import (
 )
 
 ZIG_SUFFIX = ".zig"
-SKIP_DIRS = {"zig-cache", "zig-out", "node_modules", "vendor"}  # .zig-cache 走隐藏目录排除
-_IDENT_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
+SKIP_DIRS = frozenset({"zig-cache", "zig-out", "node_modules", "vendor"})  # .zig-cache 走隐藏目录排除
+_IDENT_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
 
 _IMPORT_RE = re.compile(r'@import[ \t\r\n]*\([ \t\r\n]*"([^"\n]+)"')
 _TEST_BLOCK_RE = re.compile(r"(?<![A-Za-z0-9_.])test[ \t\r\n]*\{")

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .evidence import EXT_LANGUAGES, language_for_path
 
-IGNORE_DIRS = {
+IGNORE_DIRS = frozenset({
     ".git",
     ".hg",
     ".svn",
@@ -25,7 +25,7 @@ IGNORE_DIRS = {
     ".code-atlas",
     ".codebase-memory",
     ".vrp",
-}
+})
 
 # P-2（跨项目实测 HomeWork 案例）：内容仓库探针。JSON/HTML/PDF 等内容文件
 # 占绝对多数、零源码文件、无构建系统标记的仓库（课件/笔记/素材站）对代码

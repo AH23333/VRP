@@ -82,13 +82,13 @@ from .s7_enforce import (
 )
 
 RUBY_SUFFIX = ".rb"
-SKIP_DIRS = {"vendor", "node_modules", "build", "target"}
+SKIP_DIRS = frozenset({"vendor", "node_modules", "build", "target"})
 _LOAD_PATH_ROOTS = ("", "lib/", "src/", "app/")
 _PAIRED = {"(": ")", "[": "]", "{": "}", "<": ">"}
 # heredoc / % 字面量的前一非空白字符为标识符/数字/右括号 → 运算符（<<追加/%模）非字面量
-_OP_TAIL = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_)].")
+_OP_TAIL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_)].")
 # 正则字面量表达式位置：前一非空白字符 ∈ 此集合（或行首/文件首）
-_REGEX_PREV = set("=(,[!&|?:;{}~")
+_REGEX_PREV = frozenset("=(,[!&|?:;{}~")
 # 正则字面量关键字尾：前一非空白记号以这些关键字结尾（if/unless/when/...）
 # —— =~ 与行首条件是 Ruby 正则最高频位置（review 批修正：原漏 ~ 与关键字尾，
 # 正则体内 module/class/require 文本泄漏为伪声明/伪边）

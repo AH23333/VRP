@@ -51,7 +51,7 @@ from .s7_enforce import (
 
 KT_SUFFIX = ".kt"
 TEST_SOURCE_ROOT = "/test/kotlin/"
-SKIP_DIRS = {"target", "build", "node_modules"}
+SKIP_DIRS = frozenset({"target", "build", "node_modules"})
 
 # 终结符 [;\r\n]|$：分号可选且行尾/EOF 均终止（文件末行无换行不丢声明）；
 # 关键字与目标间仅 [ \t]+：Kotlin 语法 packageHeader/importHeader 产生式在

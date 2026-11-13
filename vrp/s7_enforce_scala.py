@@ -61,7 +61,7 @@ from .s7_enforce import (
 
 SCALA_SUFFIX = ".scala"
 TEST_SOURCE_ROOT = "/test/scala/"
-SKIP_DIRS = {"target", "build", "node_modules"}
+SKIP_DIRS = frozenset({"target", "build", "node_modules"})
 
 # package 后目标同行（Scala 换行即语句终止——\n 跨行不收，病态残缺代码不产伪包）；
 # (?!object\b) 拒 package object 子句（review 批修正：原 `package a { package object b }`

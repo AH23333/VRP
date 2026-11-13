@@ -78,7 +78,7 @@ from .s7_enforce import (
 )
 
 PERL_SUFFIXES = (".pm", ".pl", ".t")
-SKIP_DIRS = {"blib", "build", "local", "node_modules", "vendor"}
+SKIP_DIRS = frozenset({"blib", "build", "local", "node_modules", "vendor"})
 TEST_SEGMENTS = ("t", "xt", "test", "tests")
 
 _PACKAGE_RE = re.compile(
@@ -91,7 +91,7 @@ _HEREDOC_RE = re.compile(
     r"<<(~?)[ \t]*(?:\"([A-Za-z_]\w*)\"|'([A-Za-z_]\w*)'|\\([A-Za-z_]\w*)|([A-Za-z_]\w*))"
 )
 _BRACKET_PAIR = {"(": ")", "[": "]", "{": "}", "<": ">"}
-_QOP_EXCLUDE_PREV = set("$@%&:)]}>'\"`*")
+_QOP_EXCLUDE_PREV = frozenset("$@%&:)]}>'\"`*")
 
 
 # ------------------------------------------------------------------ 词法底座

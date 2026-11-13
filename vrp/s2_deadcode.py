@@ -9,7 +9,7 @@ from . import testsig
 
 FINDINGS_SOURCE = "s2-deadcode"
 TARGET_LABELS = ("Function", "Method")
-ENTRY_NAMES = {"main", "run", "app", "index", "setup", "teardown", "handler", "cli"}
+ENTRY_NAMES = frozenset({"main", "run", "app", "index", "setup", "teardown", "handler", "cli"})
 USAGE_EDGE_TYPES = ("CALLS", "CALL_REFERENCE", "MENTIONS", "SPAWNS")
 
 

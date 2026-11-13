@@ -72,7 +72,7 @@ from .s7_enforce import (
 
 PHP_SUFFIX = ".php"
 TEST_SEGMENTS = ("test", "tests")
-SKIP_DIRS = {"vendor", "node_modules", "build", "target"}
+SKIP_DIRS = frozenset({"vendor", "node_modules", "build", "target"})
 
 _NAMESPACE_RE = re.compile(
     r"\bnamespace\s+([A-Za-z_][A-Za-z0-9_]*(?:\\[A-Za-z_][A-Za-z0-9_]*)*)\s*[;{]"

@@ -62,8 +62,8 @@ from .s7_enforce import (
 )
 
 SWIFT_SUFFIX = ".swift"
-SKIP_DIRS = {"build", "node_modules", "vendor", "Pods", "Carthage"}  # .build 走隐藏目录排除
-_IDENT_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
+SKIP_DIRS = frozenset({"build", "node_modules", "vendor", "Pods", "Carthage"})  # .build 走隐藏目录排除
+_IDENT_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
 _TARGET_LABELS = ("target", "executableTarget", "testTarget")
 _KIND_WORDS = "typealias|struct|class|enum|protocol|let|var|func|indirect"
 _IMPORT_RE = re.compile(

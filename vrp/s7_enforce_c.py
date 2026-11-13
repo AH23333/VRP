@@ -63,14 +63,14 @@ from .s7_enforce import (
 C_SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".c++")
 C_HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".h++")
 C_SUFFIXES = C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES
-SKIP_DIRS = {
+SKIP_DIRS = frozenset({
     "build",
     "cmake-build-debug",
     "cmake-build-release",
     "node_modules",
     "target",
     "vendor",
-}
+})
 TEST_SEGMENTS = ("test", "tests")
 
 _INCLUDE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"')

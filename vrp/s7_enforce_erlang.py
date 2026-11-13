@@ -77,7 +77,7 @@ from .s7_enforce import (
 )
 
 ERLANG_SUFFIXES = (".erl",)
-SKIP_DIRS = {"_build", "deps", "ebin", "node_modules", "vendor"}
+SKIP_DIRS = frozenset({"_build", "deps", "ebin", "node_modules", "vendor"})
 TEST_SEGMENTS = ("test", "tests")
 
 _MODULE_RE = re.compile(

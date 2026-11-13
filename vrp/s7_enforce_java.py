@@ -52,7 +52,7 @@ from .s7_enforce import (
 
 JAVA_SUFFIX = ".java"
 TEST_SOURCE_ROOT = "/test/java/"
-SKIP_DIRS = {"target", "build", "node_modules"}
+SKIP_DIRS = frozenset({"target", "build", "node_modules"})
 
 _SEG = r"[A-Za-z_][A-Za-z0-9_]*"
 _PACKAGE_RE = re.compile(r"\bpackage\s+(" + _SEG + r"(?:\s*\.\s*" + _SEG + r")*)\s*;")

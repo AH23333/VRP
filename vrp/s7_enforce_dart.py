@@ -74,13 +74,13 @@ from .s7_enforce import (
 )
 
 DART_SUFFIX = ".dart"
-SKIP_DIRS = {"build", "node_modules", "vendor"}  # .dart_tool 走隐藏目录排除
+SKIP_DIRS = frozenset({"build", "node_modules", "vendor"})  # .dart_tool 走隐藏目录排除
 _TEST_DIRS = ("test", "tests", "integration_test")
 # 指令关键字前一非空白字符 ∈ 此集合 → 非指令位置（标识符尾/成员访问/串后）
-_DIRECTIVE_BLOCKERS = set(
+_DIRECTIVE_BLOCKERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$.'\""
 )
-_IDENT_CHARS = set(
+_IDENT_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$"
 )
 

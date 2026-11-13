@@ -53,8 +53,8 @@ from .s7_enforce import (
 )
 
 CS_SUFFIX = ".cs"
-SKIP_DIRS = {"bin", "obj", "packages", "node_modules", "target", "build"}
-_TEST_SEGMENTS = {"test", "tests"}
+SKIP_DIRS = frozenset({"bin", "obj", "packages", "node_modules", "target", "build"})
+_TEST_SEGMENTS = frozenset({"test", "tests"})
 
 _NS_RE = re.compile(
     r"\bnamespace\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)"

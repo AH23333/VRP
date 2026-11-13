@@ -80,10 +80,10 @@ from .s7_enforce import (
 )
 
 CLJ_SUFFIXES = (".clj", ".cljc")
-SKIP_DIRS = {"target", ".cpcache", "node_modules", "vendor"}
+SKIP_DIRS = frozenset({"target", ".cpcache", "node_modules", "vendor"})
 TEST_SEGMENTS = ("test", "tests")
 _NS_CLAUSE_KEYS = (":require", ":use", ":require-macros")
-_HEADS = {"ns", "require", "use", "load", "load-file"}
+_HEADS = frozenset({"ns", "require", "use", "load", "load-file"})
 
 
 # ------------------------------------------------------------------ 词法底座

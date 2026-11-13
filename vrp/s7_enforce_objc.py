@@ -72,7 +72,7 @@ from .s7_enforce import (
 OBJC_SOURCE_SUFFIXES = (".m", ".mm")
 OBJC_HEADER_SUFFIXES = (".h",)
 OBJC_SUFFIXES = OBJC_SOURCE_SUFFIXES + OBJC_HEADER_SUFFIXES
-SKIP_DIRS = {
+SKIP_DIRS = frozenset({
     "build",
     "cmake-build-debug",
     "cmake-build-release",
@@ -81,7 +81,7 @@ SKIP_DIRS = {
     "Pods",
     "target",
     "vendor",
-}
+})
 TEST_SEGMENTS = ("test", "tests")
 
 _IMPORT_RE = re.compile(r'^[ \t]*#[ \t]*(?:import|include)[ \t]*"([^"]+)"')
