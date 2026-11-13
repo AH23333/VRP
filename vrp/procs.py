@@ -34,6 +34,7 @@ def kill_tree(proc: subprocess.Popen) -> None:
         subprocess.run(
             ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
             capture_output=True,
+            timeout=30,  # 杀路径自身不可挂（R-Y）：AV/系统压力下 taskkill 迟滞
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
     else:

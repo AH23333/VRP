@@ -13,10 +13,11 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
-from . import __version__
+from . import __version__, procs
 from .xcheck import ca_js_path
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -52,6 +53,11 @@ def call_code_atlas(repo: Path, tool: str, arguments: dict, timeout: int = 120) 
         return {"status": "skipped", "reason": "node not found"}
     if js is None:
         return {"status": "skipped", "reason": "code-atlas dist not found (set VRP_CODE_ATLAS_JS)"}
+    popen_kwargs: dict = {}
+    if sys.platform != "win32":
+        # kill_tree 的 POSIX 分支按进程组击杀：子进程必须自成组长，
+        # 否则 killpg 会打到 VRP 自己的组（procs.run_tree 同款纪律）。
+        popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen(
         [node, str(js), "serve", "--root", str(repo), *SERVER_FLAGS],
         stdin=subprocess.PIPE,
@@ -60,12 +66,16 @@ def call_code_atlas(repo: Path, tool: str, arguments: dict, timeout: int = 120) 
         text=True,
         encoding="utf-8",
         errors="replace",
+        **popen_kwargs,
     )
     timed_out = threading.Event()
 
     def _kill_on_timeout():
         timed_out.set()
-        proc.kill()
+        # 树杀非单杀（R-Y）：node 子进程持 stdout 写端时 proc.kill() 只杀
+        # 直子，孙进程使 EOF 永不到达 -> _read_response 永久挂死（watchdog
+        # 只触发一次）——R-L 孤儿持管道机制的同族复发面。
+        procs.kill_tree(proc)
 
     watchdog = threading.Timer(timeout, _kill_on_timeout)
     watchdog.daemon = True
@@ -107,7 +117,7 @@ def call_code_atlas(repo: Path, tool: str, arguments: dict, timeout: int = 120) 
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            procs.kill_tree(proc)  # 同 _kill_on_timeout：树杀（R-Y）
             proc.wait(timeout=10)
     if "error" in response:
         return {"status": "failed", "reason": str(response["error"])[:500]}
