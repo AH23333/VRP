@@ -19,11 +19,14 @@ from vrp import s0_precheck as s0
 def test_run_timeout_raises_runtime_error_fast(tmp_path):
     t0 = time.monotonic()
     try:
-        s0._run([sys.executable, "-c", "import time; time.sleep(5)"], tmp_path, timeout=1)
+        # victim 30s（原 5s）+ 上界 10.0s（原 4.0s）：无击杀回归会等满
+        # victim 自然退出（30s > 10s 仍红）；满载下击杀+拆除滞后有 9s
+        # 余量（原 margin 仅 3s，与 test_procs R-W 同族的墙上界脆弱面）。
+        s0._run([sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, timeout=1)
         raise AssertionError("expected RuntimeError")
     except RuntimeError as exc:
         assert "timed out" in str(exc)
-    assert time.monotonic() - t0 < 4.0
+    assert time.monotonic() - t0 < 10.0
 
 
 def test_run_pins_default_timeout(tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-﻿"""Deep E2E: mutate-run dispatches Rust targets to real cargo-mutants 27.1.0.
+"""Deep E2E: mutate-run dispatches Rust targets to real cargo-mutants 27.1.0.
 
 Fixture ground truth (probe-measured on cargo-mutants 27.1.0, Windows,
 work/rust-calc-probe): src/lib.rs (add/greet/mul) yields 12 mutants - 8
