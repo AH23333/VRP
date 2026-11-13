@@ -724,7 +724,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (RuntimeError, ValueError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
+    except (
+        RuntimeError,
+        ValueError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        sqlite3.Error,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
