@@ -416,7 +416,7 @@ def test_render_report_real_archify(tmp_path):
     # R7'(2)：模块交互图链成功 → chain/ 出、L1/L2 不出
     assert result["chain"]["ok"] is True
     assert result["counts"]["chain_modules"] == 2
-    assert result["counts"]["chain_pages"] == 4  # index + 2 网格 + 1 代码页
+    assert result["counts"]["chain_pages"] == 8  # index + arch 总览 + 2 树页 + 2 网格 + 1 代码页 + 1 业务线专页
     assert (out / "chain" / "index.html").is_file()
     assert not (out / "modules").exists()
     assert not (out / "symbols").exists()
@@ -793,14 +793,33 @@ def test_chain_happy_path(tmp_path):
     assert result["counts"]["symbol_pages"] == 0  # L2 不出
     chain = out / "chain"
     assert (chain / "index.html").is_file()
+    assert (chain / "t-m1-overview.html").is_file()  # v8：模块入口 = 文件总览树
+    assert (chain / "t-m2-overview.html").is_file()
     assert (chain / "s3-m1-x.html").is_file()  # m1 网格（a、b）
     assert (chain / "s3-m2-x.html").is_file()  # m2 网格（c）
     assert (chain / "s4f-pkg-x.html").is_file()  # 唯一代码页（共享文件单次写）
+    assert (chain / "arch.html").is_file()  # v8 反馈轮：全局分层总览
+    assert (chain / "sl-flow.html").is_file()  # v8 反馈轮：业务线专页
+    arch = (chain / "arch.html").read_text(encoding="utf-8")
+    assert 'data-node-id="m0"' in arch and 'data-node-id="m1"' in arch
+    assert "t-m1-overview.html" in arch  # 模块节点下钻目标
+    assert "domain" in arch and "service" in arch  # 层边界
+    sl = (chain / "sl-flow.html").read_text(encoding="utf-8")
+    assert 'href="s4f-pkg-x.html?slice=flow#sym-a"' in sl  # 步骤直达代码锚点（带 slice）
+    assert "幕一" in sl  # acts 透出
+    code = (chain / "s4f-pkg-x.html").read_text(encoding="utf-8")
+    assert '<span class="sec">calls</span>' in code  # rel 条：调用/被调（v8 用户反馈）
+    assert 'href="#sym-b"' in code  # a→b CALLS：同页锚点 chip
+    idx_html = (chain / "index.html").read_text(encoding="utf-8")
+    assert 'href="arch.html"' in idx_html  # 分层总览入口
+    assert 'class="slchip" href="sl-flow.html"' in idx_html  # 业务线区
+    assert 'class="lhead">domain' in idx_html  # 按层分组段落头
     assert not (out / "modules").exists()
     assert not (out / "symbols").exists()
     idx = json.loads((out / "ir" / "chain-index.json").read_text(encoding="utf-8"))
     assert idx["kind"] == "chain-index"
     assert [m["module_id"] for m in idx["modules"]] == ["m1", "m2"]
+    assert all(m["entry"].startswith("t-") for m in idx["modules"])  # v8 入口=树页
     assert idx["file_pages"] == ["pkg/x.py"]
     report = (out / "report.html").read_text(encoding="utf-8")
     assert 'href="chain/index.html"' in report  # L0 → 链入口
@@ -817,7 +836,9 @@ def test_chain_link_integrity(tmp_path):
     chain = repo / ".vrp" / "report" / "chain"
     pages = sorted(chain.glob("*.html"))
     assert [p.name for p in pages] == [
-        "index.html", "s3-m1-x.html", "s3-m2-x.html", "s4f-pkg-x.html",
+        "arch.html", "index.html", "s3-m1-x.html", "s3-m2-x.html",
+        "s4f-pkg-x.html", "sl-flow.html", "t-m1-overview.html",
+        "t-m2-overview.html",
     ]
     texts = {p.name: p.read_text(encoding="utf-8") for p in pages}
     # 代码页含全部符号锚点（全局索引：m1 的 a/b + m2 的 c 共存一页）
@@ -831,13 +852,43 @@ def test_chain_link_integrity(tmp_path):
             hrefs += list(json.loads(m.group(1)).values())
         assert hrefs, f"{p.name}: 无链接可验"
         for h in hrefs:
-            if h.startswith(("http://", "https://")):
-                continue
+            if h.startswith(("http://", "https://", "?", "#")):
+                continue  # 外链 / 纯 query（v8 业务线 chips）/ 纯锚点
             file_part, _, frag = h.partition("#")
+            file_part = file_part.split("?", 1)[0]  # 剥 query（?from=/?slice=）
             target = p.parent / file_part if file_part else p
             assert target.exists(), f"{p.name}: 断链 {h}"
             if frag:
                 assert frag in ids_by_page[target.name], f"{p.name}: 缺锚点 {h}"
+
+
+def test_build_arch_ir_layers_and_slice_projection():
+    """全局分层总览 IR（v8 反馈轮）：层=边界、模块=pos 节点、跨模块连线计数、
+    业务线投影到模块节点（slice 高亮在全局架构可见）。"""
+    layers = [{"name": "core"}, {"name": "interface"}]
+    mod_entries = [
+        {"module_id": "pipeline", "entry": "t-pipeline-overview.html",
+         "layer": "core", "responsibility": "S0-S5 编排与执行"},
+        {"module_id": "cli", "entry": "t-cli-overview.html",
+         "layer": "interface", "responsibility": "命令行入口"},
+        {"module_id": "orphan", "entry": "t-orphan-overview.html",
+         "layer": "", "responsibility": "未知层"},
+    ]
+    slices = {"flow": {"name": "线", "fids": ["f1", "f2", "f3"]}}
+    ir, clicks, sn, chips = render_chain.build_arch_ir(
+        mod_entries, layers, {("cli", "pipeline"): 3}, slices,
+        {"f1": "pipeline", "f2": "cli", "f3": "nowhere"})
+    assert ir["diagram_type"] == "architecture"
+    assert [b["label"] for b in ir["boundaries"]] == ["core", "interface", "other"]
+    assert set(clicks.values()) == {"t-pipeline-overview.html",
+                                    "t-cli-overview.html",
+                                    "t-orphan-overview.html"}
+    assert len(clicks) == 3  # nid 去重（m0/m1/m2）
+    assert ir["connections"] == [{"id": "e0", "from": "m1", "to": "m0"}]  # cli→pipeline，无 label（防重叠）
+    assert sn == {"flow": ["m0", "m1"]}  # 链外 fid（f3）不投影
+    assert chips == [{"sid": "flow", "name": "线", "applicable": True}]
+    for c in ir["components"]:
+        assert c["pos"] and c["size"]  # 渲染必需
 
 
 def test_chain_dataflow_fid_clicks_direction(tmp_path):
@@ -889,6 +940,74 @@ def test_chain_dataflow_fid_clicks_direction(tmp_path):
         target = chain / file_part
         assert target.is_file(), f"断链 {href}"
         assert f'id="{frag}"' in target.read_text(encoding="utf-8"), f"缺锚点 {href}"
+
+
+def test_chain_code_page_full_symbols_and_calls(tmp_path):
+    """代码页全量符号 + 调用/被调（v8 用户反馈回归锁）。
+
+    curated symbol_fids 给文件只分代表符号时（本仓实测 s0_precheck.py 只
+    分到 1 个非 File 符号），代码页仍须：锚点/大纲/rel 条覆盖整文件 DB
+    符号（含非 curated）；每符号调用/被调 chips；链外调用方（无页可下
+    钻）灰显命名，title 带 @file。
+    """
+    _need_archify()
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    # pkg/x.py：a/b curated；d 同文件非 curated；e 链外文件（调用方）
+    for fid, name, fpath, start in (
+            ("fid-a", "a", "pkg/x.py", 1), ("fid-b", "b", "pkg/x.py", 5),
+            ("fid-d", "d", "pkg/x.py", 9), ("fid-e", "e", "pkg/caller.py", 1)):
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            " VALUES (?, 'p', ?, 'Function', ?, ?, ?, ?, 'h')",
+            (fid, f"pkg.{name}", name, fpath, start, start + 2),
+        )
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES ('fid-a', 'fid-b', 'CALLS', 'structural')")
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES ('fid-b', 'fid-d', 'CALLS', 'structural')")
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES ('fid-e', 'fid-a', 'CALLS', 'structural')")
+    # 内置桩（<python-builtins>）：CALLS 边存在但 rel 条不展示（纯噪音）
+    con.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES ('fid-bi', 'p', 'pkg.len', 'Function', 'len', '<python-builtins>', 1, 1, 'h')"
+    )
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES ('fid-b', 'fid-bi', 'CALLS', 'structural')")
+    con.execute(
+        "INSERT INTO structure (payload_json, status) VALUES (?, 'active')",
+        (json.dumps({
+            "modules": [{"module_id": "m1", "name": "甲", "responsibility": "负责一",
+                          "symbol_fids": ["fid-a", "fid-b"], "layer": "domain"}],
+            "layers": [{"name": "domain", "may_depend_on": []}],
+        }),),
+    )
+    con.commit()
+    con.close()
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "x.py").write_text(
+        "def a():\n    return 1\n\n\ndef b():\n    return 2\n\n\ndef d():\n    return 4\n",
+        encoding="utf-8",
+    )
+    (repo / "pkg" / "caller.py").write_text("def e():\n    return 5\n", encoding="utf-8")
+    render.render_report(repo)
+    chain = repo / ".vrp" / "report" / "chain"
+    page = (chain / "s4f-pkg-x.html").read_text(encoding="utf-8")
+    assert 'id="sym-d"' in page  # 非 curated 符号也有锚点（整文件覆盖）
+    assert ">d</a>" in page  # 大纲含 d
+    assert 'href="#sym-b"' in page  # a 调 b：同页锚点 chip
+    assert 'href="#sym-d"' in page  # b 调 d：全量覆盖后可链接
+    assert '<span class="sec">called by</span>' in page
+    # 链外调用方 e：灰显命名（无 href），title 带 @file
+    assert '<span class="chip dim" title="e @ pkg/caller.py">e</span>' in page
+    # 内置桩不进 rel 条（<python-builtins> 合成路径过滤）
+    assert ">len</span>" not in page
+    assert "python-builtins" not in page
+    # 网格/树（v8 用户反馈二轮）：文件符号浏览器用整文件全量——非 curated
+    # 的 d 进网格（节点 + 点击直达代码锚点）；总览树计数与代码页口径一致
+    grid = (chain / "s3-m1-x.html").read_text(encoding="utf-8")
+    assert 'data-node-label="d"' in grid  # 非 curated 符号 d 有网格节点
+    assert "#sym-d" in grid  # 网格节点 → 代码页锚点（全量覆盖后可点击）
+    tree = (chain / "t-m1-overview.html").read_text(encoding="utf-8")
+    assert "3 symbols" in tree  # 全量计数（a/b/d），非 curated 的 2
+    assert "2 symbols" not in tree
 
 
 def test_chain_no_archify(tmp_path, monkeypatch):

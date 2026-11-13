@@ -297,15 +297,18 @@ def test_chain_cards_reconcile_db(tmp_path):
         fid_of = {mod["module_id"]: mod["symbol_fids"] for mod in payload["modules"]}
         for mid, fids in fid_of.items():
             marks = ",".join("?" * len(fids))
-            n_syms_db = con.execute(
-                f"SELECT COUNT(*) FROM symbols WHERE fid IN ({marks})"
-                " AND file_path != '' AND start_line > 0 AND label NOT IN ('File', 'Module')",
-                fids,
-            ).fetchone()[0]
             files = [r[0] for r in con.execute(
                 f"SELECT DISTINCT file_path FROM symbols WHERE fid IN ({marks}) AND file_path != ''",
                 fids,
             )]
+            # n_syms（v8 用户反馈二轮起）：模块文件的整文件全量真实符号
+            # （curated 只是图为视角子集；卡片口径与网格/代码页一致）
+            fmarks = ",".join("?" * len(files))
+            n_syms_db = con.execute(
+                f"SELECT COUNT(*) FROM symbols WHERE file_path IN ({fmarks})"
+                " AND file_path != '' AND start_line > 0 AND label NOT IN ('File', 'Module')",
+                files,
+            ).fetchone()[0]
             # 目录闭包（module_fs 同义复算：文件父链全部祖先目录）
             dirs: set[str] = set()
             for fp in files:
