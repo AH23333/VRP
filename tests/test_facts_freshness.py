@@ -48,6 +48,15 @@ def test_missing_git_head_hard_fails(facts, monkeypatch):
     assert "git_head" in str(exc.value) and "vrp etl" in str(exc.value)
 
 
+def test_current_git_head_timeout_returns_empty(tmp_path, monkeypatch):
+    """R-AP：current_git_head 收编 procs.run_tree——timed_out 按既有契约降级 ''。"""
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        return {"returncode": -1, "timed_out": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(etl.procs, "run_tree", fake_tree)
+    assert etl.current_git_head(tmp_path) == ""
+
+
 def test_open_facts_rw_enforces_freshness(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / ".vrp").mkdir(parents=True)

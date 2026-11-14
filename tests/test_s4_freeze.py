@@ -30,6 +30,19 @@ def _py(args: str) -> str:
     return f'"{sys.executable}" {args}'
 
 
+def test_git_head_goes_through_run_tree(repo, monkeypatch):
+    """R-AP：_git_head 收编 procs.run_tree（timeout=30，timed_out 降级 ''）。"""
+    seen: dict = {}
+
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        seen["timeout"] = timeout
+        return {"returncode": 0, "timed_out": False, "stdout": "abc123\n", "stderr": ""}
+
+    monkeypatch.setattr(s4_freeze.procs, "run_tree", fake_tree)
+    assert s4_freeze._git_head(repo) == {"commit": "abc123", "branch": "abc123"}
+    assert seen.get("timeout") == 30
+
+
 def test_run_one_ok(repo):
     run = s4_freeze._run_one(repo, _py("-c \"print('ok')\""), timeout=60)
     assert run["rc"] == 0

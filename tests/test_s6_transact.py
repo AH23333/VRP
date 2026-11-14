@@ -414,6 +414,19 @@ def test_transact_apply_ki_rolled_back_and_reraised(tmp_path, monkeypatch):
     con.close()
 
 
+def test_git_timeout_raises_runtime_error(tmp_path, monkeypatch):
+    """R-AP：_git 超时收编 procs.run_tree（树杀）——timed_out 响亮
+    RuntimeError，事务不做半步（修前裸 TimeoutExpired 穿 mcp _guard 炸 server）。"""
+    repo = _mk_repo(tmp_path)
+
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        return {"returncode": -1, "timed_out": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(s6_transact.procs, "run_tree", fake_tree)
+    with pytest.raises(RuntimeError, match="timed out"):
+        s6_transact.git_clean(repo)
+
+
 def test_transact_dirty_tree_refused_by_cli(tmp_path):
     repo = _mk_repo(tmp_path)
     (repo / "a.py").write_text("dirty = True\n", encoding="utf-8")
@@ -808,7 +821,9 @@ def test_git_commit_all_step_failure_poison_guard(tmp_path, monkeypatch, fail_st
 
     def fake_git(repo_arg, *args):
         if args[0] == fail_step:
-            return subprocess.CompletedProcess(["git", *args], 1, "", f"fatal: simulated {fail_step} failure")
+            # R-AP：_git 返回 dict（procs.run_tree 形状）
+            return {"returncode": 1, "timed_out": False, "stdout": "",
+                    "stderr": f"fatal: simulated {fail_step} failure"}
         return real_git(repo_arg, *args)
 
     monkeypatch.setattr(s6_transact, "_git", fake_git)

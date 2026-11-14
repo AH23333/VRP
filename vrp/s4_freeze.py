@@ -121,18 +121,12 @@ def _cap_payload(payload: dict) -> dict:
 def _git_head(repo: Path) -> dict:
     def run(args: list[str]) -> str:
         try:
-            proc = subprocess.run(
-                ["git", *args],
-                cwd=repo,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-            )
-            return proc.stdout.strip() if proc.returncode == 0 else ""
-        except (subprocess.TimeoutExpired, OSError):
+            res = procs.run_tree(["git", *args], cwd=repo, timeout=30)
+        except OSError:
             return ""
+        if res["timed_out"] or res["returncode"] != 0:
+            return ""
+        return (res["stdout"] or "").strip()
 
     return {"commit": run(["rev-parse", "HEAD"]), "branch": run(["rev-parse", "--abbrev-ref", "HEAD"])}
 

@@ -48,12 +48,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import subprocess
 import tempfile
 from collections import Counter
 from pathlib import Path
 from shutil import which
-from . import dbpath
+from . import dbpath, procs
 
 _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_BIN = _ROOT / "work" / "difftastic" / "difft.exe"
@@ -76,23 +75,18 @@ def run_difftastic(binary: str, old_path: Path, new_path: Path, timeout: int = 6
     """
     env = dict(os.environ)
     env["DFT_UNSTABLE"] = "yes"
-    try:
-        proc = subprocess.run(
-            [binary, "--display", "json", "--ignore-comments", str(old_path), str(new_path)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
+    res = procs.run_tree(
+        [binary, "--display", "json", "--ignore-comments", str(old_path), str(new_path)],
+        timeout=timeout,
+        env=env,
+    )
+    if res["timed_out"]:
         return {"ok": False, "reason": "timeout"}
-    result: dict = {"ok": proc.returncode == 0, "returncode": proc.returncode, "stderr_tail": proc.stderr[-300:]}
+    result: dict = {"ok": res["returncode"] == 0, "returncode": res["returncode"], "stderr_tail": res["stderr"][-300:]}
     if not result["ok"]:
         return result
     try:
-        parsed = json.loads(proc.stdout)
+        parsed = json.loads(res["stdout"])
     except ValueError:
         result.update({"ok": False, "reason": "json-parse", "stdout_tail": proc.stdout[-300:]})
         return result
@@ -185,20 +179,18 @@ def _symbol_spans(db_path: Path, qns: set[str]) -> dict[str, tuple[str, int, int
 
 def _git_show(repo: Path, rel: str) -> str | None:
     try:
-        proc = subprocess.run(
+        res = procs.run_tree(
             ["git", "show", f"HEAD:{rel}"],
             cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=60,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except OSError:
         # OSError（git 不在 PATH）按契约降级 None（"no-preimage"），
         # 与 etl.current_git_head 同型——R-N 补齐错误面。
         return None
-    return proc.stdout if proc.returncode == 0 else None
+    if res["timed_out"] or res["returncode"] != 0:
+        return None
+    return res["stdout"]
 
 
 def _block_summary(block: dict) -> dict:

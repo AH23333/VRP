@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
+from . import procs
 from .evidence import EXT_LANGUAGES, language_for_path
 
 IGNORE_DIRS = frozenset({
@@ -87,26 +87,18 @@ def content_repo_probe(repo: Path) -> dict:
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 120) -> tuple[int, str]:
-    """运行外部命令；超时响亮失败（RuntimeError）而非无限挂死。
+    """运行外部命令（procs.run_tree 树杀收编，R-AP）；超时响亮失败
+    （RuntimeError）而非无限挂死。
 
     git 本地子命令（rev-parse/status）无网络、无锁等待、无 stdin，能挂
     住 120s 的只剩死盘/网络驱动器级故障——届时 is_repo/dirty 的任何
     "降级"取值都是静默谎言（脏树前置是 R-A 的硬保证），必须 fail-fast
     让 cli 以 rc 1 诚实退出。
     """
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"git command timed out after {timeout}s: {' '.join(cmd)}") from exc
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    res = procs.run_tree(cmd, cwd=cwd, timeout=timeout)
+    if res["timed_out"]:
+        raise RuntimeError(f"git command timed out after {timeout}s: {' '.join(cmd)}")
+    return res["returncode"], (res["stdout"] or "") + (res["stderr"] or "")
 
 
 def git_snapshot(repo: Path) -> dict:
@@ -131,24 +123,19 @@ def git_snapshot(repo: Path) -> dict:
 def census_scc(repo: Path) -> dict | None:
     if not shutil.which("scc"):
         return None
-    try:
-        proc = subprocess.run(
-            ["scc", "--by-file", "--format", "json", "."],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=300,
-        )
-    except subprocess.TimeoutExpired:
+    res = procs.run_tree(
+        ["scc", "--by-file", "--format", "json", "."],
+        cwd=repo,
+        timeout=300,
+    )
+    if res["timed_out"]:
         # census 是展示性数据：降级到 census_fallback（既有路径），
         # 超时不炸 precheck
         return None
-    if proc.returncode != 0:
+    if res["returncode"] != 0:
         return None
     try:
-        data = json.loads(proc.stdout)
+        data = json.loads(res["stdout"])
     except json.JSONDecodeError:
         return None
     languages = []

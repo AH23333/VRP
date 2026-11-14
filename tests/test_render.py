@@ -527,24 +527,35 @@ def test_staleness_detected_when_behind(tmp_path):
     assert st["behind"] == 1 and st["head"] == _head(repo) and st["facts_head"] == old
 
 
-def test_staleness_git_calls_pin_utf8_replace(tmp_path, monkeypatch):
-    """R-L：两处 git 调用必须显式 encoding/errors——text=True 落 locale
-    严格解码，读线程吞解码异常静默丢输出（stdout=None → .strip() 崩）。"""
+def test_staleness_git_calls_go_through_run_tree(tmp_path, monkeypatch):
+    """R-L/R-AP：_staleness 两条 git 调用收编 procs.run_tree（timeout=15）。
+    编码纪律（utf-8+replace）随收编归 run_tree 统一层——test_procs 的
+    test_run_tree_decodes_invalid_utf8_with_replace 已钉。"""
     repo = _mk_git_repo(tmp_path)
     captured: list[dict] = []
-    real_run = subprocess.run
 
-    def spy_run(cmd, **kwargs):
-        captured.append(kwargs)
-        return real_run(cmd, **kwargs)
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        captured.append({"cmd": list(cmd), "timeout": timeout})
+        out = _head(repo) if "rev-parse" in cmd else "3"
+        return {"returncode": 0, "timed_out": False, "stdout": out, "stderr": ""}
 
-    monkeypatch.setattr(render.subprocess, "run", spy_run)
+    monkeypatch.setattr(render.procs, "run_tree", fake_tree)
     st = render._staleness(repo, "0" * 40)
     assert st is not None  # "0"*40 != HEAD → 两条 git 调用都触发
+    assert st["behind"] == 3
     assert len(captured) == 2
-    assert all(
-        k.get("encoding") == "utf-8" and k.get("errors") == "replace" for k in captured
-    )
+    assert all(c["timeout"] == 15 for c in captured)
+
+
+def test_staleness_timeout_returns_none(tmp_path, monkeypatch):
+    """R-AP：_staleness 超时面（run_tree timed_out）按契约降级 None。"""
+    repo = _mk_git_repo(tmp_path)
+
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        return {"returncode": -1, "timed_out": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(render.procs, "run_tree", fake_tree)
+    assert render._staleness(repo, "0" * 40) is None
 
 
 def test_report_carries_stale_banner(tmp_path, monkeypatch):

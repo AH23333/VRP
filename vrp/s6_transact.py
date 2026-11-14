@@ -42,13 +42,12 @@ import difflib
 import json
 import re
 import sqlite3
-import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import s0_precheck, s1_cbm, s2_deadcode, s4_freeze, s6_difftastic, etl
-from . import dbpath
+from . import dbpath, procs
 from .s5_cabrief import call_code_atlas
 
 TX_TYPES = ("T1", "T2", "T3", "T4")
@@ -130,16 +129,18 @@ def load_transaction(path: Path) -> dict:
     }
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=60,
-    )
+def _git(repo: Path, *args: str) -> dict:
+    """git 单步调用（procs.run_tree 树杀收编，R-AP）。
+
+    超时（timed_out）响亮 RuntimeError——事务路径（git_clean 前置 /
+    commit 三步 / 回滚 checkout）任何一步挂死都不许静默半步；修前裸
+    TimeoutExpired 会穿 mcp _guard 捕获元组（SystemExit/ValueError/
+    RuntimeError/sqlite3.Error）炸 server。
+    """
+    res = procs.run_tree(["git", *args], cwd=repo, timeout=60)
+    if res["timed_out"]:
+        raise RuntimeError(f"git {' '.join(args)} timed out after 60s (tree killed)")
+    return res
 
 
 VRP_ARTIFACT_DIRS = (".vrp/", ".codebase-memory/", ".code-atlas/")
@@ -156,18 +157,18 @@ def git_clean(repo: Path) -> bool:
     # -c core.quotepath=false：非 ASCII 路径原样输出（默认会被引号+八进制
     # 转义，解析出的路径是乱码——R-N）。verdict 两态下本就正确，此 flag
     # 保真路径字面量。
-    proc = _git(repo, "-c", "core.quotepath=false", "status", "--porcelain")
-    if proc.returncode != 0:
+    res = _git(repo, "-c", "core.quotepath=false", "status", "--porcelain")
+    if res["returncode"] != 0:
         return False
-    for line in proc.stdout.splitlines():
+    for line in res["stdout"].splitlines():
         if line.strip() and not _is_vrp_artifact(line[3:]):
             return False
     return True
 
 
 def git_head(repo: Path) -> str:
-    proc = _git(repo, "rev-parse", "HEAD")
-    return proc.stdout.strip() if proc.returncode == 0 else ""
+    res = _git(repo, "rev-parse", "HEAD")
+    return res["stdout"].strip() if res["returncode"] == 0 else ""
 
 
 def git_commit_all(repo: Path, message: str) -> str:
@@ -178,16 +179,16 @@ def git_commit_all(repo: Path, message: str) -> str:
     干净也会以误导性的 "nothing to commit" 报错掩盖真根因。reset 失败
     同理（工件目录混进事务提交）。三步任一失败响亮报错，事务不做半步。
     """
-    proc = _git(repo, "add", "-A")
-    if proc.returncode != 0:
-        raise RuntimeError(f"git add failed: {proc.stderr.strip()[:500]}")
+    res = _git(repo, "add", "-A")
+    if res["returncode"] != 0:
+        raise RuntimeError(f"git add failed: {res['stderr'].strip()[:500]}")
     for artifact in (".vrp", ".codebase-memory", ".code-atlas"):
-        proc = _git(repo, "reset", "-q", "HEAD", "--", artifact)
-        if proc.returncode != 0:
-            raise RuntimeError(f"git reset failed ({artifact}): {proc.stderr.strip()[:500]}")
-    proc = _git(repo, "commit", "-m", message)
-    if proc.returncode != 0:
-        raise RuntimeError(f"git commit failed: {proc.stderr.strip()[:500]}")
+        res = _git(repo, "reset", "-q", "HEAD", "--", artifact)
+        if res["returncode"] != 0:
+            raise RuntimeError(f"git reset failed ({artifact}): {res['stderr'].strip()[:500]}")
+    res = _git(repo, "commit", "-m", message)
+    if res["returncode"] != 0:
+        raise RuntimeError(f"git commit failed: {res['stderr'].strip()[:500]}")
     return git_head(repo)
 
 
@@ -221,8 +222,8 @@ def rollback_edits(repo: Path, edits: list[dict]) -> list[str]:
             # Path() 包一层：apply_edits 接受 str file（JSON 直出形态），
             # 回滚是恢复路径，不能在类型上崩（R-N API 对称性）。
             proc = _git(repo, "checkout", "HEAD", "--", Path(edit["file"]).as_posix())
-            if proc.returncode != 0:
-                restored.append(f"RESTORE FAILED {edit['file']}: {proc.stderr.strip()[:200]}")
+            if proc["returncode"] != 0:
+                restored.append(f"RESTORE FAILED {edit['file']}: {proc['stderr'].strip()[:200]}")
             else:
                 restored.append(f"restored {edit['file']}")
     return restored

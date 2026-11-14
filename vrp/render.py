@@ -1434,28 +1434,26 @@ def _staleness(repo: Path, facts_head: str) -> dict | None:
     if not facts_head:
         return None
     try:
-        head = subprocess.run(
+        head = procs.run_tree(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=15,
-            encoding="utf-8", errors="replace",
+            timeout=15,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except OSError:
         return None
-    if head.returncode != 0:
+    if head["timed_out"] or head["returncode"] != 0:
         return None
-    current = head.stdout.strip()
+    current = head["stdout"].strip()
     if current == facts_head:
         return None
     behind: int | None = None
     try:
-        count = subprocess.run(
+        count = procs.run_tree(
             ["git", "-C", str(repo), "rev-list", "--count", f"{facts_head}..{current}"],
-            capture_output=True, text=True, timeout=15,
-            encoding="utf-8", errors="replace",
+            timeout=15,
         )
-        if count.returncode == 0:
-            behind = int(count.stdout.strip())
-    except (subprocess.TimeoutExpired, OSError, ValueError):
+        if not count["timed_out"] and count["returncode"] == 0:
+            behind = int(count["stdout"].strip())
+    except (OSError, ValueError):
         pass
     return {"facts_head": facts_head, "head": current, "behind": behind}
 

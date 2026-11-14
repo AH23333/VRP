@@ -1,6 +1,8 @@
 import json
 import sqlite3
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -89,31 +91,29 @@ def test_find_difftastic_none_when_nothing_exists(tmp_path, monkeypatch):
 def test_run_difftastic_env_args_and_parse(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_run(argv, capture_output, text, encoding, errors, timeout, env):
-        captured["argv"] = argv
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        captured["cmd"] = list(cmd)
         captured["env"] = env
-        return subprocess.CompletedProcess(
-            argv, 0, stdout=json.dumps(RENAME_PARSED), stderr=""
-        )
+        return {"returncode": 0, "timed_out": False,
+                "stdout": json.dumps(RENAME_PARSED), "stderr": ""}
 
-    monkeypatch.setattr(s6_difftastic.subprocess, "run", fake_run)
+    monkeypatch.setattr(s6_difftastic.procs, "run_tree", fake_tree)
     result = s6_difftastic.run_difftastic("difft", tmp_path / "old.py", tmp_path / "new.py")
     assert result["ok"] is True
     assert result["parsed"]["status"] == "changed"
-    argv = captured["argv"]
-    assert argv[0] == "difft"
-    assert "--display" in argv and "json" in argv
-    assert "--ignore-comments" in argv
+    cmd = captured["cmd"]
+    assert cmd[0] == "difft"
+    assert "--display" in cmd and "json" in cmd
+    assert "--ignore-comments" in cmd
     assert captured["env"]["DFT_UNSTABLE"] == "yes"
 
 
 def test_run_difftastic_rc_nonzero_not_ok(tmp_path, monkeypatch):
-    def fake_run(argv, **kwargs):
-        return subprocess.CompletedProcess(
-            argv, 2, stdout="", stderr="JSON output is an unstable feature"
-        )
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        return {"returncode": 2, "timed_out": False, "stdout": "",
+                "stderr": "JSON output is an unstable feature"}
 
-    monkeypatch.setattr(s6_difftastic.subprocess, "run", fake_run)
+    monkeypatch.setattr(s6_difftastic.procs, "run_tree", fake_tree)
     result = s6_difftastic.run_difftastic("difft", tmp_path / "old.py", tmp_path / "new.py")
     assert result["ok"] is False
     assert result["returncode"] == 2
@@ -121,19 +121,20 @@ def test_run_difftastic_rc_nonzero_not_ok(tmp_path, monkeypatch):
 
 
 def test_run_difftastic_timeout(tmp_path, monkeypatch):
-    def fake_run(argv, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=argv, timeout=1)
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        return {"returncode": -1, "timed_out": True, "stdout": "", "stderr": ""}
 
-    monkeypatch.setattr(s6_difftastic.subprocess, "run", fake_run)
+    monkeypatch.setattr(s6_difftastic.procs, "run_tree", fake_tree)
     result = s6_difftastic.run_difftastic("difft", tmp_path / "old.py", tmp_path / "new.py")
     assert result == {"ok": False, "reason": "timeout"}
 
 
 def test_run_difftastic_json_array_shape(tmp_path, monkeypatch):
-    def fake_run(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps([RENAME_PARSED]), stderr="")
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        return {"returncode": 0, "timed_out": False,
+                "stdout": json.dumps([RENAME_PARSED]), "stderr": ""}
 
-    monkeypatch.setattr(s6_difftastic.subprocess, "run", fake_run)
+    monkeypatch.setattr(s6_difftastic.procs, "run_tree", fake_tree)
     result = s6_difftastic.run_difftastic("difft", tmp_path / "old.py", tmp_path / "new.py")
     assert result["ok"] is True
     assert result["parsed"]["status"] == "changed"
@@ -381,5 +382,33 @@ def test_git_show_oserror_degrades_none(tmp_path, monkeypatch):
     def boom(*args, **kwargs):
         raise FileNotFoundError("git not found (simulated)")
 
-    monkeypatch.setattr(s6_difftastic.subprocess, "run", boom)
+    monkeypatch.setattr(s6_difftastic.procs, "run_tree", boom)
     assert s6_difftastic._git_show(repo, "a.py") is None
+
+
+def _fake_slow_difft(tmp_path: Path) -> Path:
+    """假 difft 二进制：睡 30s——真树杀面垫片（wrapper 跨平台，R-AO 模式）。"""
+    slow = tmp_path / "fake_difft_slow.py"
+    slow.write_text("import time\n\ntime.sleep(30)\n", encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / "fake_difft_slow.cmd"
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "fake_difft_slow.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+    return exe
+
+
+def test_run_difftastic_timeout_kills_tree(tmp_path):
+    """R-AP 真树杀面：超时必须杀全树（run_tree）。旧 subprocess.run 只杀
+    直接子（win32 .cmd→cmd.exe→python 孙持管道），墙钟会拖满 30s。"""
+    binary = _fake_slow_difft(tmp_path)
+    (tmp_path / "old.py").write_text("a = 1\n", encoding="utf-8")
+    (tmp_path / "new.py").write_text("a = 2\n", encoding="utf-8")
+    t0 = time.monotonic()
+    result = s6_difftastic.run_difftastic(
+        str(binary), tmp_path / "old.py", tmp_path / "new.py", timeout=2
+    )
+    assert result == {"ok": False, "reason": "timeout"}
+    assert time.monotonic() - t0 < 15

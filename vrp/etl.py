@@ -6,14 +6,13 @@ import hashlib
 import json
 import os
 import sqlite3
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-
 from . import __version__
 from . import dbpath
 from . import curate as curate_mod
 from . import evidence as ev
+from . import procs
 from . import s1_cbm, testsig
 
 SCHEMA_PATH = Path(__file__).parent / "schema" / "facts_schema.sql"
@@ -97,18 +96,12 @@ def ensure_schema(con: sqlite3.Connection) -> None:
 def current_git_head(repo: Path) -> str:
     """HEAD commit of repo, or '' when repo is not a git checkout."""
     try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        res = procs.run_tree(["git", "rev-parse", "HEAD"], cwd=repo, timeout=30)
+    except OSError:
         return ""
-    return proc.stdout.strip() if proc.returncode == 0 else ""
+    if res["timed_out"] or res["returncode"] != 0:
+        return ""
+    return (res["stdout"] or "").strip()
 
 
 def check_facts_freshness(con: sqlite3.Connection, repo: Path) -> None:
