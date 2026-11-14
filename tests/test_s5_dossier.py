@@ -296,3 +296,22 @@ def test_build_dossier_cabrief_oserror_degrades(tmp_path, con, monkeypatch):
     brief = dossier["views"]["repo_map_brief"]
     assert brief["status"] == "failed"
     assert "node spawn failed" in brief["reason"]
+
+
+def test_last_verdicts_summary_non_dict_verdict_counts_open(tmp_path):
+    """R-AF: valid-JSON-non-dict verdict files surface as honest "unreadable"
+    placeholders in the evidence section (open verdicts), not silent drops --
+    load_verdicts docstring promise enforced end-to-end at the dossier consumer."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    vdir = repo / ".vrp" / "verdicts"
+    vdir.mkdir(parents=True)
+    (vdir / "tx-shape.json").write_text("[]", encoding="utf-8")
+    (vdir / "tx-ok.json").write_text(
+        json.dumps({"tid": "tx-ok", "status": "committed", "verdict_at": "2026-11-14T00:00:00Z", "gates": []}),
+        encoding="utf-8",
+    )
+    summary = s5_dossier._last_verdicts_summary(repo)
+    assert summary["open_count"] == 1
+    assert summary["recent"][0]["tid"] == "tx-shape"
+    assert summary["recent"][0]["status"] == "unreadable"

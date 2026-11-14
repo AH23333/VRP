@@ -636,8 +636,13 @@ def load_verdicts(repo: Path) -> list[dict]:
         except (ValueError, OSError):
             out.append({"tid": path.stem, "status": "unreadable", "verdict_at": "", "gates": []})
             continue
-        if isinstance(verdict, dict):
-            out.append(verdict)
+        if not isinstance(verdict, dict):
+            # R-AF: valid-JSON-non-dict files (list/str/number) must get the
+            # same honest placeholder as broken JSON -- the docstring promise
+            # "instead of being silently dropped" covers shape failures too.
+            out.append({"tid": path.stem, "status": "unreadable", "verdict_at": "", "gates": []})
+            continue
+        out.append(verdict)
     out.sort(key=lambda v: (v.get("verdict_at") or "", v.get("tid") or ""))
     return out
 

@@ -50,6 +50,20 @@ def test_load_verdicts_empty_and_unreadable(tmp_path):
     assert verdicts[0]["tid"] == "tx-bad"
 
 
+def test_load_verdicts_non_dict_json_gets_placeholder(tmp_path):
+    """R-AF: valid JSON that is not an object (list/str) gets the same honest
+    "unreadable" placeholder as broken JSON -- never a silent drop."""
+    repo = _mk_repo(tmp_path)
+    vdir = repo / ".vrp" / "verdicts"
+    vdir.mkdir(parents=True)
+    (vdir / "tx-list.json").write_text("[]", encoding="utf-8")
+    (vdir / "tx-str.json").write_text('"oops"', encoding="utf-8")
+    verdicts = s6_transact.load_verdicts(repo)
+    assert [v["tid"] for v in verdicts] == ["tx-list", "tx-str"]
+    assert all(v["status"] == "unreadable" for v in verdicts)
+    assert all(v["gates"] == [] for v in verdicts)
+
+
 def test_preview_three_ops_and_missing_target(tmp_path, monkeypatch):
     repo = _mk_repo(tmp_path)
     monkeypatch.setattr(s6_transact.s6_difftastic, "find_difftastic", lambda: None)
