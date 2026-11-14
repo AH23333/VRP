@@ -149,26 +149,53 @@ def test_scan_missing_binary_raises(repo, facts_db, monkeypatch):
 
 
 def test_run_rule_non_json_stdout_raises_runtime_error(repo, monkeypatch):
-    """R-E E2：rc=0 但 stdout 非 JSON——RuntimeError 统一失败语义（非裸 ValueError）。"""
-    from types import SimpleNamespace
-    from unittest import mock
-
+    """R-E E2：rc=0 但 stdout 非 JSON——RuntimeError 统一失败语义（非裸 ValueError）。
+    R-AM 接缝移至 procs.run_tree（dict 形状）。"""
     from vrp.s2_astgrep import run_rule
 
-    fake = SimpleNamespace(returncode=0, stdout="warning: something\nnot json", stderr="")
+    rr = {"returncode": 0, "timed_out": False, "stdout": "warning: something\nnot json", "stderr": ""}
+    monkeypatch.setattr("vrp.s2_astgrep.procs.run_tree", lambda *args, **kwargs: dict(rr))
     rule = RULES_DIR / "py-bare-except.yml"
-    with mock.patch("vrp.s2_astgrep.subprocess.run", return_value=fake):
-        with pytest.raises(RuntimeError, match="non-JSON"):
-            run_rule("fake-bin", rule, repo)
+    with pytest.raises(RuntimeError, match="non-JSON"):
+        run_rule("fake-bin", rule, repo)
 
 
 def test_run_rule_valid_json_parses(repo, monkeypatch):
-    from types import SimpleNamespace
-    from unittest import mock
-
     from vrp.s2_astgrep import run_rule
 
-    fake = SimpleNamespace(returncode=0, stdout='[{"file": "src/a.ts"}]', stderr="")
+    rr = {"returncode": 0, "timed_out": False, "stdout": '[{"file": "src/a.ts"}]', "stderr": ""}
+    monkeypatch.setattr("vrp.s2_astgrep.procs.run_tree", lambda *args, **kwargs: dict(rr))
     rule = RULES_DIR / "py-bare-except.yml"
-    with mock.patch("vrp.s2_astgrep.subprocess.run", return_value=fake):
-        assert run_rule("fake-bin", rule, repo) == [{"file": "src/a.ts"}]
+    assert run_rule("fake-bin", rule, repo) == [{"file": "src/a.ts"}]
+
+
+def test_run_rule_timeout_raises_runtime_error_tree_killed(repo, monkeypatch):
+    """R-AM：ast-grep 超时（VRP_ASTGREP_BIN/which 可命中 npm .cmd 垫片→孙进程持管道，#84）——
+    树杀后跟模块失败契约走 RuntimeError（TimeoutExpired 不逃逸穿 scan→cmd_s2 裸崩）。"""
+    import sys
+    import time as time_mod
+
+    from vrp import s2_astgrep
+    from vrp.s2_astgrep import run_rule
+
+    slow = repo / "slow_astgrep.py"
+    slow.write_text("import time\ntime.sleep(30)\nprint('[]')\n", encoding="utf-8")
+    if sys.platform == "win32":
+        exe = repo / "fake_astgrep.cmd"
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = repo / "fake_astgrep.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+
+    orig_tree = s2_astgrep.procs.run_tree
+    monkeypatch.setattr(
+        s2_astgrep.procs,
+        "run_tree",
+        lambda cmd, timeout=None: orig_tree(cmd, timeout=2),
+    )
+    rule = RULES_DIR / "py-bare-except.yml"
+    start = time_mod.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        run_rule(str(exe), rule, repo)
+    assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"

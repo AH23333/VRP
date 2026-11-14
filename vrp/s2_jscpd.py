@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
 import tempfile
 from pathlib import Path
 
+from . import procs
 from .s2_astgrep import _anchor_symbol
 
 LEDGER_CATEGORY = "p2-cross-check-jscpd"
@@ -78,15 +78,16 @@ def parse_clones(data: dict, repo: Path) -> list[dict]:
 
 def run_jscpd(bin_path: str, repo: Path) -> list[dict] | None:
     with tempfile.TemporaryDirectory(prefix="vrp-jscpd-") as out:
-        proc = subprocess.run(
+        # R-AM: 树杀超时（procs.run_tree，#84）——find_jscpd 默认即 work/jscpd 的
+        # jscpd.cmd 垫片（与 knip 同型，R-AL 探针 30.06s 墙钟实证）：超时只杀
+        # cmd.exe 直子后 node 孙进程持管道孤儿；树全灭后 TemporaryDirectory
+        # 清理不再与孙进程写 report 抢 Windows 文件锁；timed_out → None →
+        # scan 层 "failed"（本模块失败契约）
+        rr = procs.run_tree(
             [bin_path, str(repo), "--reporters", "json", "--output", out, "--silent"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=600,
         )
-        if proc.returncode != 0:
+        if rr["timed_out"] or rr["returncode"] != 0:
             return None
         report = Path(out) / "jscpd-report.json"
         if not report.is_file():

@@ -4,8 +4,9 @@ import json
 import os
 import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
+
+from . import procs
 
 FINDINGS_SOURCE = "s2-astgrep"
 RULES_DIR = Path(__file__).parent / "rules" / "s2"
@@ -50,18 +51,19 @@ def rule_id_of(rule_file: Path) -> str | None:
 
 
 def run_rule(bin_path: str, rule_file: Path, scan_root: Path) -> list[dict]:
-    proc = subprocess.run(
+    # R-AM: 树杀超时（procs.run_tree，#84 孙进程孤儿纪律——VRP_ASTGREP_BIN/which 可命中
+    # npm .cmd 垫片，超时只杀 cmd.exe 直子后 node 孙进程持管道孤儿）；超时跟本模块
+    # 失败契约走 RuntimeError（rc!=0 同款），TimeoutExpired 不逃逸
+    rr = procs.run_tree(
         [bin_path, "scan", "--rule", str(rule_file), "--json", str(scan_root)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=300,
     )
-    if proc.returncode != 0:
-        raise RuntimeError(f"ast-grep scan failed (rc={proc.returncode}): {proc.stderr[:500]}")
+    if rr["timed_out"]:
+        raise RuntimeError(f"ast-grep scan timed out after 300s: {rr['stderr'][:500]}")
+    if rr["returncode"] != 0:
+        raise RuntimeError(f"ast-grep scan failed (rc={rr['returncode']}): {rr['stderr'][:500]}")
     try:
-        return json.loads(proc.stdout)
+        return json.loads(rr["stdout"])
     except json.JSONDecodeError as exc:
         # rc == 0 with non-JSON stdout (warnings mixed in, truncated output) -
         # same failure surface as rc != 0, same RuntimeError contract

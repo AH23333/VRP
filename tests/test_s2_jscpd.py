@@ -109,15 +109,44 @@ def test_scan_reports_failed_when_run_fails(facts_db, tmp_path, monkeypatch):
 
 
 def test_run_jscpd_missing_report_returns_none(tmp_path, monkeypatch):
-    """R-E E2：rc=0 但报告文件缺失——None（失败信号）不裸崩。"""
-    from types import SimpleNamespace
-    from unittest import mock
-
+    """R-E E2：rc=0 但报告文件缺失——None（失败信号）不裸崩。
+    R-AM 接缝移至 procs.run_tree（dict 形状）。"""
     from vrp.s2_jscpd import run_jscpd
 
-    fake = SimpleNamespace(returncode=0, stdout="", stderr="")
-    with mock.patch("vrp.s2_jscpd.subprocess.run", return_value=fake):
-        assert run_jscpd("fake-bin", tmp_path) is None
+    rr = {"returncode": 0, "timed_out": False, "stdout": "", "stderr": ""}
+    monkeypatch.setattr("vrp.s2_jscpd.procs.run_tree", lambda *args, **kwargs: dict(rr))
+    assert run_jscpd("fake-bin", tmp_path) is None
+
+
+def test_run_jscpd_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
+    """R-AM：jscpd 超时（find_jscpd 默认即 work/jscpd 的 .cmd 垫片→cmd.exe 直子→
+    node 孙进程持管道，#84，R-AL knip 同型）——树杀归 None（scan 层 "failed" 诚实），
+    TimeoutExpired 不逃逸，TemporaryDirectory 清理无孤儿锁竞争。"""
+    import sys
+    import time as time_mod
+
+    from vrp import s2_jscpd
+    from vrp.s2_jscpd import run_jscpd
+
+    slow = tmp_path / "slow_jscpd.py"
+    slow.write_text("import time\ntime.sleep(30)\nprint('ok')\n", encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / "fake_jscpd.cmd"
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "fake_jscpd.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+
+    orig_tree = s2_jscpd.procs.run_tree
+    monkeypatch.setattr(
+        s2_jscpd.procs,
+        "run_tree",
+        lambda cmd, timeout=None: orig_tree(cmd, timeout=2),
+    )
+    start = time_mod.monotonic()
+    assert run_jscpd(str(exe), tmp_path) is None
+    assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
 
 
 def test_scan_writes_findings_and_ledger(facts_db, tmp_path, monkeypatch):
