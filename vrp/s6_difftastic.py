@@ -88,7 +88,7 @@ def run_difftastic(binary: str, old_path: Path, new_path: Path, timeout: int = 6
     try:
         parsed = json.loads(res["stdout"])
     except ValueError:
-        result.update({"ok": False, "reason": "json-parse", "stdout_tail": proc.stdout[-300:]})
+        result.update({"ok": False, "reason": "json-parse", "stdout_tail": res["stdout"][-300:]})
         return result
     if isinstance(parsed, list):
         parsed = parsed[0] if parsed else None

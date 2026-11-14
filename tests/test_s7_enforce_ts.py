@@ -383,3 +383,50 @@ def test_parse_violations_nondict_output_raises_valueerror():
     """R-AD：depcruise 输出合法 JSON 非 dict → 诚实 ValueError（与 JSONDecodeError 同语义）。"""
     with pytest.raises(ValueError, match="not a JSON object"):
         s7_enforce_ts.parse_violations("[1, 2]")
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        {"modules": "not-a-list", "summary": {}},
+        {"modules": [42], "summary": {}},
+        {"modules": [{"source": "a.ts", "dependencies": "no"}], "summary": {}},
+        {"modules": [{"source": "a.ts", "dependencies": [{"resolved": "b.ts", "rules": "no"}]}], "summary": {}},
+        {"modules": [{"source": "a.ts", "dependencies": [{"resolved": "b.ts", "rules": [42]}]}], "summary": {}},
+        {"modules": [], "summary": "no"},
+    ],
+    ids=["modules-not-list", "module-not-dict", "deps-not-list", "rules-not-list", "rule-not-dict", "summary-not-dict"],
+)
+def test_parse_violations_nested_shape_drift_raises_valueerror(drift):
+    """AU-9：嵌套形状漂移（modules/module/dependencies/rules/rule/summary 任一站
+    非 dict 或非 list）→ ValueError 诚实失败——AttributeError 会逃 MCP _guard，
+    静默跳过是执法器最坏失败模式；与顶层非 dict 守卫（R-AD）同语义。"""
+    with pytest.raises(ValueError, match="depcruise output"):
+        s7_enforce_ts.parse_violations(json.dumps(drift))
+
+
+def test_run_ts_nested_shape_drift_enforcer_failed_keeps_old_findings(tmp_path, monkeypatch):
+    """AU-9 全链：rc=0 + 嵌套漂移 JSON（modules 非 list）→ enforcer-failed，
+    不误删既有 findings（与 rc≠0/超时失败路径同语义）。"""
+    repo = _mk_repo(tmp_path)
+    con = _con(repo)
+    con.execute(
+        "INSERT INTO findings (pathology, kind, source, anchor_fid, payload_json)"
+        " VALUES ('P9', 'layer-violation', 's7-enforce', 't1', '{}')"
+    )
+    con.commit()
+    con.close()
+    drifted = json.dumps({"modules": {"src/core/a.ts": []}, "summary": {}})
+    monkeypatch.setattr(s7_enforce_ts, "find_depcruise", lambda: Path("fake-depcruise.cmd"))
+    monkeypatch.setattr(s7_enforce_ts, "_execute", _mock_exec(0, drifted))
+    con = _con(repo)
+    try:
+        out = s7_enforce_ts.run_ts(repo, con, json.loads(STRUCTURE), "active", {"core-mod": ["src/core"], "iface-mod": ["src/iface"]})
+    finally:
+        con.close()
+    assert out["status"] == "enforcer-failed"
+    assert out["reason"] == "depcruise output is not valid JSON"
+    count = sqlite3.connect(repo / ".vrp" / "facts.db").execute(
+        "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+    ).fetchone()[0]
+    assert count == 1  # 形状漂移失败不误删既有记录

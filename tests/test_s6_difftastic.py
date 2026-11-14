@@ -140,6 +140,22 @@ def test_run_difftastic_json_array_shape(tmp_path, monkeypatch):
     assert result["parsed"]["status"] == "changed"
 
 
+def test_run_difftastic_rc0_nonjson_degrades_not_raises(tmp_path, monkeypatch):
+    """AU-8：rc=0 + 非 JSON stdout——json-parse 分支曾引用已不存在的局部 `proc`
+    （R-W run_tree 迁移漏改），NameError 逃 MCP _guard（guard 元组无 NameError）；
+    契约=逐文件降级 {ok: False, reason: json-parse}，不抛。"""
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        return {"returncode": 0, "timed_out": False,
+                "stdout": "not json at all", "stderr": ""}
+
+    monkeypatch.setattr(s6_difftastic.procs, "run_tree", fake_tree)
+    result = s6_difftastic.run_difftastic("difft", tmp_path / "old.py", tmp_path / "new.py")
+    assert result["ok"] is False
+    assert result["reason"] == "json-parse"
+    assert result["stdout_tail"] == "not json at all"
+    assert result["returncode"] == 0
+
+
 def test_extract_blocks_probe_shape():
     blocks = s6_difftastic.extract_blocks(RENAME_PARSED)
     assert len(blocks) == 1

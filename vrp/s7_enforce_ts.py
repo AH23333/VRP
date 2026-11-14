@@ -152,14 +152,33 @@ def parse_violations(stdout: str) -> tuple[list[dict], dict]:
     if not isinstance(data, dict):
         # 上游 depcruise 输出形状漂移（非 JSON 对象）：诚实错误（与 JSONDecodeError 同语义）
         raise ValueError("depcruise output is not a JSON object")
+    # 嵌套面同守卫（AU-9）：形状漂移 → ValueError 诚实失败，不静默丢违例
+    # （执法器最坏失败模式=静默跳过；非 dict 取属性会 AttributeError 逃 MCP _guard）
     summary = data.get("summary") or {}
+    if not isinstance(summary, dict):
+        raise ValueError("depcruise output 'summary' is not a JSON object")
+    modules = data.get("modules") or []
+    if not isinstance(modules, list):
+        raise ValueError("depcruise output 'modules' is not a JSON array")
     violations: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
-    for module in data.get("modules") or []:
+    for module in modules:
+        if not isinstance(module, dict):
+            raise ValueError("depcruise output 'modules' entry is not a JSON object")
         source = module.get("source") or ""
-        for dep in module.get("dependencies") or []:
+        deps = module.get("dependencies") or []
+        if not isinstance(deps, list):
+            raise ValueError("depcruise output 'dependencies' is not a JSON array")
+        for dep in deps:
+            if not isinstance(dep, dict):
+                raise ValueError("depcruise output 'dependencies' entry is not a JSON object")
             resolved = dep.get("resolved") or ""
-            for rule in dep.get("rules") or []:
+            rules = dep.get("rules") or []
+            if not isinstance(rules, list):
+                raise ValueError("depcruise output 'rules' is not a JSON array")
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    raise ValueError("depcruise output 'rules' entry is not a JSON object")
                 if rule.get("severity") != "error":
                     continue  # warn/advice 不算违例（我们只生成 error 规则）
                 name = rule.get("name") or ""
