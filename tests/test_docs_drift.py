@@ -10,18 +10,24 @@ census（work/census_raa.txt）裁决的落地：
 - Face C 文档清单：构想v8 等现存文件未列入——守卫= docs/**/*.md 每文件被
   README 覆盖（点名引用或 构想vN 历史区间线覆盖）。
 - Face D 计数型断言：MCP 工具数（中文数字）与 ast-grep 规则文件数对账。
-时长类断言（~4-8min 等）机器相关不可守卫，由 census 人工对账。
+- Face E 交接文档（R-AS，#115"剩 12/收 4"型手工对账误差的守卫化）：
+  交接条目序号连续无洞；最新条目"快测 N 绿"== collect 真值——每批
+  收尾必写当前验证数，声明漂移窗口=单批次（README Face A 第二维度）。
+  散文算术/时长类机器相关不可守卫，由 census 人工对账（Face A 判例）。
 """
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 README = (ROOT / "README.md").read_text(encoding="utf-8-sig")
+HANDOVER = (ROOT / "docs" / "交接文档.md").read_text(encoding="utf-8-sig")
 
 _CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
@@ -36,9 +42,10 @@ def _cn_num(text: str) -> int:
     return tens * 10 + ones
 
 
-def test_readme_test_counts_match_collection():
-    """Face A：README 四处测试计数 == pytest collect 真值（+内部自洽）。"""
-    env = {k: v for k, v in __import__("os").environ.items()}
+@lru_cache(maxsize=1)
+def _collected() -> tuple[int, int, int]:
+    """pytest collect 真值 (quick, total, deep)——README/交接双面对账共享。"""
+    env = {k: v for k, v in os.environ.items()}
     env["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "tests", "--collect-only", "-q"],
@@ -47,7 +54,22 @@ def test_readme_test_counts_match_collection():
     out = proc.stdout.decode("utf-8", "replace")
     m = re.search(r"(\d+)/(\d+) tests collected \((\d+) deselected\)", out)
     assert m, f"collect-only summary line not found: {out[-300:]!r}"
-    quick, total, deep = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+def _handover_items() -> list[tuple[int, str]]:
+    """交接条目 (序号, 条目全文) 列表（文档序）；条目=`N. ~~` 标记到下一条目/文档尾。"""
+    matches = list(re.finditer(r"^(\d+)\. ~~", HANDOVER, re.M))
+    items: list[tuple[int, str]] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(HANDOVER)
+        items.append((int(m.group(1)), HANDOVER[m.start():end]))
+    return items
+
+
+def test_readme_test_counts_match_collection():
+    """Face A：README 四处测试计数 == pytest collect 真值（+内部自洽）。"""
+    quick, total, deep = _collected()
     claims = {
         "快速层": re.search(r"快速层 (\d+) 例", README),
         "深度层": re.search(r"深度层 (\d+) 例", README),
@@ -116,4 +138,27 @@ def test_readme_count_claims_match_reality():
     assert m2, "README ast-grep rule-count claim not found"
     assert int(m2.group(1)) == rule_count, (
         f"README ast-grep {m2.group(1)} 规则 != rules/s2 文件 {rule_count}"
+    )
+
+
+def test_handover_numbering_contiguous():
+    """Face E：交接条目序号连续无洞（#115/#116 对账误差教训——记账结构本身可守卫）。"""
+    nums = [n for n, _ in _handover_items()]
+    assert len(nums) >= 2, f"交接条目解析异常（<2 条）：{nums}"
+    assert nums == list(range(nums[0], nums[0] + len(nums))), (
+        f"交接条目序号不连续（跳号/重号）：{nums}"
+    )
+
+
+def test_handover_latest_quick_count_matches_collection():
+    """Face E：最新交接条目"快测 N 绿" == collect 真值——交接声明的验证数
+    不得停在旧值（#115"剩 12/收 4"型手工对账误差的守卫化：每批收尾必写
+    当前数，漂移窗口=单批次）。"""
+    quick = _collected()[0]
+    num, text = _handover_items()[-1]
+    cm = re.search(r"快测 (\d+) 绿", text)
+    assert cm, f"最新交接条目 #{num} 缺 '快测 N 绿' 验证数声明"
+    assert int(cm.group(1)) == quick, (
+        f"最新交接 #{num} 快测 {cm.group(1)} 绿 != collect {quick}"
+        "——新批交接必须写当前验证数"
     )
