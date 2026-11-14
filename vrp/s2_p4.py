@@ -72,6 +72,9 @@ def run_knip(bin_path: str, repo: Path) -> list[dict] | None:
         data = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return None
+    if not isinstance(data, dict):
+        # 上游 knip 输出形状漂移（非 JSON 对象）：与不可解析同 best-effort 降级
+        return None
     return knip_rows(data.get("issues", []))
 
 

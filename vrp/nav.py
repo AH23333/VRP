@@ -155,6 +155,9 @@ def _architecture_from_structure(con: sqlite3.Connection) -> dict:
         payload = json.loads(row[0])
     except json.JSONDecodeError:
         return _architecture_dir_fallback(con)
+    if not isinstance(payload, dict):
+        # 合法 JSON 非 dict（R-X 族）：与不可解析同降级目录聚合
+        return _architecture_dir_fallback(con)
     modules_raw = payload.get("modules", [])
     layers = payload.get("layers", [])
     fid_to_mod: dict[str, str] = {}

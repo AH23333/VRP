@@ -405,3 +405,13 @@ def test_slices_of_nondict_payload_skipped_good_still_found(tmp_path):
     finally:
         con.close()
     assert [s["slice_id"] for s in found] == ["good-flow"]
+def test_nav_architecture_nondict_structure_fallback(tmp_path):
+    """R-AD：active structure 载荷合法 JSON 非 dict → 目录聚合兜底（与不可解析同降级）。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "fid-a", "pkg.a", "a", "pkg/a.py", 1)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO structure (payload_json, status) VALUES ('[1, 2]', 'active')")
+    con.commit()
+    con.close()
+    arch = nav.nav_architecture(repo)
+    assert arch["fallback"] == "dir-aggregation"

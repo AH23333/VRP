@@ -84,6 +84,9 @@ def run_cargo_mutants(bin_path: str, repo: Path, files: list[str], timeout: int)
 
 def parse_outcomes(report: Path) -> tuple:
     data = json.loads(report.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        # 上游 cargo-mutants 报告形状漂移（非 JSON 对象）：诚实错误（与 JSONDecodeError 同语义）
+        raise ValueError(f"cargo-mutants report is not a JSON object: {report}")
     records: list[dict] = []
     raw: Counter = Counter()
     baseline_ok = True

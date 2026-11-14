@@ -113,6 +113,9 @@ def run_stryker(bin_path: str, repo: Path, files: list[str], timeout: int) -> di
 
 def parse_report(report: Path) -> tuple:
     data = json.loads(report.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        # 上游 stryker 报告形状漂移（非 JSON 对象）：诚实错误（与 JSONDecodeError 同语义）
+        raise ValueError(f"stryker report is not a JSON object: {report}")
     records: list[dict] = []
     raw: Counter = Counter()
     for file_rel, entry in data.get("files", {}).items():

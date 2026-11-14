@@ -507,3 +507,47 @@ def test_reject_structure_numeric_target_id(tmp_path):
         assert [d[0] for d in decisions] == ["1", "structure"]  # 999 失败不留痕
     finally:
         con.close()
+# --------------------------------------- R-AD：非 dict payload 复验 + 收据计数
+
+
+def test_curate_stale_revalidation_nondict_payload(tmp_path):
+    """R-AD：合法 JSON 非 dict 的 active 载荷复验标 stale（坏载荷=不可复验，诚实）。"""
+    repo = _mk_repo(tmp_path)
+    _seed_chain(repo)
+    con = _con(repo)
+    try:
+        con.execute(
+            "INSERT INTO slices (slice_id, name, summary, payload_json, status)"
+            " VALUES ('bad-nondict', 'n', 's', '[1, 2]', 'active')"
+        )
+        con.execute("INSERT INTO structure (payload_json, status) VALUES ('\"scalar\"', 'active')")
+        con.commit()
+        receipt = curate_mod.curate(repo, con)
+        assert receipt["stale"]["slices"] == ["bad-nondict"]
+        assert receipt["stale"]["structure"] is True
+        # slice 不可复验=报告-only（与 JSONDecodeError 同语义，不改库）；structure 复验失败落库 stale
+        status = con.execute("SELECT status FROM slices WHERE slice_id = 'bad-nondict'").fetchone()[0]
+        assert status == "active"
+        assert con.execute("SELECT status FROM structure").fetchone()[0] == "stale"
+    finally:
+        con.close()
+
+
+def test_curate_structure_rejection_receipt_counts_one(tmp_path):
+    """R-AD：CLI structure 拒收收据 rejected=1（与 MCP curate_payload 同形，收据计数红线）。"""
+    repo = _mk_repo(tmp_path)
+    fids = _seed_chain(repo)
+    ai = repo / ".vrp" / "ai"
+    ai.mkdir(parents=True)
+    bad = _structure(fids, layers=[{"name": "other", "may_depend_on": []}])
+    (ai / "structure.json").write_text(json.dumps(bad, ensure_ascii=False), encoding="utf-8")
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate(repo, con)
+        entry = receipt["files"][0]
+        assert entry["status"] == "rejected"
+        assert entry["accepted"] == 0
+        assert entry["rejected"] == 1
+        assert any(e["code"] == "STRUCT_UNKNOWN_LAYER" for e in entry["errors"])
+    finally:
+        con.close()

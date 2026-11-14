@@ -1,13 +1,16 @@
 import json
+import subprocess
 
 import pytest
 
+from vrp import s2_p4
 from vrp.s2_p4 import (
     _ingest_filter,
     cross_check,
     knip_rows,
     ledger_category,
     parse_vulture_line,
+    run_knip,
     scan,
 )
 
@@ -164,3 +167,11 @@ def test_scan_vulture_writes_findings_and_ledger(facts_db, tmp_path, monkeypatch
         "SELECT COUNT(*) FROM discrepancy_ledger WHERE category = ?", (ledger_category("vulture"),)
     ).fetchone()[0]
     assert ledger_count == 2
+def test_run_knip_nondict_report_returns_none(tmp_path, monkeypatch):
+    """R-AD：knip 输出合法 JSON 非 dict → 与不可解析同 best-effort 降级 None。"""
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="[1, 2]", stderr="")
+
+    monkeypatch.setattr(s2_p4.subprocess, "run", fake_run)
+    assert run_knip("knip", tmp_path) is None

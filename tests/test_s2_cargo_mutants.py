@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from vrp import s2_cargo_mutants
 from vrp.s2_cargo_mutants import (
     OUT_DIR_NAME,
@@ -146,3 +148,9 @@ def test_module_docstring_documents_probe():
     text = s2_cargo_mutants.__doc__ or ""
     for fact in ("27.1.0", "-f", "mutants.out", "outcomes.json", "span.start.line"):
         assert fact in text
+def test_parse_outcomes_nondict_report_raises_valueerror(tmp_path):
+    """R-AD：cargo-mutants 报告合法 JSON 非 dict → 诚实 ValueError（与 JSONDecodeError 同语义）。"""
+    report = tmp_path / "outcomes.json"
+    report.write_text(json.dumps([{"scenario": "Baseline"}]), encoding="utf-8")
+    with pytest.raises(ValueError, match="not a JSON object"):
+        parse_outcomes(report)

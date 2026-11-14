@@ -123,7 +123,7 @@ def build_architecture_ir(repo: Path, con: sqlite3.Connection) -> dict:
             payload = json.loads(row[0])
         except json.JSONDecodeError:
             payload = None
-        if payload is not None and payload.get("modules"):
+        if isinstance(payload, dict) and payload.get("modules"):
             return _architecture_ir_from_structure(con, payload)
     return _architecture_ir_dir_fallback(repo, con)
 
@@ -548,7 +548,7 @@ def _iter_modules(con: sqlite3.Connection) -> list[dict]:
                 payload = json.loads(row[0])
             except json.JSONDecodeError:
                 payload = None
-            if payload is not None:
+            if isinstance(payload, dict):
                 layers = [l.get("name") for l in payload.get("layers", [])
                           if isinstance(l, dict) and l.get("name")]
                 order = {name: i for i, name in enumerate(layers)}

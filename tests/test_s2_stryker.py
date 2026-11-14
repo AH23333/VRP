@@ -2,6 +2,8 @@ import json
 import os
 import stat
 
+import pytest
+
 from vrp import s2_stryker
 from vrp.s2_stryker import (
     CONF_NAME,
@@ -121,3 +123,9 @@ def test_cleanup_removes_scratch_tolerant(tmp_path):
     # itself) - cleanup must take the readonly-marked .git objects with it
     assert not (tmp_path / TMP_DIR_NAME).exists()
     cleanup(tmp_path)
+def test_parse_report_nondict_report_raises_valueerror(tmp_path):
+    """R-AD：stryker 报告合法 JSON 非 dict → 诚实 ValueError（与 JSONDecodeError 同语义）。"""
+    report = tmp_path / "stryker-report.json"
+    report.write_text(json.dumps(["x"]), encoding="utf-8")
+    with pytest.raises(ValueError, match="not a JSON object"):
+        parse_report(report)

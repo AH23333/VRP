@@ -154,6 +154,9 @@ def parse_violations(stdout: str) -> tuple[list[dict], dict]:
     line=None：模块级图无行号（诚实记录，锚定走文件首符号）。
     """
     data = json.loads(stdout)
+    if not isinstance(data, dict):
+        # 上游 depcruise 输出形状漂移（非 JSON 对象）：诚实错误（与 JSONDecodeError 同语义）
+        raise ValueError("depcruise output is not a JSON object")
     summary = data.get("summary") or {}
     violations: list[dict] = []
     seen: set[tuple[str, str, str]] = set()

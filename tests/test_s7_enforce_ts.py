@@ -4,6 +4,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from vrp import s7_enforce, s7_enforce_ts
 
 SCHEMA = Path(__file__).parent.parent / "vrp" / "schema" / "facts_schema.sql"
@@ -355,3 +357,7 @@ def test_run_ts_cli_enforce_wiring(tmp_path, monkeypatch, capsys):
     assert out["status"] == "ok"
     assert out["engine"] == "dependency-cruiser"
     assert out["findings_written"] == 1
+def test_parse_violations_nondict_output_raises_valueerror():
+    """R-AD：depcruise 输出合法 JSON 非 dict → 诚实 ValueError（与 JSONDecodeError 同语义）。"""
+    with pytest.raises(ValueError, match="not a JSON object"):
+        s7_enforce_ts.parse_violations("[1, 2]")

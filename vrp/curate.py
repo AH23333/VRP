@@ -265,6 +265,10 @@ def _revalidate_ingested(con: sqlite3.Connection) -> dict:
         except json.JSONDecodeError:
             stale_slices.append(slice_id)
             continue
+        if not isinstance(raw, dict):
+            # 合法 JSON 非 dict（用户可写 DB/legacy，R-X 族）：坏载荷不可复验，同 stale 语义
+            stale_slices.append(slice_id)
+            continue
         ok = True
         for step in raw.get("steps", []):
             if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (step.get("fid", ""),)).fetchone() is None:
@@ -292,7 +296,7 @@ def _revalidate_ingested(con: sqlite3.Connection) -> dict:
             raw = json.loads(row[1])
         except json.JSONDecodeError:
             raw = None
-        ok = raw is not None
+        ok = isinstance(raw, dict)
         if ok:
             for mod in raw.get("modules", []):
                 for fid in mod.get("symbol_fids", []):
@@ -352,6 +356,7 @@ def _curate_file(con: sqlite3.Connection, path: Path, kind: str) -> dict:
         errors = _validate_structure(con, raw)
         if errors:
             entry["errors"].extend(errors)
+            entry["rejected"] = 1
             return entry
         _ingest_structure(con, raw)
         entry["status"], entry["accepted"] = "accepted", 1
@@ -552,6 +557,9 @@ def _drift_slice(con: sqlite3.Connection, row: tuple, has_ledger: bool) -> dict:
     try:
         raw = json.loads(payload_json)
     except json.JSONDecodeError:
+        raw = None
+    if not isinstance(raw, dict):
+        # 合法 JSON 非 dict（R-X 族）：与不可解析同语义广义化
         item["fresh"] = False
         item["unparseable_payload"] = True
         return item
@@ -591,6 +599,9 @@ def _drift_structure(con: sqlite3.Connection, row: tuple, has_ledger: bool) -> d
     try:
         raw = json.loads(payload_json)
     except json.JSONDecodeError:
+        raw = None
+    if not isinstance(raw, dict):
+        # 合法 JSON 非 dict（R-X 族）：与不可解析同语义广义化
         item["fresh"] = False
         item["unparseable_payload"] = True
         return item

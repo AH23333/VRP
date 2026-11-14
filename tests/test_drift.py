@@ -544,3 +544,28 @@ def test_remap_hand_fixed_fid_not_unresolved(tmp_path):
     result = curate_mod.apply_remap_to_ai(repo, report)
     assert result["total_remapped"] == 0
     assert result["unresolved_total"] == 0
+# --------------------------------------- R-AD：非 dict payload 漂移查询面
+
+
+def test_drift_report_nondict_payload_unparseable(tmp_path):
+    """R-AD：合法 JSON 非 dict 载荷 → fresh=False + unparseable_payload（JSONDecodeError 语义广义化）。"""
+    repo = _mk_repo(tmp_path)
+    _seed_symbols(repo)
+    con = _con(repo)
+    try:
+        con.execute(
+            "INSERT INTO slices (slice_id, name, summary, payload_json, status)"
+            " VALUES ('bad-nondict', 'n', 's', '[1, 2]', 'active')"
+        )
+        con.execute("INSERT INTO structure (payload_json, status) VALUES ('\"scalar\"', 'active')")
+        con.commit()
+        report = curate_mod.drift_report(con)
+    finally:
+        con.close()
+    item = {s["slice_id"]: s for s in report["slices"]}["bad-nondict"]
+    assert item["fresh"] is False
+    assert item["unparseable_payload"] is True
+    st = report["structure"]
+    assert st["fresh"] is False
+    assert st["unparseable_payload"] is True
+    assert report["summary"]["active_but_drifted"] == ["bad-nondict", "structure"]

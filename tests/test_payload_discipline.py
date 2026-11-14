@@ -68,3 +68,74 @@ def test_parse_json_stdout_pins_object_only():
         s1_cbm._parse_json_stdout("scalar only\n42")
     with pytest.raises(RuntimeError, match="no JSON object"):
         s1_cbm._parse_json_stdout("")
+
+
+def test_no_unguarded_variable_mediated_loads_access():
+    """R-AD 守卫：变量中转型 loads 消费纪律（R-X 链式守卫盲区收口）。
+
+    `raw = json.loads(...)` 存入变量后 `raw.get(...)`/`raw[...]` 访问，函数内
+    必须存在 isinstance(<名>, dict) 守卫——否则合法 JSON 非 dict payload 在
+    按设计应"跳过降级/诚实报错"的路径上裸抛 AttributeError（R-AD 实锤
+    curate._revalidate_ingested/_drift_slice/_drift_structure、
+    nav._architecture_from_structure、render.build_architecture_ir/
+    _iter_modules、s2_p4.run_knip、s2_cargo_mutants.parse_outcomes、
+    s2_stryker.parse_report、s7_enforce_ts.parse_violations，共 12 站已修）。
+    豁免三函数（绿记实，census work/census_rad.txt）：
+    - llm_client._parse_response：try/except (KeyError, IndexError,
+      TypeError) 诚实转 ValueError，非 dict 已被 TypeError 分支捕获；
+    - render / render_chain 的 _archify_error_text：自家 vendored
+      archify --json 输出契约钉死对象形状。
+    """
+    allowlist: set[tuple[str, str]] = {
+        ("llm_client.py", "_parse_response"),
+        ("render.py", "_archify_error_text"),
+        ("render_chain.py", "_archify_error_text"),
+    }
+    offenders: list[str] = []
+    for path in sorted(VRP.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if (path.name, func.name) in allowlist:
+                continue
+            loads_names: set[str] = set()
+            guarded_names: set[str] = set()
+            accessed_names: set[str] = set()
+            for node in ast.walk(func):
+                # raw = json.loads(...)
+                if (
+                    isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Attribute)
+                    and node.value.func.attr == "loads"
+                ):
+                    loads_names.add(node.targets[0].id)
+                # isinstance(x, dict)
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "isinstance"
+                    and len(node.args) == 2
+                    and isinstance(node.args[0], ast.Name)
+                    and isinstance(node.args[1], ast.Name)
+                    and node.args[1].id == "dict"
+                ):
+                    guarded_names.add(node.args[0].id)
+                # raw.get(...) / raw[...]
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr == "get"
+                    and isinstance(node.value, ast.Name)
+                ):
+                    accessed_names.add(node.value.id)
+                if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+                    accessed_names.add(node.value.id)
+            for name in sorted(loads_names & accessed_names - guarded_names):
+                offenders.append(f"{path.relative_to(ROOT).as_posix()}:{func.lineno} ({func.name}) unguarded loads var '{name}'")
+    assert not offenders, (
+        "variable-mediated json.loads access without isinstance dict guard "
+        f"(R-AD census, allowlist {sorted(allowlist)}): {offenders}"
+    )
