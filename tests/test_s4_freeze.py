@@ -113,3 +113,39 @@ def test_freeze_skips_and_records_baseline(repo, tmp_path, monkeypatch):
         assert con.execute("SELECT COUNT(*) FROM runtime_evidence").fetchone()[0] == 1
     finally:
         con.close()
+
+
+def _fake_slow_cbm(tmp_path: Path) -> Path:
+    """假 CBM 二进制：睡 30s 再吐 JSON——超时面探针（wrapper 跨平台）。"""
+    slow = tmp_path / "fake_cbm_slow.py"
+    slow.write_text(
+        "import time\n\ntime.sleep(30)\nprint('{\"project\": \"p\"}')\n",
+        encoding="utf-8",
+    )
+    if sys.platform == "win32":
+        exe = tmp_path / "fake_cbm_slow.cmd"
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "fake_cbm_slow.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+    return exe
+
+
+def test_run_cli_timeout_raises_runtime_error(tmp_path, monkeypatch):
+    """R-AI D1：run_cli 超时必须转 RuntimeError（树杀 procs.run_tree 收编）——
+    裸 TimeoutExpired 穿透 mcp _guard 捕获元组（SystemExit/ValueError/
+    RuntimeError/sqlite3.Error，无 TimeoutExpired）炸 server，MCP dossier
+    (skip_external=False) -> get_architecture -> run_cli 链实锤。"""
+    monkeypatch.setattr(s4_freeze.s1_cbm, "find_cbm", lambda: _fake_slow_cbm(tmp_path))
+    with pytest.raises(RuntimeError, match="timed out after 2s"):
+        s4_freeze.s1_cbm.run_cli(["get_architecture", "--project", "p"], timeout=2)
+
+
+def test_freeze_test_impact_timeout_is_best_effort(tmp_path, monkeypatch):
+    """R-AI D2：test_impact docstring "never a gate"——cbm 超时返回
+    {"error": ...} 而非把 freeze 整体炸死（except RuntimeError 接得住
+    转型后的超时，接不住旧 TimeoutExpired）。"""
+    monkeypatch.setattr(s4_freeze.s1_cbm, "find_cbm", lambda: _fake_slow_cbm(tmp_path))
+    out = s4_freeze.test_impact(tmp_path, "p", timeout=2)
+    assert "timed out" in out["error"]

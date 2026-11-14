@@ -6,9 +6,8 @@ import json
 import os
 import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
-from . import dbpath
+from . import dbpath, procs
 
 DEFAULT_INSTALL = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "codebase-memory-mcp" / "codebase-memory-mcp.exe"
 
@@ -97,19 +96,22 @@ def _record_repo_path(db_path: Path, repo_path: str) -> None:
 
 def run_cli(args: list[str], timeout: int = 3600) -> dict:
     exe = find_cbm()
-    proc = subprocess.run(
-        [str(exe), "cli", *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
-    if proc.returncode != 0:
+    # R-AI: 树杀超时（procs.run_tree，#84 孙进程孤儿纪律）+ 超时统一转
+    # RuntimeError——裸 subprocess.run 超时泄漏 TimeoutExpired，穿透
+    # mcp _guard 捕获元组炸 server，且 test_impact 的 except RuntimeError
+    # （docstring "never a gate"）接不住，freeze 整体死于 best-effort 步骤。
+    result = procs.run_tree([str(exe), "cli", *args], timeout=timeout)
+    if result["timed_out"]:
         raise RuntimeError(
-            f"cbm cli failed ({proc.returncode}): {' '.join(args)}\nstdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-2000:]}"
+            f"cbm cli timed out after {timeout}s: {' '.join(args)}\n"
+            f"stdout: {result['stdout'][-2000:]}\nstderr: {result['stderr'][-2000:]}"
         )
-    return _parse_json_stdout(proc.stdout)
+    if result["returncode"] != 0:
+        raise RuntimeError(
+            f"cbm cli failed ({result['returncode']}): {' '.join(args)}\n"
+            f"stdout: {result['stdout'][-2000:]}\nstderr: {result['stderr'][-2000:]}"
+        )
+    return _parse_json_stdout(result["stdout"])
 
 
 def _parse_json_stdout(stdout: str) -> dict:
