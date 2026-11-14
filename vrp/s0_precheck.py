@@ -86,7 +86,7 @@ def content_repo_probe(repo: Path) -> dict:
     }
 
 
-def _run(cmd: list[str], cwd: Path, timeout: int = 120) -> tuple[int, str]:
+def _run(cmd: list[str], cwd: Path, timeout: int = 120) -> tuple[int, str, str]:
     """运行外部命令（procs.run_tree 树杀收编，R-AP）；超时响亮失败
     （RuntimeError）而非无限挂死。
 
@@ -94,26 +94,30 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 120) -> tuple[int, str]:
     住 120s 的只剩死盘/网络驱动器级故障——届时 is_repo/dirty 的任何
     "降级"取值都是静默谎言（脏树前置是 R-A 的硬保证），必须 fail-fast
     让 cli 以 rc 1 诚实退出。
+
+    返回 (rc, stdout, stderr) 三元组（AU-2，R-AU）：git rev-parse HEAD
+    歧义时 stderr 警告（rc 仍 0）混入 head 提取会污染 facts.git_head
+    ——调用方按需取 stdout。
     """
     res = procs.run_tree(cmd, cwd=cwd, timeout=timeout)
     if res["timed_out"]:
         raise RuntimeError(f"git command timed out after {timeout}s: {' '.join(cmd)}")
-    return res["returncode"], (res["stdout"] or "") + (res["stderr"] or "")
+    return res["returncode"], res["stdout"] or "", res["stderr"] or ""
 
 
 def git_snapshot(repo: Path) -> dict:
     if not (repo / ".git").exists():
         return {"is_repo": False}
-    rc_head, head = _run(["git", "rev-parse", "HEAD"], repo)
-    rc_branch, branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
+    rc_head, head_out, _ = _run(["git", "rev-parse", "HEAD"], repo)
+    rc_branch, branch_out, _ = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
     # -c core.quotepath=false：非 ASCII 路径原样输出（默认引号+八进制转义，
     # dirty_files 会显示乱码——R-N）。dirty 布尔判定不受影响，保真路径字面量。
-    rc_status, status = _run(["git", "-c", "core.quotepath=false", "status", "--porcelain"], repo)
-    dirty_files = [line[3:] for line in status.splitlines() if line.strip()]
+    rc_status, status_out, _ = _run(["git", "-c", "core.quotepath=false", "status", "--porcelain"], repo)
+    dirty_files = [line[3:] for line in status_out.splitlines() if line.strip()]
     return {
         "is_repo": rc_head == 0,
-        "head": head.strip() if rc_head == 0 else None,
-        "branch": branch.strip() if rc_branch == 0 else None,
+        "head": head_out.strip() if rc_head == 0 else None,
+        "branch": branch_out.strip() if rc_branch == 0 else None,
         "dirty": bool(dirty_files),
         "dirty_files": dirty_files[:200],
         "dirty_count": len(dirty_files),

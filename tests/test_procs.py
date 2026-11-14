@@ -26,6 +26,7 @@ R-W 批（计时确定性）：
 from __future__ import annotations
 
 import ctypes
+import subprocess
 import sys
 import time
 
@@ -155,3 +156,46 @@ def test_run_tree_decodes_invalid_utf8_with_replace(tmp_path):
     assert rr["timed_out"] is False
     assert "end" in rr["stdout"]
     assert "\ufffd" in rr["stdout"]  # U+FFFD：errors=replace 的证据
+
+
+def test_kill_tree_windows_taskkill_timeout_degrades(monkeypatch):
+    """AU-1（R-AU）：taskkill 自身超时降级 proc.kill() 而非穿透调用方。
+
+    调用面（run_tree 超时路径/s5_cabrief watchdog 线程）均无二次防线：
+    watchdog 线程内抛 TimeoutExpired=线程死且树不灭=整链挂死。
+    """
+    monkeypatch.setattr(procs.sys, "platform", "win32")
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="taskkill", timeout=30)
+
+    monkeypatch.setattr(procs.subprocess, "run", fake_run)
+    killed: list[bool] = []
+
+    class _Proc:
+        pid = 4242
+
+        def kill(self):
+            killed.append(True)
+
+    procs.kill_tree(_Proc())  # must not raise
+    assert killed == [True]  # 降级直杀实锤
+
+
+def test_run_tree_survived_kill_returns_honest_dict(monkeypatch):
+    """AU-1（R-AU）：树杀后管道仍不 EOF（幸存者持写端）→ 诚实 survived
+    dict 而非挂死/抛穿——"超时不抛"契约对幸存路径同样成立。"""
+
+    class _ZombiePopen:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="zombie", timeout=timeout)
+
+    monkeypatch.setattr(procs.subprocess, "Popen", _ZombiePopen)
+    monkeypatch.setattr(procs, "kill_tree", lambda proc: None)
+    rr = procs.run_tree(["zombie-cmd"], timeout=5)
+    assert rr["timed_out"] is True
+    assert rr["returncode"] == -1
+    assert "survived kill" in rr["stderr"]

@@ -50,7 +50,19 @@ def _run_one(repo: Path, command: str, timeout: int) -> dict:
         rc = proc.returncode
     except subprocess.TimeoutExpired:
         procs.kill_tree(proc)
-        out, err = proc.communicate()
+        try:
+            out, err = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            # AU-1（R-AU）同族：树杀后管道仍不 EOF=幸存者持写端。诚实返回
+            # survived 记录而非挂死整条 freeze 流。
+            return {
+                "command": command,
+                "rc": -1,
+                "duration_s": round(time.monotonic() - started, 3),
+                "timed_out": True,
+                "stdout_tail": "",
+                "stderr_tail": f"timeout after {timeout}s (process tree survived kill; output lost)"[-TAIL_BYTES:],
+            }
         timed_out = True
         rc = -1
         err = (err or "") + f"\ntimeout after {timeout}s (process tree killed)"

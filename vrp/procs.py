@@ -31,12 +31,21 @@ from pathlib import Path
 def kill_tree(proc: subprocess.Popen) -> None:
     """整树击杀：Windows taskkill /T /F；POSIX killpg 整进程组。"""
     if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-            capture_output=True,
-            timeout=30,  # 杀路径自身不可挂（R-Y）：AV/系统压力下 taskkill 迟滞
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=30,  # 杀路径自身不可挂（R-Y）：AV/系统压力下 taskkill 迟滞
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired:
+            # AU-1（R-AU）：taskkill 自身超时不可穿透调用方——run_tree 超时
+            # 路径、s5_cabrief watchdog 线程均无二次防线（watchdog 线程内抛=
+            # 线程死且树不灭=整链挂死）。降级直杀：至少直子死、主管道写端释放。
+            try:
+                proc.kill()
+            except OSError:
+                pass
     else:
         # child runs with start_new_session=True -> it is its own process
         # group leader; kill the whole group so grandchildren die too.
@@ -87,7 +96,18 @@ def run_tree(
         }
     except subprocess.TimeoutExpired:
         kill_tree(proc)
-        out, err = proc.communicate()
+        try:
+            out, err = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            # AU-1（R-AU）：树杀后 15s 管道仍不 EOF=有幸存者持写端（杀降级/
+            # 不可杀系统进程）。返回诚实 survived dict 而非挂死——"超时不抛"
+            # 契约对幸存路径同样成立。
+            return {
+                "returncode": -1,
+                "timed_out": True,
+                "stdout": "",
+                "stderr": f"timed out after {timeout}s (process tree survived kill; output lost)",
+            }
         return {
             "returncode": proc.returncode,
             "timed_out": True,

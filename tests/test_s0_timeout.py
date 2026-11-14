@@ -37,7 +37,7 @@ def test_run_pins_default_timeout(tmp_path, monkeypatch):
         return {"returncode": 0, "timed_out": False, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(s0.procs, "run_tree", fake_tree)
-    rc, _ = s0._run(["git", "rev-parse", "HEAD"], tmp_path)
+    rc, _, _ = s0._run(["git", "rev-parse", "HEAD"], tmp_path)
     assert rc == 0
     assert seen.get("timeout") == 120
 
@@ -63,3 +63,26 @@ def test_census_scc_timeout_returns_none(tmp_path, monkeypatch):
 
     monkeypatch.setattr(s0.procs, "run_tree", fake_tree)
     assert s0.census_scc(tmp_path) is None
+
+
+def test_git_snapshot_ignores_stderr_pollution(tmp_path, monkeypatch):
+    """AU-2（R-AU）：git rev-parse HEAD 歧义时 stderr 警告（rc 仍 0）不得
+    混入 head 提取——旧 _run 合并 stdout+stderr 使 facts.git_head 污染。"""
+    (tmp_path / ".git").mkdir()
+    head_hash = "deadbeef" * 5
+
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        if "--abbrev-ref" in cmd:
+            out, err = "main\n", "warning: reflog noise\n"
+        elif "status" in cmd:
+            out, err = "", "warning: worktree hint\n"
+        else:
+            out, err = head_hash + "\n", "warning: ignoring broken ref refs/heads/other\n"
+        return {"returncode": 0, "timed_out": False, "stdout": out, "stderr": err}
+
+    monkeypatch.setattr(s0.procs, "run_tree", fake_tree)
+    snap = s0.git_snapshot(tmp_path)
+    assert snap["head"] == head_hash  # 纯净：stderr 警告零混入
+    assert snap["branch"] == "main"
+    assert snap["dirty"] is False
+    assert snap["dirty_files"] == []

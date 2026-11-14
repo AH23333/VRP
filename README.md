@@ -15,7 +15,9 @@ S0 precheck ─→ S1 CBM 索引 ─→ S1.5 ETL(facts.db) ─→ xcheck 交叉�
                     ├─→ S3 校验器组（锚定/覆盖率/证据闸门）
                     ├─→ S4 freeze（基线快照 + 变更预筛）
                     ├─→ S5 dossier（五视图装配 + repomap + 任务型预算）
-                    └─→ S6 重构事务（G1-G5 闸门 + git 原子提交/回滚）
+                    ├─→ S6 重构事务（G1-G5 闸门 + git 原子提交/回滚）
+                    ├─→ S7 enforce（架构执法：21 引擎违例 → P9 findings）
+                    └─→ S8 report（archify 报告 + SARIF/Mermaid 降级链）
 ```
 
 核心产物：`<repo>/.vrp/facts.db`（规范化事实层 + 注解宿主）与 `dossier.json`（信息架构装配）；重构事务（T1 重命名/T2 删死码/T3 建调用方/T4 内容微调）在其上声明、验证、执行。
@@ -107,9 +109,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1344 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1347 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 2867 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 2870 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -118,7 +120,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 2867 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1344 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1347 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）
 
 ## 外部工具（可选，缺失则降级）
