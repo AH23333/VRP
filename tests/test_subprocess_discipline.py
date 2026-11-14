@@ -17,6 +17,10 @@ census（work/probe_ry_census.py → work/census_ry.txt）裁决的落地：
   自被分析仓的 package.json（运行仓库自定义命令=功能本体，注入面是
   特性内在）；树杀语义正确（shell pid 被 /T 与 killpg 覆盖）。
   守卫：shell=True 只允许出现在 vrp/s4_freeze.py。
+- R-AQ 守卫（84 族 21/21 清零后解锁）：subprocess.run 调用站点全库
+  只允许 vrp/procs.py（run_tree 树杀实现本体，含 kill_tree 的
+  taskkill timeout=30——Face B 守卫钉）。批历史：R-AL 2/R-AM 2/
+  R-AN 3/R-AO 5/R-AP 9 收编；新增裸站点=回归，必须走 procs.run_tree。
 """
 
 from __future__ import annotations
@@ -91,3 +95,19 @@ def test_shell_true_only_in_s4_freeze():
                 ):
                     violations.append(f"{py.name}:{node.lineno} shell=True outside s4_freeze")
     assert not violations, "shell=True outside the sanctioned site: " + "; ".join(violations)
+
+
+def test_run_call_sites_confined_to_procs():
+    """R-AQ 守卫：subprocess.run 调用站点全库只允许 vrp/procs.py。
+
+    84 族 21 站点已全收编 procs.run_tree（R-AL/R-AM/R-AN/R-AO/R-AP）；
+    procs.py 外任何新 subprocess.run 调用=裸站点回归（超时只杀直子/
+    TimeoutExpired 逃逸/孙持管道拖墙钟——批历史实证），必须走
+    procs.run_tree 或在本守卫前先过批 census 裁决。
+    """
+    violations: list[str] = []
+    for py in sorted(VRP.glob("*.py")):
+        for node in _iter_calls(py):
+            if _is_subprocess_call(node, "run") and py.name != "procs.py":
+                violations.append(f"{py.name}:{node.lineno} subprocess.run outside procs.py")
+    assert not violations, "bare subprocess.run regression (use procs.run_tree): " + "; ".join(violations)
