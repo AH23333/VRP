@@ -129,3 +129,16 @@ def test_parse_report_nondict_report_raises_valueerror(tmp_path):
     report.write_text(json.dumps(["x"]), encoding="utf-8")
     with pytest.raises(ValueError, match="not a JSON object"):
         parse_report(report)
+
+
+def test_parse_report_nested_shape_drift_raises_valueerror(tmp_path):
+    """AU-5（R-AU）：嵌套形状漂移（mutant 缺 location——find_stryker 可命中
+    未钉 PATH 版本）——与顶层非 dict 同语义 ValueError（R-AD 契约补全），
+    不裸抛 KeyError 击穿 guard 元组。"""
+    report = tmp_path / "stryker-report.json"
+    report.write_text(
+        json.dumps({"files": {"src/a.ts": {"mutants": [{"status": "Survived"}]}}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unexpected shape"):
+        parse_report(report)

@@ -90,26 +90,33 @@ def parse_outcomes(report: Path) -> tuple:
     records: list[dict] = []
     raw: Counter = Counter()
     baseline_ok = True
-    for outcome in data.get("outcomes", []):
-        scenario = outcome.get("scenario")
-        if not isinstance(scenario, dict):
-            # baseline row (scenario == "Baseline"): unmutated tree must pass,
-            # else every mutant result is void
-            if outcome.get("summary") != "Success":
-                baseline_ok = False
-            continue
-        mutant = scenario.get("Mutant")
-        if not mutant:
-            continue
-        summary = outcome.get("summary")
-        raw[summary] += 1
-        records.append(
-            {
-                "file": mutant["file"].replace("\\", "/"),
-                "line": mutant["span"]["start"]["line"],
-                "status": CARGO_MUTANTS_STATUS_MAP.get(summary, "untested"),
-            }
-        )
+    try:
+        for outcome in data.get("outcomes", []):
+            scenario = outcome.get("scenario")
+            if not isinstance(scenario, dict):
+                # baseline row (scenario == "Baseline"): unmutated tree must pass,
+                # else every mutant result is void
+                if outcome.get("summary") != "Success":
+                    baseline_ok = False
+                continue
+            mutant = scenario.get("Mutant")
+            if not mutant:
+                continue
+            summary = outcome.get("summary")
+            raw[summary] += 1
+            records.append(
+                {
+                    "file": mutant["file"].replace("\\", "/"),
+                    "line": mutant["span"]["start"]["line"],
+                    "status": CARGO_MUTANTS_STATUS_MAP.get(summary, "untested"),
+                }
+            )
+    except (AttributeError, KeyError, TypeError) as exc:
+        # AU-5（R-AU）：嵌套形状漂移（mutant 缺 span / outcomes 非 dict 行 /
+        # outcome 非 dict——find_cargo_mutants 可命中未钉 PATH 版本）——与顶层
+        # 非 dict 同语义的诚实 ValueError（R-AD 契约补全），不裸抛 KeyError/
+        # AttributeError 击穿 guard 元组
+        raise ValueError(f"cargo-mutants report has unexpected shape: {exc!r}") from exc
     return records, dict(raw), baseline_ok
 
 

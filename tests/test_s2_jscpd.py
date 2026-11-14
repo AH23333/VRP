@@ -149,6 +149,34 @@ def test_run_jscpd_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
     assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
 
 
+def test_run_jscpd_nondict_report_returns_none(tmp_path, monkeypatch):
+    """AU-5（R-AU）：报告合法 JSON 非 dict（上游形状漂移，find_jscpd 可命中
+    未钉 PATH 版本）——与 knip 同口径降级 None（scan 层 "failed"），
+    不裸抛 AttributeError 击穿 guard 元组。"""
+    import sys
+
+    from vrp.s2_jscpd import run_jscpd
+
+    fake = tmp_path / "fake_jscpd_list.py"
+    fake.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "out = args[args.index('--output') + 1]\n"
+        "Path(out, 'jscpd-report.json').write_text('[1, 2, 3]', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    if sys.platform == "win32":
+        exe = tmp_path / "fake_jscpd.cmd"
+        exe.write_text(f'@"{sys.executable}" "{fake}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "fake_jscpd.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+
+    assert run_jscpd(str(exe), tmp_path) is None
+
+
 def test_scan_writes_findings_and_ledger(facts_db, tmp_path, monkeypatch):
     clones = [
         {"first_file": "src/a.py", "first_line": 9, "first_end": 30, "second_file": "src/b.py",

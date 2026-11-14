@@ -169,6 +169,18 @@ def test_run_rule_valid_json_parses(repo, monkeypatch):
     assert run_rule("fake-bin", rule, repo) == [{"file": "src/a.ts"}]
 
 
+def test_run_rule_nonlist_json_raises_runtime_error(repo, monkeypatch):
+    """AU-5（R-AU）：rc=0 且合法 JSON 但非 list（上游形状漂移，PATH 未钉版本
+    可达）——与 non-JSON 同契约 RuntimeError，不裸抛 TypeError 击穿 guard 元组。"""
+    from vrp.s2_astgrep import run_rule
+
+    rr = {"returncode": 0, "timed_out": False, "stdout": '{"wrapped": true}', "stderr": ""}
+    monkeypatch.setattr("vrp.s2_astgrep.procs.run_tree", lambda *args, **kwargs: dict(rr))
+    rule = RULES_DIR / "py-bare-except.yml"
+    with pytest.raises(RuntimeError, match="non-list"):
+        run_rule("fake-bin", rule, repo)
+
+
 def test_run_rule_timeout_raises_runtime_error_tree_killed(repo, monkeypatch):
     """R-AM：ast-grep 超时（VRP_ASTGREP_BIN/which 可命中 npm .cmd 垫片→孙进程持管道，#84）——
     树杀后跟模块失败契约走 RuntimeError（TimeoutExpired 不逃逸穿 scan→cmd_s2 裸崩）。"""

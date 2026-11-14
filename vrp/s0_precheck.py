@@ -142,6 +142,10 @@ def census_scc(repo: Path) -> dict | None:
         data = json.loads(res["stdout"])
     except json.JSONDecodeError:
         return None
+    if not isinstance(data, list):
+        # AU-5（R-AU）：合法 JSON 非 list（scc 未钉 PATH 版本形状漂移）——同
+        # 降级 None 走 census_fallback，不裸抛 AttributeError 击穿 guard 元组
+        return None
     languages = []
     for lang in data:
         languages.append(

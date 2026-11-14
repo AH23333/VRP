@@ -96,6 +96,11 @@ def run_jscpd(bin_path: str, repo: Path) -> list[dict] | None:
             data = json.loads(report.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
+        if not isinstance(data, dict):
+            # AU-5（R-AU）：合法 JSON 非 dict（上游形状漂移，find_jscpd 可命中
+            # 未钉 PATH 版本）——与 knip 同口径 best-effort 降级 None → scan 层
+            # "failed"，不裸抛 AttributeError 击穿 guard 元组
+            return None
     return parse_clones(data, repo)
 
 

@@ -65,6 +65,18 @@ def test_census_scc_timeout_returns_none(tmp_path, monkeypatch):
     assert s0.census_scc(tmp_path) is None
 
 
+def test_census_scc_nondict_json_returns_none(tmp_path, monkeypatch):
+    """AU-5（R-AU）：scc 合法 JSON 非 list（未钉 PATH 版本形状漂移）——同降级
+    None 走 census_fallback，不裸抛 AttributeError 击穿 guard 元组。"""
+    monkeypatch.setattr(s0.shutil, "which", lambda name: "fake-scc")
+
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        return {"returncode": 0, "timed_out": False, "stdout": '{"languages": []}', "stderr": ""}
+
+    monkeypatch.setattr(s0.procs, "run_tree", fake_tree)
+    assert s0.census_scc(tmp_path) is None
+
+
 def test_git_snapshot_ignores_stderr_pollution(tmp_path, monkeypatch):
     """AU-2（R-AU）：git rev-parse HEAD 歧义时 stderr 警告（rc 仍 0）不得
     混入 head 提取——旧 _run 合并 stdout+stderr 使 facts.git_head 污染。"""

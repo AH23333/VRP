@@ -154,3 +154,16 @@ def test_parse_outcomes_nondict_report_raises_valueerror(tmp_path):
     report.write_text(json.dumps([{"scenario": "Baseline"}]), encoding="utf-8")
     with pytest.raises(ValueError, match="not a JSON object"):
         parse_outcomes(report)
+
+
+def test_parse_outcomes_nested_shape_drift_raises_valueerror(tmp_path):
+    """AU-5（R-AU）：嵌套形状漂移（mutant 缺 span——find_cargo_mutants 可命中
+    未钉 PATH 版本）——与顶层非 dict 同语义 ValueError（R-AD 契约补全），
+    不裸抛 KeyError 击穿 guard 元组。"""
+    report = tmp_path / "outcomes.json"
+    report.write_text(
+        json.dumps({"outcomes": [{"scenario": {"Mutant": {"file": "src/lib.rs"}}, "summary": "MissedMutant"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unexpected shape"):
+        parse_outcomes(report)

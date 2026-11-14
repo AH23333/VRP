@@ -118,17 +118,24 @@ def parse_report(report: Path) -> tuple:
         raise ValueError(f"stryker report is not a JSON object: {report}")
     records: list[dict] = []
     raw: Counter = Counter()
-    for file_rel, entry in data.get("files", {}).items():
-        for m in entry.get("mutants", []):
-            status = m.get("status")
-            raw[status] += 1
-            records.append(
-                {
-                    "file": file_rel.replace("\\", "/"),
-                    "line": m["location"]["start"]["line"],
-                    "status": STRYKER_STATUS_MAP.get(status, "untested"),
-                }
-            )
+    try:
+        for file_rel, entry in (data.get("files") or {}).items():
+            for m in entry.get("mutants", []):
+                status = m.get("status")
+                raw[status] += 1
+                records.append(
+                    {
+                        "file": file_rel.replace("\\", "/"),
+                        "line": m["location"]["start"]["line"],
+                        "status": STRYKER_STATUS_MAP.get(status, "untested"),
+                    }
+                )
+    except (AttributeError, KeyError, TypeError) as exc:
+        # AU-5（R-AU）：嵌套形状漂移（mutant 缺 location / files 为 null /
+        # entry 非 dict——find_stryker 可命中未钉 PATH 版本）——与顶层非 dict
+        # 同语义的诚实 ValueError（R-AD 契约补全），不裸抛 KeyError/
+        # AttributeError 击穿 guard 元组
+        raise ValueError(f"stryker report has unexpected shape: {exc!r}") from exc
     return records, dict(raw)
 
 

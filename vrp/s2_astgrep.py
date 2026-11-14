@@ -63,11 +63,17 @@ def run_rule(bin_path: str, rule_file: Path, scan_root: Path) -> list[dict]:
     if rr["returncode"] != 0:
         raise RuntimeError(f"ast-grep scan failed (rc={rr['returncode']}): {rr['stderr'][:500]}")
     try:
-        return json.loads(rr["stdout"])
+        matches = json.loads(rr["stdout"])
     except json.JSONDecodeError as exc:
         # rc == 0 with non-JSON stdout (warnings mixed in, truncated output) -
         # same failure surface as rc != 0, same RuntimeError contract
         raise RuntimeError(f"ast-grep scan produced non-JSON output (rc=0): {exc}") from exc
+    if not isinstance(matches, list):
+        # AU-5（R-AU）：合法 JSON 非 list（上游形状漂移，VRP_ASTGREP_BIN/
+        # which 可命中未钉 PATH 版本）——与 non-JSON 同失败契约 RuntimeError，
+        # 不裸抛 TypeError 击穿 guard 元组（MCP _guard 无 TypeError）
+        raise RuntimeError(f"ast-grep scan produced non-list JSON output (rc=0): {rr['stdout'][:200]!r}")
+    return matches
 
 
 def _anchor_symbol(con: sqlite3.Connection, rel_path: str, line: int) -> str | None:
