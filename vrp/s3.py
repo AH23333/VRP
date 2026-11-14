@@ -132,7 +132,10 @@ def coverage(con: sqlite3.Connection) -> dict:
         " WHERE label IN ('Function','Method','Class','Interface','Struct','Enum') AND file_path != ''"
     ).fetchone()[0]
     annotated = con.execute(
-        "SELECT COUNT(DISTINCT qualified_name) FROM annotations WHERE status IN (?, ?)",
+        "SELECT COUNT(DISTINCT a.qualified_name) FROM annotations a"
+        " WHERE a.status IN (?, ?)"
+        " AND a.qualified_name IN (SELECT qualified_name FROM symbols"
+        " WHERE label IN ('Function','Method','Class','Interface','Struct','Enum') AND file_path != '')",
         VALID_STATUSES,
     ).fetchone()[0]
     missing = [
@@ -212,7 +215,9 @@ def _gate_one(con: sqlite3.Connection, repo: Path, claim: dict) -> str | None:
         )
         return None if result.get("ok") else result.get("reason", "unknown")
     if kind == "finding":
-        file_path = claim.get("file_path", "")
+        # 归一为正斜杠（与 _repo_target/全库 file_path 纪律一致）：锚定是精确等值
+        # 匹配，反斜杠原值会静默锚空；落库形态也须与 symbols 同形
+        file_path = claim.get("file_path", "").replace("\\", "/")
         line = int(claim.get("line", 0))
         quote = str(claim.get("quote", ""))
         if not file_path:

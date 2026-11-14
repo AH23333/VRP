@@ -182,3 +182,39 @@ def test_gate_claims_isolates_malformed_claim(repo, con):
         (1, "claim-error"),
     ]
     assert con.execute("SELECT COUNT(*) FROM findings WHERE source = 'ai-gate'").fetchone()[0] == 1
+def test_gate_finding_backslash_path_anchors_and_normalizes(repo, con):
+    """R-AE：反斜杠 finding claim——验证（_repo_target 内部归一）与锚定/落库
+    （精确等值匹配）必须同用归一形：旧行为 anchor=None 静默锚空 +
+    findings.file_path 形态与全库正斜杠纪律分叉。"""
+    claims = [{"kind": "finding", "pathology": "P1", "file_path": "src\\m.py",
+               "line": 2, "quote": "return x * 2", "body": "b"}]
+    detail = s3.gate_claims(con, repo, claims)
+    assert detail == {"accepted": 1, "rejected": []}
+    fid, fp = con.execute(
+        "SELECT anchor_fid, file_path FROM findings WHERE source = 'ai-gate'"
+    ).fetchone()
+    assert fid == "f1"
+    assert fp == "src/m.py"
+
+
+def test_coverage_annotated_counts_only_denominator_symbols(repo, con):
+    """R-AE：coverage 分子必须限定分母集合（label 六类且 file_path 非空）——
+    旧行为把分母外 qn（如 Variable）的注解计入 annotated，
+    total=1/annotated=2/status=pass 而 missing 非空，pass 不可信。"""
+    for fid, qn in (("v1", "m.va"), ("v2", "m.vb")):
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            " VALUES (?,'proj',?,'Variable',?,'src/m.py',5,5,'')",
+            (fid, qn, qn.split(".")[-1]),
+        )
+    con.commit()
+    for qn in ("m.va", "m.vb"):
+        assert s3.add_annotation(con, repo, qn, 5, 5, "k", "b")["ok"]
+    cov = s3.coverage(con)
+    assert cov["total"] == 2
+    assert cov["annotated"] == 0
+    assert cov["missing_sample"] == ["m.go", "m.other"]
+    status = con.execute(
+        "SELECT status FROM gate_results WHERE gate='S3-coverage' ORDER BY id DESC"
+    ).fetchone()[0]
+    assert status == "info"
