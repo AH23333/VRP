@@ -1,5 +1,6 @@
 import json
-import subprocess
+import sys
+import time
 
 import pytest
 
@@ -11,6 +12,7 @@ from vrp.s2_p4 import (
     ledger_category,
     parse_vulture_line,
     run_knip,
+    run_vulture,
     scan,
 )
 
@@ -130,15 +132,10 @@ def test_has_py_detection(tmp_path):
 
 
 def test_run_knip_corrupt_json_returns_none(tmp_path, monkeypatch):
-    """R-E E2：knip stdout 损坏 JSON——None（失败信号）不裸崩。"""
-    from types import SimpleNamespace
-    from unittest import mock
-
-    from vrp.s2_p4 import run_knip
-
-    fake = SimpleNamespace(returncode=0, stdout="{broken json", stderr="")
-    with mock.patch("vrp.s2_p4.subprocess.run", return_value=fake):
-        assert run_knip("fake-bin", tmp_path) is None
+    """R-E E2：knip stdout 损坏 JSON——None（失败信号）不裸崩（R-AL 接缝移至 procs.run_tree）。"""
+    rr = {"returncode": 0, "timed_out": False, "stdout": "{broken json", "stderr": ""}
+    monkeypatch.setattr(s2_p4.procs, "run_tree", lambda *args, **kwargs: dict(rr))
+    assert run_knip("fake-bin", tmp_path) is None
 
 
 def test_scan_vulture_writes_findings_and_ledger(facts_db, tmp_path, monkeypatch):
@@ -169,9 +166,50 @@ def test_scan_vulture_writes_findings_and_ledger(facts_db, tmp_path, monkeypatch
     assert ledger_count == 2
 def test_run_knip_nondict_report_returns_none(tmp_path, monkeypatch):
     """R-AD：knip 输出合法 JSON 非 dict → 与不可解析同 best-effort 降级 None。"""
-
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout="[1, 2]", stderr="")
-
-    monkeypatch.setattr(s2_p4.subprocess, "run", fake_run)
+    rr = {"returncode": 0, "timed_out": False, "stdout": "[1, 2]", "stderr": ""}
+    monkeypatch.setattr(s2_p4.procs, "run_tree", lambda *args, **kwargs: dict(rr))
     assert run_knip("knip", tmp_path) is None
+
+
+def _fake_slow_tool(tmp_path, body_name):
+    """跨平台慢工具垫片（R-AI 范式）：win32 .cmd（cmd.exe 直子→python 孙，#84 形态）/ POSIX .sh。"""
+    slow = tmp_path / body_name
+    slow.write_text("import time\ntime.sleep(30)\nprint('{}')\n", encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / (body_name + ".cmd")
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / (body_name + ".sh")
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+    return exe
+
+
+def test_run_knip_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
+    """R-AL：knip 超时（Windows .cmd 垫片→孙进程持管道，#84）——树杀归 None
+    （scan 层 "failed" 诚实上报），TimeoutExpired 不逃逸（`vrp s2` 不裸崩中步）。"""
+    exe = _fake_slow_tool(tmp_path, "slow_knip.py")
+    orig_tree = s2_p4.procs.run_tree
+    monkeypatch.setattr(
+        s2_p4.procs,
+        "run_tree",
+        lambda cmd, cwd=None, timeout=None: orig_tree(cmd, cwd=cwd, timeout=2),
+    )
+    start = time.monotonic()
+    assert run_knip(str(exe), tmp_path) is None
+    assert time.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
+
+
+def test_run_vulture_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
+    """R-AL：vulture 超时同 run_knip——树杀归 None，无 TimeoutExpired 逃逸。"""
+    (tmp_path / "mod.py").write_text("x = 1\n", encoding="utf-8")  # _has_py gate
+    exe = _fake_slow_tool(tmp_path, "slow_vulture.py")
+    orig_tree = s2_p4.procs.run_tree
+    monkeypatch.setattr(
+        s2_p4.procs,
+        "run_tree",
+        lambda cmd, cwd=None, timeout=None: orig_tree(cmd, cwd=cwd, timeout=2),
+    )
+    start = time.monotonic()
+    assert run_vulture(str(exe), tmp_path) is None
+    assert time.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"

@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-import subprocess
 from pathlib import Path
 
-from . import s2_deadcode, testsig
+from . import procs, s2_deadcode, testsig
 from .s2_astgrep import _anchor_symbol
 
 LEDGER_CATEGORY = "p4-cross-check"
@@ -57,19 +56,14 @@ def find_vulture() -> str | None:
 
 
 def run_knip(bin_path: str, repo: Path) -> list[dict] | None:
-    proc = subprocess.run(
-        [bin_path, "--reporter", "json"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=600,
-    )
-    if proc.returncode not in (0, 2) or not proc.stdout.strip():
+    # R-AL: 树杀超时（procs.run_tree，#84 孙进程孤儿纪律——Windows knip 走 .cmd
+    # 垫片，超时只杀 cmd.exe 直子后 node 孙进程持管道孤儿，墙钟失守探针实证
+    # 30.06s>>2s）；超时同 rc/JSON 失败走 None → scan 层 "failed" 诚实上报
+    rr = procs.run_tree([bin_path, "--reporter", "json"], cwd=repo, timeout=600)
+    if rr["timed_out"] or rr["returncode"] not in (0, 2) or not rr["stdout"].strip():
         return None
     try:
-        data = json.loads(proc.stdout)
+        data = json.loads(rr["stdout"])
     except json.JSONDecodeError:
         return None
     if not isinstance(data, dict):
@@ -125,19 +119,16 @@ def _has_py(repo: Path) -> bool:
 def run_vulture(bin_path: str, repo: Path) -> list[dict] | None:
     if not _has_py(repo):
         return None
-    proc = subprocess.run(
+    # R-AL: 同 run_knip——树杀超时收编（#84 纪律），超时 → None → "failed" 诚实
+    rr = procs.run_tree(
         [bin_path, ".", "--min-confidence", "60"],
         cwd=repo,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=600,
     )
-    if proc.returncode not in (0, 1, 2, 3):
+    if rr["timed_out"] or rr["returncode"] not in (0, 1, 2, 3):
         return None
     rows = []
-    for raw in proc.stdout.splitlines():
+    for raw in rr["stdout"].splitlines():
         parsed = parse_vulture_line(raw)
         if parsed is not None:
             rows.append(parsed)
