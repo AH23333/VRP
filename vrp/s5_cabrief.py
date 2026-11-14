@@ -121,8 +121,14 @@ def call_code_atlas(repo: Path, tool: str, arguments: dict, timeout: int = 120) 
             proc.wait(timeout=10)
     if "error" in response:
         return {"status": "failed", "reason": str(response["error"])[:500]}
-    content = response.get("result", {}).get("content", [])
-    text = content[0].get("text", "") if content else ""
+    # AU-7（R-AU）：JSON-RPC result/content 嵌套形状漂移（result null 键在
+    # 值空、content 非 list、首成员非 dict——VRP_CODE_ATLAS_JS 覆盖可换任意
+    # 版本）统一降级 failed，不裸抛 AttributeError/TypeError 击穿 MCP _guard
+    # 捕获元组（AU-5 同族：外部工具响应形状漂移防御第六站）。
+    result = response.get("result")
+    content = result.get("content") if isinstance(result, dict) else None
+    first = content[0] if isinstance(content, list) and content else None
+    text = first.get("text", "") if isinstance(first, dict) else ""
     if not text:
         return {"status": "failed", "reason": f"empty {tool} content"}
     return {"status": "ok", "text": text, "chars": len(text)}

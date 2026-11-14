@@ -97,6 +97,51 @@ def test_call_code_atlas_watchdog_kills_tree_not_just_child(tmp_path, monkeypatc
     assert "timeout" in result["reason"]
 
 
+MALFORMED_RESULT_SERVER = """
+import json
+import sys
+
+malformed = json.loads('''__MALFORMED__''')
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        out = {"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": "2024-11-05", "capabilities": {}}}
+        print(json.dumps(out), flush=True)
+    elif msg.get("method") == "tools/call":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": malformed}), flush=True)
+"""
+
+
+@pytest.mark.parametrize(
+    "result_value",
+    [
+        None,  # AU-7 主形态：result 键在值空（JSON-RPC result: null）
+        {"content": "not-a-list"},  # content 非 list
+        {"content": [42]},  # 首成员非 dict
+    ],
+)
+def test_call_code_atlas_malformed_result_degrades_not_raises(tmp_path, monkeypatch, result_value):
+    """AU-7（R-AU）：tools/call 响应 result 嵌套形状漂移——旧代码
+    `response.get("result", {}).get("content", [])` 在 `result: null`（键在
+    值空，.get 默认值不生效）时 None.get 裸抛 AttributeError 击穿 MCP
+    _guard 捕获元组（AU-5 同族第六站：外部工具响应形状漂移防御；
+    VRP_CODE_ATLAS_JS 覆盖可换任意版本）。修后统一降级 failed
+    "empty {tool} content"。"""
+    script = tmp_path / "malformed_server.py"
+    script.write_text(
+        MALFORMED_RESULT_SERVER.replace("__MALFORMED__", json.dumps(result_value)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(s5_cabrief, "ca_js_path", lambda: script)
+    monkeypatch.setattr(s5_cabrief.shutil, "which", lambda name: sys.executable if name == "node" else None)
+    result = s5_cabrief.call_code_atlas(tmp_path, "repo_map", {}, timeout=10)
+    assert result == {"status": "failed", "reason": "empty repo_map content"}
+
+
 @pytest.mark.skipif(s5_cabrief.ca_js_path() is None, reason="code-atlas dist not installed")
 def test_repo_map_brief_real():
     repo = Path(__file__).parent.parent / "verify" / "code-atlas-lusiem"
