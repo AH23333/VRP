@@ -159,6 +159,14 @@ def _architecture_from_structure(con: sqlite3.Connection) -> dict:
         # 合法 JSON 非 dict（R-X 族）：与不可解析同降级目录聚合
         return _architecture_dir_fallback(con)
     modules_raw = payload.get("modules", [])
+    if not isinstance(modules_raw, list) or any(
+        not isinstance(mod, dict) or not isinstance(mod.get("symbol_fids", []), list)
+        for mod in modules_raw
+    ):
+        # 嵌套形状违背 curate 入库契约（modules 为对象数组、symbol_fids 为数组，
+        # 手改库/异源写入）：与不可解析/顶层非 dict 同降级目录聚合——
+        # 整份结构不可信不部分采信（R-X 族嵌套盲区收口）。
+        return _architecture_dir_fallback(con)
     layers = payload.get("layers", [])
     fid_to_mod: dict[str, str] = {}
     modules: list[dict] = []
@@ -413,8 +421,14 @@ def nav_slice(repo: Path, slice_id: str) -> dict:
             raise SystemExit(
                 f"nav_slice: corrupt slice payload for {slice_id} - re-run curation to rebuild it"
             )
+        steps_raw = payload.get("steps", [])
+        steps_iter = steps_raw if isinstance(steps_raw, list) else []
         steps: list[dict] = []
-        for i, step in enumerate(payload.get("steps", [])):
+        for i, step in enumerate(steps_iter):
+            if not isinstance(step, dict):
+                # 合法 JSON 但非 dict 的 step（手改库/异源写入）同列容错跳过，
+                # 与 _slices_of 的 isinstance(step, dict) 守卫同口径（R-X 族）。
+                continue
             fid = step.get("fid", "")
             sym = con.execute(
                 "SELECT qualified_name, name, file_path, start_line FROM symbols WHERE fid = ?",

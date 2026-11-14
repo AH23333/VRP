@@ -415,3 +415,79 @@ def test_nav_architecture_nondict_structure_fallback(tmp_path):
     con.close()
     arch = nav.nav_architecture(repo)
     assert arch["fallback"] == "dir-aggregation"
+
+
+def test_nav_architecture_nested_shape_violation_falls_back(tmp_path):
+    """R-AG D1：modules 内非 dict 项 / symbol_fids 非列表（手改库/异源写入，违背
+    curate 入库契约）→ 整体降级目录聚合，非裸 AttributeError 击穿 MCP _guard。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "fid-a", "pkg.a", "a", "pkg/a.py", 1)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO structure (payload_json, status) VALUES (?, 'active')",
+        (json.dumps({
+            "modules": [
+                {"module_id": "m1", "name": "甲", "responsibility": "r", "symbol_fids": ["fid-a"], "layer": "L"},
+                42,
+            ],
+            "layers": [{"name": "L", "may_depend_on": []}],
+        }),),
+    )
+    con.commit()
+    con.close()
+    arch = nav.nav_architecture(repo)
+    assert arch["fallback"] == "dir-aggregation"
+
+
+def test_nav_architecture_structure_symbol_fids_nonlist_falls_back(tmp_path):
+    """R-AG D1 变体：symbol_fids 为字符串（逐字符迭代污染 fid_to_mod）→ 整体降级。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "fid-a", "pkg.a", "a", "pkg/a.py", 1)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO structure (payload_json, status) VALUES (?, 'active')",
+        (json.dumps({
+            "modules": [
+                {"module_id": "m1", "name": "甲", "responsibility": "r", "symbol_fids": "fid-a", "layer": "L"},
+            ],
+            "layers": [{"name": "L", "may_depend_on": []}],
+        }),),
+    )
+    con.commit()
+    con.close()
+    arch = nav.nav_architecture(repo)
+    assert arch["fallback"] == "dir-aggregation"
+
+
+def test_nav_slice_nondict_step_skipped_good_steps_stay(tmp_path):
+    """R-AG D2：steps 内非 dict 项（手改库/异源写入）跳过（与 _slices_of
+    isinstance(step, dict) 同口径），好 step 不受累，非裸 AttributeError。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
+    _add_symbol(repo, "f2", "pkg.b.z", "z", "pkg/b.py", 1)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, status, payload_json) VALUES (?, 'n', 's', 'active', ?)",
+        ("flow-mixed", json.dumps({"steps": [{"fid": "f1"}, "not-a-dict", {"fid": "f2"}], "acts": []})),
+    )
+    con.commit()
+    con.close()
+    out = nav.nav_slice(repo, "flow-mixed")
+    assert [s["fid"] for s in out["steps"]] == ["f1", "f2"]
+    assert [s["step"] for s in out["steps"]] == [0, 2]
+    assert out["steps"][0]["qualified_name"] == "pkg.a.x"
+
+
+def test_nav_slice_steps_nonlist_treated_empty(tmp_path):
+    """R-AG D2 变体：steps 非 list（字符串逐字符迭代面）→ 空迭代不炸。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO slices (slice_id, name, summary, status, payload_json) VALUES (?, 'n', 's', 'active', ?)",
+        ("flow-strsteps", json.dumps({"steps": "f1", "acts": []})),
+    )
+    con.commit()
+    con.close()
+    out = nav.nav_slice(repo, "flow-strsteps")
+    assert out["steps"] == []
