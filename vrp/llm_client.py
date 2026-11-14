@@ -188,26 +188,36 @@ def chat(
     raise ValueError(f"llm request failed after {TRANSPORT_RETRIES + 1} attempts: {last}")
 
 
+def _bracket_json(text: str):
+    """整体括号提取（D8）：首 {/[ 到末 }/] 单跨度解析；失败返回 None。"""
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    if not starts:
+        return None
+    ends = [i for i in (text.rfind("}"), text.rfind("]")) if i >= 0]
+    if not ends:
+        return None
+    try:
+        return json.loads(text[min(starts) : max(ends) + 1])
+    except json.JSONDecodeError:
+        return None
+
+
 def extract_json(content: str):
     """响应剥离（D8）：markdown 围栏剥离 + 首 {/[ 到末 }/] 提取。
 
+    多围栏块按长度降序逐一尝试（长块优先）：LLM 夹带解释性代码块时最长块
+    常非 JSON，单发最长块会丢弃在场较短的有效 JSON 块、白耗一次验证重试
+    额度（R-AK）；围栏全败回退整体括号提取。
     失败抛 ValueError——调用方计一次尝试（等同拒收，消耗验证重试额度）。
     """
     text = content.strip()
     if "```" in text:
         blocks = re.findall(r"```[a-zA-Z0-9_-]*\n(.*?)```", text, re.DOTALL)
-        if blocks:
-            text = max(blocks, key=len).strip()
-    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
-    if not starts:
+        for block in sorted(blocks, key=len, reverse=True):
+            parsed = _bracket_json(block.strip())
+            if parsed is not None:
+                return parsed
+    parsed = _bracket_json(text)
+    if parsed is None:
         raise ValueError(f"no JSON object/array found in response: {content[:200]!r}")
-    ends = [i for i in (text.rfind("}"), text.rfind("]")) if i >= 0]
-    if not ends:
-        raise ValueError(f"no JSON object/array end found in response: {content[:200]!r}")
-    candidate = text[min(starts) : max(ends) + 1]
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"response JSON unparseable: {exc}; excerpt: {candidate[:200]!r}"
-        ) from exc
+    return parsed

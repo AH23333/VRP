@@ -291,6 +291,35 @@ def test_extract_json_invalid():
         extract_json("no json here at all")
 
 
+def test_extract_json_multiblock_shorter_json_recovered():
+    """R-AK：最长围栏块非 JSON（LLM 夹带解释代码块）时，较短有效 JSON 块须被采纳，
+    而非白耗一次验证重试额度（auto_curate MAX_ATTEMPTS 循环）。"""
+    content = (
+        "Here is the plan:\n"
+        "```bash\n"
+        "pip install vrp && vrp curate --run --verbose --dry-run --with-all-extras\n"
+        "```\n"
+        "The artifact:\n"
+        "```json\n"
+        '{"slices": [{"id": "calc-flow"}]}\n'
+        "```\n"
+    )
+    assert extract_json(content) == {"slices": [{"id": "calc-flow"}]}
+
+
+def test_extract_json_multiblock_longest_json_still_wins():
+    """R-AK 防倒退 pin：多块均含 JSON 时保持最长块优先的既有语义。"""
+    content = (
+        "```json\n"
+        '{"short": 1}\n'
+        "```\n"
+        "```json\n"
+        '{"longer": {"nested": [1, 2, 3]}, "pad": "xxxxxxxxxxxxxxxx"}\n'
+        "```\n"
+    )
+    assert extract_json(content) == {"longer": {"nested": [1, 2, 3]}, "pad": "xxxxxxxxxxxxxxxx"}
+
+
 # ---------- loop E2E (fake chat_fn) ----------
 
 def _fake_chat(responses):
