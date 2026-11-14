@@ -143,6 +143,7 @@ def render_repomap(con: sqlite3.Connection, char_budget: int = 4000) -> dict:
         lines.append(header)
         used += len(header) + 1
         files_included += 1
+        symbols_before = symbols_included
         for score, meta in by_file[file_path][:MAX_SYMBOLS_PER_FILE]:
             entry = f"  {meta['start_line']}-{meta['end_line']} {meta['name']}"
             if used + len(entry) + 1 > char_budget:
@@ -152,6 +153,13 @@ def render_repomap(con: sqlite3.Connection, char_budget: int = 4000) -> dict:
             used += len(entry) + 1
             symbols_included += 1
         if truncated:
+            if symbols_included == symbols_before:
+                # R-AJ: 预算在文件头后、首条目前耗尽——回滚裸 "path:" 行：
+                # 零符号文件头在 aider 树形图语义里读作"该文件无定义"（实为
+                # 预算耗尽），且 files_included 收据不得计入零符号文件
+                # （收据即内容红线，R-AD rejected=0 同族）。
+                lines.pop()
+                files_included -= 1
             break
     return {
         "map": "\n".join(lines),

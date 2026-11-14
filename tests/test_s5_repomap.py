@@ -69,3 +69,24 @@ def test_render_repomap_budget_truncates(con):
     result = s5_repomap.render_repomap(con, char_budget=15)
     assert result["truncated"] is True
     assert len(result["map"]) <= 15
+
+
+def test_render_repomap_budget_rollback_bare_header(con):
+    """R-AJ：预算恰在文件头后、首条目前耗尽 → 回滚裸 "path:" 行
+    （零符号文件头在 aider 树形图语义里读作"该文件无定义"，实为预算耗尽），
+    files_included 收据不计零符号文件（收据即内容红线）。"""
+    result = s5_repomap.render_repomap(con, char_budget=15)
+    assert result["truncated"] is True
+    assert result["map"] == ""
+    assert result["files_included"] == 0
+    assert result["symbols_included"] == 0
+
+
+def test_render_repomap_partial_file_keeps_header(con):
+    """R-AJ 防倒退 pin：文件部分渲染（≥1 条目已入列后预算耗尽）保留头——
+    部分文件是诚实截断，与裸头回滚语义分界清晰。"""
+    result = s5_repomap.render_repomap(con, char_budget=21)
+    assert result["truncated"] is True
+    assert result["map"] == "src/one.ts:\n  4-6 b"
+    assert result["files_included"] == 1
+    assert result["symbols_included"] == 1
