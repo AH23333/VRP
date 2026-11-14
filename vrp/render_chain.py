@@ -49,10 +49,10 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
 from . import dbpath
+from . import procs
 
 ARCHIFY_TIMEOUT = 300
 ARCHIFY_RENDER_TIMEOUT = 900
@@ -1639,9 +1639,12 @@ class SymbolIndex:
 # ---------------------------------------------------------------- archify 子进程
 
 
-def _archify_error_text(proc: subprocess.CompletedProcess, limit: int = 160) -> str:
-    """validate --json 的错误在 stdout JSON 的 error 字段（stderr 恒空）；两通道都兜。"""
-    out = (proc.stdout or "").strip()
+def _archify_error_text(res: dict, limit: int = 160) -> str:
+    """validate --json 的错误在 stdout JSON 的 error 字段（stderr 恒空）；两通道都兜。
+
+    R-AO：入参随 _render_diagram 收编 procs.run_tree 由 CompletedProcess 改 dict。
+    """
+    out = (res.get("stdout") or "").strip()
     if out:
         try:
             doc = json.loads(out)
@@ -1651,7 +1654,7 @@ def _archify_error_text(proc: subprocess.CompletedProcess, limit: int = 160) -> 
         except json.JSONDecodeError:
             pass
         return out[:limit]
-    return (proc.stderr or "").strip()[:limit]
+    return (res.get("stderr") or "").strip()[:limit]
 
 
 def _render_diagram(mjs: Path, mod_staging: Path, ir: dict,
@@ -1661,26 +1664,28 @@ def _render_diagram(mjs: Path, mod_staging: Path, ir: dict,
     ir_path = ir_dir / f"{name}.json"
     ir_path.write_text(json.dumps(ir, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     try:
-        proc = subprocess.run(
+        res = procs.run_tree(
             ["node", str(mjs), "validate", dtype, str(ir_path), "--json"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=ARCHIFY_TIMEOUT)
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except OSError as exc:
         return None, f"archify validate error: {exc}"
-    if proc.returncode != 0:
-        return None, (f"archify validate failed: {name} rc={proc.returncode}"
-                      f" {_archify_error_text(proc)}")
+    if res["timed_out"]:
+        return None, f"archify validate error: timed out after {ARCHIFY_TIMEOUT}s"
+    if res["returncode"] != 0:
+        return None, (f"archify validate failed: {name} rc={res['returncode']}"
+                      f" {_archify_error_text(res)}")
     out_html = mod_staging / f"{name}.html"
     try:
-        proc = subprocess.run(
+        res = procs.run_tree(
             ["node", str(mjs), "render", dtype, str(ir_path), str(out_html)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=ARCHIFY_RENDER_TIMEOUT)
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except OSError as exc:
         return None, f"archify render error: {exc}"
-    if proc.returncode != 0 or not out_html.is_file():
-        return None, (f"archify render failed: {name} rc={proc.returncode}"
-                      f" {proc.stderr.strip()[-160:]}")
+    if res["timed_out"]:
+        return None, f"archify render error: timed out after {ARCHIFY_RENDER_TIMEOUT}s"
+    if res["returncode"] != 0 or not out_html.is_file():
+        return None, (f"archify render failed: {name} rc={res['returncode']}"
+                      f" {res['stderr'].strip()[-160:]}")
     return out_html, None
 
 

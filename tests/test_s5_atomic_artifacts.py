@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
-import types
 from pathlib import Path
 
 import pytest
@@ -75,21 +74,23 @@ def test_dossier_ki_cleans_tmp_and_reraises(repo, facts, monkeypatch):
     assert _tmp_leftovers(out) == []
 
 
-def _fake_repomix(rc, payload=b"<xml>new</xml>", raise_exc=None):
-    def fake(cmd, **kwargs):
+def _fake_run_tree(rc, payload=b"<xml>new</xml>", timed_out=False):
+    """R-AO 接缝移至 procs.run_tree（dict 形状）：s5_rawpack.build_raw_pack 收编。"""
+
+    def fake(cmd, cwd=None, timeout=None, env=None):
+        if timed_out:
+            return {"returncode": -1, "timed_out": True, "stdout": "", "stderr": ""}
         out_arg = Path(cmd[5])
         if payload is not None:
             out_arg.write_bytes(payload)
-        if raise_exc is not None:
-            raise raise_exc
-        return types.SimpleNamespace(returncode=rc, stdout="", stderr="repomix blew up")
+        return {"returncode": rc, "timed_out": False, "stdout": "", "stderr": "repomix blew up"}
 
     return fake
 
 
 def test_rawpack_success_swaps_atomically(repo, monkeypatch):
     monkeypatch.setattr(s5_rawpack, "find_bin", lambda: Path("fake-repomix"))
-    monkeypatch.setattr(s5_rawpack.subprocess, "run", _fake_repomix(0))
+    monkeypatch.setattr(s5_rawpack.procs, "run_tree", _fake_run_tree(0))
     res = s5_rawpack.build_raw_pack(repo)
     out = repo / ".vrp" / s5_rawpack.OUTPUT_NAME
     assert res["status"] == "ok" and out.read_bytes() == b"<xml>new</xml>"
@@ -100,7 +101,7 @@ def test_rawpack_failure_keeps_old_artifact(repo, monkeypatch):
     out = repo / ".vrp" / s5_rawpack.OUTPUT_NAME
     out.write_bytes(b"<xml>OLD</xml>")
     monkeypatch.setattr(s5_rawpack, "find_bin", lambda: Path("fake-repomix"))
-    monkeypatch.setattr(s5_rawpack.subprocess, "run", _fake_repomix(1, payload=b"<xml>half"))
+    monkeypatch.setattr(s5_rawpack.procs, "run_tree", _fake_run_tree(1, payload=b"<xml>half"))
     res = s5_rawpack.build_raw_pack(repo)
     assert res["status"] == "failed"
     assert out.read_bytes() == b"<xml>OLD</xml>", "old artifact must not be truncated"
@@ -111,8 +112,7 @@ def test_rawpack_timeout_keeps_old_artifact(repo, monkeypatch):
     out = repo / ".vrp" / s5_rawpack.OUTPUT_NAME
     out.write_bytes(b"<xml>OLD</xml>")
     monkeypatch.setattr(s5_rawpack, "find_bin", lambda: Path("fake-repomix"))
-    boom = subprocess.TimeoutExpired(cmd=["fake"], timeout=600)
-    monkeypatch.setattr(s5_rawpack.subprocess, "run", _fake_repomix(0, payload=b"<xml>half", raise_exc=boom))
+    monkeypatch.setattr(s5_rawpack.procs, "run_tree", _fake_run_tree(0, payload=b"<xml>half", timed_out=True))
     with pytest.raises(subprocess.TimeoutExpired):
         s5_rawpack.build_raw_pack(repo)
     assert out.read_bytes() == b"<xml>OLD</xml>"

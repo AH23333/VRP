@@ -33,6 +33,35 @@ def test_excluded_path_segment_match():
         assert xcheck._excluded_path(path) is expected, path
 
 
+def test_index_timeout_tree_killed_failed(tmp_path, monkeypatch):
+    """R-AO：code-atlas index 超时树杀归诚实 failed dict——修前裸 subprocess.run，
+    TimeoutExpired 穿 index_with_code_atlas -> run_xcheck -> cli `vrp xcheck`
+    中步裸崩（逃逸面，探针 15.09s 实锤）。"""
+    import sys
+    import time
+
+    slow = tmp_path / "slow_node.py"
+    slow.write_text("import time\ntime.sleep(20)\nprint('ok')\n", encoding="utf-8")
+    if sys.platform == "win32":
+        shim = tmp_path / "fake_node.cmd"
+        shim.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        shim = tmp_path / "fake_node.sh"
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        shim.chmod(0o755)
+    fake_js = tmp_path / "index.js"
+    fake_js.write_text("// fake dist\n", encoding="utf-8")
+    monkeypatch.setattr(xcheck.shutil, "which", lambda name: str(shim))
+    monkeypatch.setattr(xcheck, "_ca_js_path", lambda: fake_js)
+
+    start = time.monotonic()
+    res = xcheck.index_with_code_atlas(tmp_path, timeout=2)
+    wall = time.monotonic() - start
+    assert res["status"] == "failed"
+    assert "timed out after 2s" in res["reason"]
+    assert wall < 15, f"tree-kill must return promptly, wall={wall:.1f}s (orphan-held pipe)"
+
+
 def _mk_ca_db(repo: Path, with_vendor: bool = True, with_minified: bool = False) -> None:
     ca_dir = repo / ".code-atlas"
     ca_dir.mkdir(parents=True, exist_ok=True)

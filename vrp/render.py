@@ -33,6 +33,7 @@ from pathlib import Path
 
 from . import render_chain
 from . import dbpath
+from . import procs
 from . import s6_transact
 
 REPORT_DIR = ".vrp/report"
@@ -490,12 +491,16 @@ def find_archify_mjs() -> Path | None:
     return None
 
 
-def _run_archify(mjs: Path, args: list[str], timeout: int = ARCHIFY_TIMEOUT) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        ["node", str(mjs), *args],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-    )
-    return proc.returncode, proc.stdout, proc.stderr
+def _run_archify(mjs: Path, args: list[str], timeout: int = ARCHIFY_TIMEOUT) -> tuple[int | None, str, str]:
+    """archify 子进程：超时树杀不抛（rc=None → 调用方 rc!=0 降级路径，诚实注记）。
+
+    node 直子在 Windows job object 下孙随父死，但 POSIX 无 job——
+    archify.mjs spawn 的孙进程持管道（#84），run_tree 杀整树即返。
+    """
+    res = procs.run_tree(["node", str(mjs), *args], timeout=timeout)
+    if res["timed_out"]:
+        return None, res["stdout"], f"archify timed out after {timeout}s"
+    return res["returncode"], res["stdout"], res["stderr"]
 
 
 def _archify_error_text(stdout: str, stderr: str, limit: int = 120) -> str:

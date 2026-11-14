@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from . import procs
+
 OUTPUT_NAME = "repomix-output.xml"
 IGNORE_PATTERNS = ".vrp,.codebase-memory,.code-atlas"
 
@@ -39,7 +41,7 @@ def build_raw_pack(repo: Path, timeout: int = 600) -> dict:
     tmp = out.with_name(f"{out.name}.tmp-{os.getpid()}")
     tmp.unlink(missing_ok=True)
     try:
-        proc = subprocess.run(
+        res = procs.run_tree(
             [
                 str(bin_path),
                 str(repo),
@@ -51,18 +53,19 @@ def build_raw_pack(repo: Path, timeout: int = 600) -> dict:
                 IGNORE_PATTERNS,
                 "--quiet",
             ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=timeout,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except OSError:
         tmp.unlink(missing_ok=True)
         raise
-    if proc.returncode != 0 or not tmp.is_file():
+    if res["timed_out"]:
+        # raise 契约保留（s5_dossier 捕获降级；test_s5_atomic 钉）——树杀即抛，
+        # 不再等 repomix.cmd->cmd.exe->node 孤儿自行退出（#84）。
         tmp.unlink(missing_ok=True)
-        return {"status": "failed", "reason": (proc.stderr or proc.stdout)[-500:]}
+        raise subprocess.TimeoutExpired(str(bin_path), timeout)
+    if res["returncode"] != 0 or not tmp.is_file():
+        tmp.unlink(missing_ok=True)
+        return {"status": "failed", "reason": (res["stderr"] or res["stdout"])[-500:]}
     os.replace(tmp, out)
     data = out.read_bytes()
     return {

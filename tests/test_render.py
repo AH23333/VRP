@@ -1204,12 +1204,76 @@ def test_archify_error_text_empty_both():
 
 
 def test_render_chain_error_text_uses_stdout_json():
-    """render_chain._archify_error_text 与 render 同语义（proc 对象输入）。"""
-    proc = subprocess.CompletedProcess(["node"], 1, stdout=json.dumps({"ok": False, "error": "boom detail"}),
-                                       stderr="")
-    assert render_chain._archify_error_text(proc) == "boom detail"
-    proc2 = subprocess.CompletedProcess(["node"], 1, stdout="", stderr="plain err")
-    assert render_chain._archify_error_text(proc2) == "plain err"
+    """render_chain._archify_error_text 与 render 同语义（R-AO：随 _render_diagram
+    收编 procs.run_tree，入参由 CompletedProcess 改 dict 形状）。"""
+    res = {"returncode": 1, "timed_out": False,
+           "stdout": json.dumps({"ok": False, "error": "boom detail"}), "stderr": ""}
+    assert render_chain._archify_error_text(res) == "boom detail"
+    res2 = {"returncode": 1, "timed_out": False, "stdout": "", "stderr": "plain err"}
+    assert render_chain._archify_error_text(res2) == "plain err"
+
+
+def _mk_slow_archify_mjs(tmp_path: Path) -> Path:
+    """node 慢垫片：spawn 孙 python（继承 stdio，20s）+ node 自身存活 20s——
+    archify.mjs spawn 子进程的同型形态（vendor 源码 child_process 实锤）。"""
+    import sys
+
+    slow_mjs = tmp_path / "slow_archify.mjs"
+    slow_mjs.write_text(
+        "import { spawn } from 'node:child_process';\n"
+        "spawn(process.env.VRP_TEST_PY, ['-c', 'import time; time.sleep(20)'],"
+        " { stdio: ['ignore', 'inherit', 'inherit'] });\n"
+        "setTimeout(() => {}, 20000);\n",
+        encoding="utf-8",
+    )
+    assert sys.executable
+    return slow_mjs
+
+
+def test_run_archify_timeout_tree_killed(tmp_path, monkeypatch):
+    """R-AO：archify 超时树杀——修前 _run_archify 裸 subprocess.run，TimeoutExpired
+    从 helper 逃（POSIX 下 archify.mjs spawn 的孙进程持管道延迟交付，#84；Windows
+    node job object 孙随父死仅逃逸面）。收编后 rc=None → 调用方 rc!=0 降级路径，
+    诚实注记即返（探针 post-fix 2.76s vs 2s 预算）。"""
+    import sys
+    import time
+
+    if shutil.which("node") is None:
+        pytest.skip("node not found")
+    monkeypatch.setenv("VRP_TEST_PY", sys.executable)
+    slow_mjs = _mk_slow_archify_mjs(tmp_path)
+    start = time.monotonic()
+    rc, out, err = render._run_archify(
+        slow_mjs, ["validate", "dataflow", str(tmp_path / "ir.json"), "--json"], timeout=2
+    )
+    wall = time.monotonic() - start
+    assert rc is None
+    assert "archify timed out after 2s" in err
+    assert wall < 15, f"tree-kill must return promptly, wall={wall:.1f}s (orphan-held pipe)"
+
+
+def test_render_diagram_timeout_tree_killed(tmp_path, monkeypatch):
+    """R-AO：render_chain._render_diagram 超时树杀——修前模块内捕 TimeoutExpired
+    返回 'Command ... timed out after 2 seconds'（POSIX 孙持管道延迟交付，#84）；
+    收编后 'timed out after Ns' 树杀即返（探针 post-fix 2.42s vs 2s 预算）。"""
+    import sys
+    import time
+
+    if shutil.which("node") is None:
+        pytest.skip("node not found")
+    monkeypatch.setenv("VRP_TEST_PY", sys.executable)
+    slow_mjs = _mk_slow_archify_mjs(tmp_path)
+    monkeypatch.setattr(render_chain, "ARCHIFY_TIMEOUT", 2)
+    staging = tmp_path / "staging"
+    (staging / "ir").mkdir(parents=True)
+    start = time.monotonic()
+    html, err = render_chain._render_diagram(
+        slow_mjs, staging, {"diagram_type": "dataflow"}, "probe", "dataflow"
+    )
+    wall = time.monotonic() - start
+    assert html is None
+    assert "timed out after 2s" in err, err
+    assert wall < 15, f"tree-kill must return promptly, wall={wall:.1f}s (orphan-held pipe)"
 
 
 # ------------------------------------------- _arch_id Unicode 守卫（R-H #79）

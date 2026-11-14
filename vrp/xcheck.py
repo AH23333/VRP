@@ -6,11 +6,11 @@ import json
 import os
 import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
 
 from . import etl as etl_mod
 from . import dbpath
+from . import procs
 from . import testsig
 
 BUILTINISH = frozenset(
@@ -81,17 +81,17 @@ def index_with_code_atlas(repo: Path, reindex: bool = False, timeout: int = 900)
     db = repo / ".code-atlas" / "index.db"
     js = _ca_js_path()
     if js is not None:
-        proc = subprocess.run(
+        res = procs.run_tree(
             [node, str(js), "index", "--root", str(repo)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=timeout,
         )
-        if proc.returncode != 0 or not db.exists():
-            return {"status": "failed", "reason": (proc.stderr or proc.stdout)[-500:]}
-        return {"status": "indexed", "db": str(db), "output": proc.stdout.strip()}
+        if res["timed_out"]:
+            # 超时树杀归诚实 failed（run_xcheck -> "ca index not fresh"）——
+            # 修前裸 TimeoutExpired 穿 run_xcheck -> cli `vrp xcheck` 中步裸崩。
+            return {"status": "failed", "reason": f"code-atlas index timed out after {timeout}s"}
+        if res["returncode"] != 0 or not db.exists():
+            return {"status": "failed", "reason": (res["stderr"] or res["stdout"])[-500:]}
+        return {"status": "indexed", "db": str(db), "output": res["stdout"].strip()}
     return {"status": "skipped", "reason": "code-atlas dist not found (set VRP_CODE_ATLAS_JS)"}
 
 

@@ -38,3 +38,31 @@ def test_build_raw_pack_real(tmp_path):
     assert "db-bytes" not in text
     assert result["bytes"] > 0
     assert len(result["sha256"]) == 16
+
+
+def test_build_raw_pack_timeout_tree_killed(tmp_path, monkeypatch):
+    """R-AO：repomix 超时树杀即抛 TimeoutExpired（raise 契约保留——s5_dossier 捕获
+    降级、test_s5_atomic 钉；MCP dossier 工具直调链活面）。修前只杀 .cmd 直子
+    cmd.exe，node 孙进程持管道，异常延迟到孤儿退出才交付（探针 15.07s vs 2s
+    预算的 7.5× 超支）。"""
+    import subprocess
+    import sys
+    import time
+
+    slow = tmp_path / "slow_repomix.py"
+    slow.write_text("import time\ntime.sleep(20)\nprint('ok')\n", encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / "fake_repomix.cmd"
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "fake_repomix.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+    monkeypatch.setenv("VRP_REPOMIX_BIN", str(exe))
+
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        s5_rawpack.build_raw_pack(tmp_path, timeout=2)
+    wall = time.monotonic() - start
+    assert wall < 15, f"tree-kill must raise promptly, wall={wall:.1f}s (orphan-held pipe)"
+    assert not list((tmp_path / ".vrp").glob("*.tmp-*")), "timed-out run must leave no temp residue"
