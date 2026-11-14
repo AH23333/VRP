@@ -51,19 +51,22 @@ def _dumps(payload) -> str:
 
 
 def _guard(fn):
-    """nav/s6/curate 层 SystemExit/ValueError/RuntimeError/sqlite3.Error -> {"error": ...}，不炸 server。
+    """nav/s6/curate 层 SystemExit/ValueError/RuntimeError/OSError/sqlite3.Error -> {"error": ...}，不炸 server。
 
     functools.wraps 保住原函数签名（inspect.signature 跟 __wrapped__），
     否则 schema 提取器看到 (*args, **kwargs) 会生成 args/kwargs 两个参数。
     RuntimeError 含 M4 freshness 硬拒（etl.check_facts_freshness）；
-    sqlite3.Error 含损坏/异构 facts.db 的 DatabaseError/OperationalError。
+    sqlite3.Error 含损坏/异构 facts.db 的 DatabaseError/OperationalError；
+    OSError 含环境失败族（find_cbm 缺 cbm 的 FileNotFoundError/
+    Popen 坏 exe WinError 193/文件锁 PermissionError）——run_tree 按
+    设计传播 Popen OSError，长驻 server 边界诚实降级（R-AR）。
     """
 
     @functools.wraps(fn)
     def wrapped(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except (SystemExit, ValueError, RuntimeError, sqlite3.Error) as exc:
+        except (SystemExit, ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
             return _dumps({"error": str(exc) or exc.__class__.__name__})
 
     return wrapped

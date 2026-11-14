@@ -253,6 +253,29 @@ def test_build_dossier_arch_failure_degrades(tmp_path, con, monkeypatch):
     assert dossier["views"]["repomap"]["files_included"] >= 1
 
 
+def test_build_dossier_arch_cbm_missing_degrades(tmp_path, con, monkeypatch):
+    """R-AR：find_cbm 缺 cbm raise FileNotFoundError——v6 降级契约洞（修前
+    arch 段只捕 RuntimeError，FileNotFoundError 穿 build_dossier → MCP
+    _guard 元组无 OSError 族 → 炸 server）。环境级模拟（cbm 不在 PATH/
+    默认安装位），走真实链 get_architecture→run_cli→find_cbm raise。"""
+    facts_db = _dump_facts(tmp_path, con)
+    monkeypatch.setattr("vrp.s1_cbm.DEFAULT_INSTALL", tmp_path / "missing-cbm.exe")
+    monkeypatch.setattr("vrp.s1_cbm.shutil.which", lambda name: None)
+    monkeypatch.setattr(
+        "vrp.s5_dossier.s5_cabrief.repo_map_brief",
+        lambda repo, max_tokens=4000, timeout=120: {"status": "skipped", "reason": "not under test"},
+    )
+    monkeypatch.setattr(
+        "vrp.s5_dossier.s5_rawpack.build_raw_pack",
+        lambda repo, timeout=600: {"status": "skipped", "reason": "not under test"},
+    )
+    dossier = s5_dossier.build_dossier(tmp_path, facts_db, "p", skip_external=False)
+    arch = dossier["views"]["architecture"]
+    assert arch["status"] == "failed"
+    assert "codebase-memory-mcp" in arch["reason"]
+    assert dossier["views"]["sql_views"]["hotspots"][0]["qualified_name"] == "mod.a"
+
+
 def test_build_dossier_raw_pack_timeout_degrades(tmp_path, con, monkeypatch):
     """repomix TimeoutExpired re-raised by s5_rawpack must not kill the dossier."""
     facts_db = _dump_facts(tmp_path, con)

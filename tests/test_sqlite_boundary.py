@@ -53,6 +53,20 @@ def test_mcp_guard_wraps_sqlite_errors():
     assert "no such table" in out["error"]
 
 
+def test_mcp_guard_wraps_os_errors():
+    """R-AR：_guard 捕 OSError 族（FileNotFoundError 活面：dossier→
+    get_architecture→run_cli→find_cbm 缺 cbm 的设计内 raise）→
+    {"error": ...} JSON，长驻 server 不炸。"""
+
+    def _boom(*args, **kwargs):
+        raise FileNotFoundError("codebase-memory-mcp binary not found")
+
+    wrapped = mcp_server._guard(_boom)
+    out = json.loads(wrapped())
+    assert "error" in out
+    assert "binary not found" in out["error"]
+
+
 def _except_tuple_names(fn_name: str, path: Path, inner: str | None = None) -> set[str]:
     """提取指定函数（可选内层函数）try 块 except 元组的异常全名字符串集合。"""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -81,3 +95,13 @@ def test_sqlite_error_in_boundary_catch_tuples():
     assert "sqlite3.Error" in cli_names, f"cli.main 边界元组缺 sqlite3.Error: {sorted(cli_names)}"
     guard_names = _except_tuple_names("_guard", VRP_DIR / "mcp_server.py", inner="wrapped")
     assert "sqlite3.Error" in guard_names, f"mcp _guard 边界元组缺 sqlite3.Error: {sorted(guard_names)}"
+
+
+def test_os_error_in_boundary_catch_tuples():
+    """R-AR AST 守卫：cli.main 与 mcp_server._guard 两处边界元组必含 OSError
+    （环境失败族：find_cbm FileNotFoundError/Popen 坏 exe/文件锁
+    PermissionError），防漂移。"""
+    cli_names = _except_tuple_names("main", VRP_DIR / "cli.py")
+    assert "OSError" in cli_names, f"cli.main 边界元组缺 OSError: {sorted(cli_names)}"
+    guard_names = _except_tuple_names("_guard", VRP_DIR / "mcp_server.py", inner="wrapped")
+    assert "OSError" in guard_names, f"mcp _guard 边界元组缺 OSError: {sorted(guard_names)}"

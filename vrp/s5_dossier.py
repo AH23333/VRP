@@ -356,9 +356,12 @@ def build_dossier(
         arch_payload = {"status": "skipped", "reason": "external calls disabled"}
     else:
         # v6 degradation contract: CBM failure downgrades this section only.
+        # FileNotFoundError（find_cbm 缺 cbm 的设计内 raise）同属 CBM
+        # failure——R-AR 前只捕 RuntimeError，缺 cbm 穿降级契约直炸
+        # MCP server（_guard 元组无 OSError 族）。
         try:
             arch_payload = get_architecture(name)
-        except RuntimeError as exc:
+        except (RuntimeError, FileNotFoundError) as exc:
             arch_payload = {"status": "failed", "reason": str(exc)[:500]}
     if skip_external:
         brief_payload = {"status": "skipped", "reason": "external calls disabled"}

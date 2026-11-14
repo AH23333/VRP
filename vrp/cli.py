@@ -727,7 +727,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         RuntimeError,
         ValueError,
-        FileNotFoundError,
+        OSError,
         subprocess.TimeoutExpired,
         sqlite3.Error,
     ) as exc:
