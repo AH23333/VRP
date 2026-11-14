@@ -397,6 +397,29 @@ def test_run_go_timeout(tmp_path, monkeypatch):
     assert "9s" in out["reason"]
 
 
+def test_execute_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
+    """R-AN：go list 超时（go 直子被杀后编译工具链孙进程持管道，#84；MCP enforce
+    工具直调链活面）——树杀归 (None,None,None)，墙钟即返
+    （探针 pre-fix 15.1s vs 2s 预算的 7.5× 超支消除）。"""
+    import sys
+    import time as time_mod
+
+    slow = tmp_path / "slow_go.py"
+    slow.write_text("import time\ntime.sleep(30)\nprint('ok')\n", encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / "fake_go.cmd"
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "fake_go.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+
+    monkeypatch.setattr(s7_enforce_go, "find_go", lambda: str(exe))
+    start = time_mod.monotonic()
+    assert s7_enforce_go._execute(tmp_path, 2) == (None, None, None)
+    assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
+
+
 def test_run_go_enforcer_failed_keeps_findings(tmp_path, monkeypatch):
     repo = _mk_go_repo(tmp_path)
     con = _con(repo)

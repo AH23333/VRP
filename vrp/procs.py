@@ -46,8 +46,16 @@ def kill_tree(proc: subprocess.Popen) -> None:
             pass
 
 
-def run_tree(cmd: list[str], cwd: Path | str | None = None, timeout: int | None = None) -> dict:
+def run_tree(
+    cmd: list[str],
+    cwd: Path | str | None = None,
+    timeout: int | None = None,
+    env: dict | None = None,
+) -> dict:
     """subprocess.run 替身：超时杀整树而非只杀直子。
+
+    env=None 继承父进程环境；显式 env 透传子进程（R-AN：s7_enforce._execute
+    钉 PYTHONUTF8/COLUMNS 的共享层入口，#89 修在共享层不留本地副本）。
 
     返回 dict（超时不抛异常）：
     - returncode: 进程退出码；超时树杀后为被杀码（Windows taskkill /F 为 -1）
@@ -66,6 +74,7 @@ def run_tree(cmd: list[str], cwd: Path | str | None = None, timeout: int | None 
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
         **kwargs,
     )
     try:

@@ -43,9 +43,9 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
 
+from . import procs
 from .s7_enforce import (
     DEFAULT_TIMEOUT,
     FINDINGS_SOURCE,
@@ -157,23 +157,21 @@ def _module_path(repo: Path) -> str | None:
 
 
 def _execute(repo: Path, timeout: int):
-    """go list 子进程（可测缝）：返回 (rc, stdout, stderr) 或 None=超时。"""
+    """go list 子进程（可测缝）：返回 (rc, stdout, stderr) 或 None=超时。
+
+    R-AN: 树杀超时（procs.run_tree，#84）——go list 触发编译工具链子进程，
+    裸 run 超时只杀 go 直子，工具链孙进程孤儿持管道（探针 15.1s vs 2s 预算）。
+    """
     go = find_go()
     if not go:
         return None, None, None  # 调用方先行检查 find_go，此返回仅防御
     try:
-        proc = subprocess.run(
-            [go, "list", "-e", "-json", "./..."],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError):
+        rr = procs.run_tree([go, "list", "-e", "-json", "./..."], cwd=repo, timeout=timeout)
+    except OSError:
         return None, None, None
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    if rr["timed_out"]:
+        return None, None, None
+    return rr["returncode"], rr["stdout"] or "", rr["stderr"] or ""
 
 
 def _parse_json_stream(text: str) -> list[dict]:

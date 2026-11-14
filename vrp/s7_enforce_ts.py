@@ -29,9 +29,9 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
 
+from . import procs
 from .s7_enforce import (
     DEFAULT_TIMEOUT,
     FINDINGS_SOURCE,
@@ -128,23 +128,18 @@ def _execute(bin_path: Path, repo: Path, config: str, targets: list[str], timeou
     """depcruise 子进程（可测缝）：返回 (rc, stdout, stderr) 或 None=超时。
 
     Windows .cmd shim 须 cmd /c 包装；posix shim 直调。
+
+    R-AN: 树杀超时（procs.run_tree，#84）——cmd /c 包装使 cmd.exe 成直子、
+    node 成孙：裸 run 超时只杀 cmd.exe，node 孤儿持管道 → None 只在 node
+    自行退出后到达（MCP enforce 工具预算外挂起，探针 15.1s vs 2s 预算）。
     """
     argv = [str(bin_path), *targets, f"--config={config}", "--output-type=json"]
     if bin_path.suffix.lower() == ".cmd":
         argv = ["cmd", "/c", *argv]
-    try:
-        proc = subprocess.run(
-            argv,
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
+    rr = procs.run_tree(argv, cwd=repo, timeout=timeout)
+    if rr["timed_out"]:
         return None
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    return rr["returncode"], rr["stdout"] or "", rr["stderr"] or ""
 
 
 def parse_violations(stdout: str) -> tuple[list[dict], dict]:

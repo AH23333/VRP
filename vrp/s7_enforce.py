@@ -66,10 +66,10 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
 
 from . import curate as curate_mod
+from . import procs
 
 CONF_NAME = ".vrp/importlinter.ini"
 FINDINGS_SOURCE = "s7-enforce"
@@ -388,21 +388,21 @@ def _execute(bin_path: str, repo: Path, config: Path, timeout: int):
     实证），长点分名把 "X is not allowed to import Y:" 折成两行 → parse_broken
     全部漏解析 → broken 契约 0 违例 0 入 P9。os.get_terminal_size 优先读
     COLUMNS，钉大值即不折行。
+
+    R-AN: 树杀超时（procs.run_tree env 透传，#84）——MCP enforce 工具
+    （mcp_server.py）直调 run→_execute：裸 run 超时只杀 console-script
+    启动器直子，python 孙进程持管道孤儿 → None 只在孤儿自行退出后到达
+    （MCP 工具预算外挂起，探针 15.1s vs 2s 预算实证）。
     """
-    try:
-        proc = subprocess.run(
-            [bin_path, f"--config={config}", "--no-cache", "--no-logo"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            env={**os.environ, "PYTHONUTF8": "1", "COLUMNS": "100000"},
-        )
-    except subprocess.TimeoutExpired:
+    rr = procs.run_tree(
+        [bin_path, f"--config={config}", "--no-cache", "--no-logo"],
+        cwd=repo,
+        timeout=timeout,
+        env={**os.environ, "PYTHONUTF8": "1", "COLUMNS": "100000"},
+    )
+    if rr["timed_out"]:
         return None
-    return proc.returncode, proc.stdout or ""
+    return rr["returncode"], rr["stdout"] or ""
 
 
 def _anchor_for(con: sqlite3.Connection, file_path: str | None, line: int) -> str | None:

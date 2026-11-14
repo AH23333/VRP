@@ -281,6 +281,28 @@ def test_run_ts_timeout(tmp_path, monkeypatch):
     assert not (repo / ".vrp" / "dependency-cruiser.cjs").exists()
 
 
+def test_execute_timeout_tree_killed_returns_none(tmp_path):
+    """R-AN：depcruise 超时（Windows .cmd 垫片经 cmd /c 包装→cmd.exe 直子→node 孙进程
+    持管道，#84；MCP enforce 工具直调链活面）——树杀归 None，墙钟即返
+    （探针 pre-fix 15.1s vs 2s 预算的 7.5× 超支消除）。"""
+    import sys
+    import time as time_mod
+
+    slow = tmp_path / "slow_depcruise.py"
+    slow.write_text("import time\ntime.sleep(30)\nprint('ok')\n", encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / "fake_depcruise.cmd"
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "fake_depcruise.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+
+    start = time_mod.monotonic()
+    assert s7_enforce_ts._execute(exe, tmp_path, "cfg.cjs", ["src"], 2) is None
+    assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
+
+
 def test_run_ts_not_found(tmp_path, monkeypatch):
     repo = _mk_repo(tmp_path)
     monkeypatch.setattr(s7_enforce_ts, "find_depcruise", lambda: None)

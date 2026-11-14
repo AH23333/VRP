@@ -719,25 +719,43 @@ def test_run_timeout(tmp_path, monkeypatch):
 def test_execute_pins_pythonutf8_for_child(tmp_path, monkeypatch):
     """R6' agent 长跑实证（vrp 自仓）：中文 Windows 下 lint-imports 以 locale
     编码（GBK）读 UTF-8 的 importlinter.ini（契约名含中文）→ UnicodeDecodeError
-    rc=1 且无 broken 块。child env 必须钉 PYTHONUTF8=1。"""
+    rc=1 且无 broken 块。child env 必须钉 PYTHONUTF8=1。
+    R-AN 接缝移至 procs.run_tree（env 透传，dict 形状）。"""
     captured = {}
 
-    class FakeProc:
-        returncode = 0
-        stdout = "Contracts: 1 kept, 0 broken.\n"
-        stderr = ""
+    def fake_tree(cmd, cwd=None, timeout=None, env=None):
+        captured.update({"cmd": cmd, "env": env})
+        return {"returncode": 0, "timed_out": False, "stdout": "Contracts: 1 kept, 0 broken.\n", "stderr": ""}
 
-    def fake_run(args, **kwargs):
-        captured.update(kwargs)
-        return FakeProc()
-
-    monkeypatch.setattr(s7_enforce.subprocess, "run", fake_run)
+    monkeypatch.setattr(s7_enforce.procs, "run_tree", fake_tree)
     rc, out = s7_enforce._execute("lint-imports", tmp_path, tmp_path / "importlinter.ini", 60)
     assert rc == 0
     assert "kept" in out
     assert captured["env"]["PYTHONUTF8"] == "1"
     # tsa 冒烟实证：click 非 tty 下 80 列折行 → parse_broken 漏解析；必须钉大 COLUMNS
     assert captured["env"]["COLUMNS"] == "100000"
+
+
+def test_execute_timeout_tree_killed_returns_none(tmp_path):
+    """R-AN：lint-imports 超时（console-script 启动器直子→python 孙进程持管道，#84，
+    MCP enforce 工具直调 run→_execute 活面）——树杀归 None（run 层 enforcer-failed
+    诚实），墙钟即返（探针 pre-fix 15.1s vs 2s 预算的 7.5× 超支消除）。"""
+    import sys
+    import time as time_mod
+
+    slow = tmp_path / "slow_lint_imports.py"
+    slow.write_text("import time\ntime.sleep(30)\nprint('ok')\n", encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / "fake_lint_imports.cmd"
+        exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "fake_lint_imports.sh"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{slow}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+
+    start = time_mod.monotonic()
+    assert s7_enforce._execute(str(exe), tmp_path, tmp_path / "importlinter.ini", 2) is None
+    assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
 
 
 def test_cli_enforce_wiring(tmp_path, monkeypatch, capsys):
