@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 from . import dbpath
 
@@ -30,6 +31,10 @@ SEARCH_MAX_LIMIT = 100
 ARCH_MODULES_CAP = 50
 ARCH_MOD_EDGES_CAP = 100
 QUERY_MAX_ROWS = 100
+# R-AH: query_facts 每查询时间预算（monotonic）——SQLite/Python sqlite3 均无
+# per-query 超时，一条合法但病态的 SELECT（无界交叉积/无终止递归 CTE）可把
+# MCP 工具挂死；progress handler 超限中断（R-AC 纪律：elapsed 一律 monotonic）。
+QUERY_TIME_BUDGET_S = 10.0
 NEIGHBOR_LIST_MAX_LIMIT = 200
 NEIGHBOR_LIST_DEFAULT_LIMIT = 50
 SYMBOL_SLICES_CAP = 10
@@ -598,13 +603,27 @@ def query_facts(repo: Path, sql: str, params: str = "", max_rows: int = QUERY_MA
             raise SystemExit("query_facts: params must be a JSON array")
         bind = parsed
     max_rows = max(1, min(int(max_rows), 1000))
+    deadline = time.monotonic() + QUERY_TIME_BUDGET_S
+
+    def _over_budget() -> int:
+        return 1 if time.monotonic() > deadline else 0
+
     con = _connect_ro(repo)
     try:
+        # 每 1000 条 VM 指令核对一次预算：返回非 0 即中断（"interrupted"）。
+        con.set_progress_handler(_over_budget, 1000)
         cur = con.execute(stripped, bind)
         cols = [d[0] for d in cur.description] if cur.description else []
         rows = cur.fetchmany(max_rows)
         more = cur.fetchone() is not None
         truncated = bool(more)
+    except sqlite3.OperationalError as exc:
+        if "interrupted" in str(exc).lower():
+            raise SystemExit(
+                f"query_facts: query exceeded the {QUERY_TIME_BUDGET_S:g}s time budget - "
+                "narrow it with WHERE/LIMIT or split it"
+            )
+        raise
     finally:
         con.close()
     return {

@@ -1,5 +1,7 @@
 import json
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 from vrp import nav
@@ -491,3 +493,37 @@ def test_nav_slice_steps_nonlist_treated_empty(tmp_path):
     con.close()
     out = nav.nav_slice(repo, "flow-strsteps")
     assert out["steps"] == []
+
+
+def test_query_facts_time_budget_interrupts_pathological_query(tmp_path):
+    """R-AH：合法但病态的 SELECT（白名单通过）不得挂死 query_facts——
+    无界交叉积 count（200^5=3.2e11 次迭代，平坦内存）须被时间预算中断。
+    子进程双向有界：修复前 >30s 超时杀（红），修复后 1s 预算诚实退出（绿）。"""
+    repo = _mk_repo(tmp_path)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    for i in range(200):
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+            " VALUES (?, 'p', ?, 'Function', ?, 'pkg/bulk.py', ?, ?, 'h')",
+            (f"b{i}", f"m.f{i}", f"f{i}", i, i + 2),
+        )
+    con.commit()
+    con.close()
+    code = "\n".join([
+        "import sys",
+        "sys.path.insert(0, sys.argv[1])",
+        "from pathlib import Path",
+        "from vrp import nav",
+        "nav.QUERY_TIME_BUDGET_S = 1.0",
+        "nav.query_facts(Path(sys.argv[2]), sys.argv[3])",
+    ])
+    sql = "SELECT count(*) FROM symbols a, symbols b, symbols c, symbols d, symbols e"
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(Path(__file__).resolve().parents[1]), str(repo), sql],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        raise AssertionError("query_facts hung >30s on unbounded cross-join: no time budget guard")
+    assert proc.returncode != 0
+    assert "time budget" in proc.stderr
