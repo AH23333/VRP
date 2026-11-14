@@ -369,6 +369,36 @@ def test_run_happy_path(tmp_path):
             assert API_KEY not in path.read_text(encoding="utf-8", errors="replace"), f"key leaked: {path}"
 
 
+def test_run_id_same_second_collision_gets_suffix(tmp_path, monkeypatch):
+    """R-AC：同秒双跑 run_id 碰撞——session._next_session_id 有 -2/-3 后缀对称机制，
+    auto_curate 修前无（mkdir exist_ok=True 静默合并 audit 目录，覆写前一次留痕）。
+    冻结 gmtime 钉住同秒窗口，断言两次留痕独立完整。"""
+    import time as _time
+
+    repo = _mk_repo(tmp_path)
+    frozen = _time.gmtime()
+    monkeypatch.setattr(auto_curate.time, "gmtime", lambda: frozen)
+    fake1 = _fake_chat({"slices": [json.dumps(VALID_SLICES)], "structure": [json.dumps(VALID_STRUCTURE)]})
+    s1 = auto_curate.run_auto_curate(repo, chat_fn=fake1)
+    assert s1["rc"] == 0
+    fake2 = _fake_chat({"slices": [json.dumps(VALID_SLICES)], "structure": [json.dumps(VALID_STRUCTURE)]})
+    s2 = auto_curate.run_auto_curate(repo, chat_fn=fake2)
+    # 同秒 → 后缀分岔，audit 目录独立
+    assert s1["run_id"] != s2["run_id"]
+    assert s2["run_id"].endswith("-2")
+    assert Path(s1["audit_dir"]) != Path(s2["audit_dir"])
+    # 两次留痕各自完整
+    for s in (s1, s2):
+        assert (Path(s["audit_dir"]) / "summary.json").exists()
+        assert (Path(s["audit_dir"]) / "config.echo.json").exists()
+        assert (Path(s["audit_dir"]) / "steps" / "01-dossier.json").exists()
+    # log.jsonl 两条独立记录（修前第二次跑覆写第一条 summary 且 run_id 重复）
+    lines = (repo / ".vrp" / "auto" / "log.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    ids = [json.loads(line)["run_id"] for line in lines]
+    assert ids == [s1["run_id"], s2["run_id"]]
+
+
 def test_run_reject_then_accept(tmp_path):
     repo = _mk_repo(tmp_path)
     bad = [{"slice_id": "x", "name": "X", "summary": "s", "steps": [{"fid": "nope"}]}]

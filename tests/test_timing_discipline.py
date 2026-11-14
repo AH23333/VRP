@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 TESTS_ROOT = Path(__file__).resolve().parent
+VRP_ROOT = TESTS_ROOT.parent / "vrp"
 SLEEP_ALLOWLIST = {"deep/conftest.py"}
 
 
@@ -78,3 +79,33 @@ def test_wait_dead_red_path_bounded():
     from tests.test_procs import _wait_dead
 
     assert _wait_dead(os.getpid(), seconds=0.2) is False
+
+
+def test_vrp_wall_clocks_utc_and_elapsed_monotonic():
+    """R-AC census 钉死：vrp/ 墙钟一律 tz-aware UTC、elapsed 一律 monotonic。
+
+    - datetime.now() 无 tz 参（naive 本地墙钟）/ datetime.utcnow()（3.12
+      弃用 + naive）/ datetime.today() 禁绝；datetime.now(tz) 豁免。
+    - time.localtime()/time.ctime()（本地时区显示）禁绝。
+    - time.time()（墙钟做 elapsed：NTP 回拨可倒退）禁绝——elapsed 走
+      time.monotonic()（s7 二十一引擎 deadline 同源）。
+    - 墙钟戳一律 UTC：strftime+gmtime（etl/auto_curate）或
+      datetime.now(timezone.utc)（curate/s4/s5/s6/session）。
+    """
+    offenders: list[str] = []
+    for path in sorted(VRP_ROOT.glob("*.py")):
+        rel = path.relative_to(VRP_ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            attr = node.func.attr
+            recv = node.func.value
+            recv_name = recv.id if isinstance(recv, ast.Name) else None
+            if recv_name == "datetime":
+                if attr in ("utcnow", "today") or (attr == "now" and not node.args):
+                    offenders.append(f"{rel}:{node.lineno}: datetime.{attr}")
+            elif recv_name == "time":
+                if attr in ("localtime", "ctime", "time"):
+                    offenders.append(f"{rel}:{node.lineno}: time.{attr}")
+    assert not offenders, f"naive/local wall-clock or time.time() in vrp/ (R-AC census): {offenders}"

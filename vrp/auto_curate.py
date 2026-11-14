@@ -315,10 +315,17 @@ def run_auto_curate(
     finally:
         con.close()
     started_at = _utc_now()
-    run_id = f"run-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    # 同秒冲突走 -2/-3 后缀（session._next_session_id 同型）：无后缀时同秒双跑
+    # 会静默合并 audit 目录（exist_ok=True 覆写前一次留痕）。
+    base_id = f"run-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    run_id = base_id
+    n = 2
+    while (repo / ".vrp" / "auto" / run_id).exists():
+        run_id = f"{base_id}-{n}"
+        n += 1
     audit = repo / ".vrp" / "auto" / run_id
     steps_dir = audit / "steps"
-    steps_dir.mkdir(parents=True, exist_ok=True)
+    steps_dir.mkdir(parents=True)  # 新目录：竞争窗口抢注时响亮 FileExistsError，不静默合并
     _write_json(audit / "config.echo.json", config.echo())
 
     # 1. 取材（skip_external=True：快速+确定性，§13.4）
