@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from vrp import procs
 from vrp import render
 from vrp import render_chain
 from vrp import s6_transact
@@ -1222,6 +1223,44 @@ def test_render_chain_error_text_uses_stdout_json():
     assert render_chain._archify_error_text(res) == "boom detail"
     res2 = {"returncode": 1, "timed_out": False, "stdout": "", "stderr": "plain err"}
     assert render_chain._archify_error_text(res2) == "plain err"
+
+
+def test_archify_error_text_nondict_json_stdout_degrades():
+    """AU-10 render 站：stdout 合法 JSON 但非 dict（list/str）——修前 doc.get 裸抛
+    AttributeError，逃 render_report 的 (TimeoutExpired, OSError) 捕获崩整报告；
+    修后回退原文截断，validate 失败按单件降级。"""
+    assert render._archify_error_text("[1, 2]", "") == "[1, 2]"
+    assert render._archify_error_text('"boom"', "") == '"boom"'
+
+
+def test_render_chain_error_text_nondict_json_stdout_degrades():
+    """AU-10 chain 站：同族同修——修前非 dict JSON 抛 AttributeError 逃 Pass1
+    单图原子性（整链经 except Exception 降级而非单模块弃链）；修后回退原文。"""
+    res = {"returncode": 1, "timed_out": False, "stdout": "[1, 2]", "stderr": ""}
+    assert render_chain._archify_error_text(res) == "[1, 2]"
+    res2 = {"returncode": 1, "timed_out": False, "stdout": '"boom"', "stderr": ""}
+    assert render_chain._archify_error_text(res2) == '"boom"'
+
+
+def test_render_report_archify_nondict_json_error_degrades(tmp_path, monkeypatch):
+    """AU-10 集成：archify validate rc≠0 且 stdout 合法 JSON 非 dict——修前双站
+    AttributeError（chain 站吞进链降级注记、render 站逃捕获崩整报告）；修后
+    双站回退原文，报告照出、降级诚实记录。"""
+    fake = tmp_path / "stub.mjs"
+    fake.write_text("// stub\n", encoding="utf-8")
+    monkeypatch.setenv("VRP_ARCHIFY_MJS", str(fake))
+    monkeypatch.setattr(
+        procs, "run_tree",
+        lambda cmd, timeout=60: {"returncode": 1, "timed_out": False,
+                                 "stdout": "[1, 2]", "stderr": ""})
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    result = render.render_report(repo)  # 修复前此处抛 AttributeError
+    out = Path(result["report"]).parent
+    assert (out / "report.html").is_file()
+    assert result["chain"]["ok"] is False
+    assert any("[1, 2]" in n for n in result["chain"].get("notes", []))
+    assert any("archify validate failed" in d and "[1, 2]" in d for d in result["degraded"])
 
 
 def _mk_slow_archify_mjs(tmp_path: Path) -> Path:

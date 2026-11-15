@@ -510,7 +510,7 @@ def _archify_error_text(stdout: str, stderr: str, limit: int = 120) -> str:
     if out:
         try:
             doc = json.loads(out)
-            err = doc.get("error")
+            err = doc.get("error") if isinstance(doc, dict) else None
             if err:
                 return str(err).strip()[:limit]
         except json.JSONDecodeError:
