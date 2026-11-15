@@ -203,3 +203,119 @@ def test_render_report_fusion_integration():
     else:
         assert result["counts"]["fusion"] == 0
         assert any("fusion" in d for d in result["degraded"]), "fusion 缺席必须留降级注记"
+
+
+# ---------- 渲染审计回归（AU1-AU5） ----------
+
+def test_fusion_escapes_db_derived_strings():
+    """AU1：DB 派生串（文件名/符号/kind）进 innerHTML 前必须过 JS esc()。
+
+    D JSON 保留原始值（过滤/搜索不受影响）；模板插入点静态锁 esc 覆盖。
+    """
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO symbols (fid, project, qualified_name, label, name, file_path,"
+                " start_line, end_line, content_hash)"
+                " VALUES ('fid-img', 'p', 'pkg.<img>', '<img>', '<img>',"
+                " 'pkg/<i>x</i>.py', 1, 1, 'h')")
+    con.execute("INSERT INTO findings (pathology, kind, source, file_path, start_line,"
+                " payload_json, anchor_fid)"
+                " VALUES ('P1', '<b>kind</b>', 's2-astgrep', 'pkg/<i>x</i>.py', 1, '{}', 'fid-img')")
+    con.commit()
+    con.close()
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    render_fusion.build_fusion(repo, out, None)
+    t = (out / "fusion.html").read_text(encoding="utf-8")
+    # esc 助手 + 全部 DB 派生插入点静态锁
+    assert "const esc = s =>" in t
+    assert "esc(r.f)+':'+r.ln" in t
+    assert "'+esc(r.k)+'</td>'" in t
+    assert "<td>'+esc(r.sym)+" in t
+    assert "<h3>'+esc(p.name)+'</h3>" in t
+    assert "+esc(r.s)+'</b>" in t
+    # D JSON 保留原始值（运行时 esc，数据不变形）
+    D = _extract_D(t)
+    row = next(r for r in D["rows"] if r["f"] == "pkg/<i>x</i>.py")
+    assert row["k"] == "<b>kind</b>"
+    assert row["sym"] == "<img>"
+
+
+def test_fusion_conf_null_bucket():
+    """AU4：CALLS 边 confidence NULL 时分布桶标签必须是 "null"（非 Python "None"）。"""
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence)"
+                " VALUES ('fid-gamma', 'fid-alpha', 'CALLS', 'structural')")
+    con.commit()
+    con.close()
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    render_fusion.build_fusion(repo, out, None)
+    D = _extract_D((out / "fusion.html").read_text(encoding="utf-8"))
+    assert ["null", 1] in D["conf"]
+    assert not any(c[0] == "None" for c in D["conf"])
+
+
+def test_fusion_placeholder_collision_safe():
+    """AU5：narr 含字面 "__DATA__"（如业务线名）不得被占位替换二次注入。
+
+    单趟 re.sub：替换产物不重扫——data_json 只落一次。
+    """
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO slices (slice_id, name, summary, payload_json, status)"
+                " VALUES ('dunder', '__DATA__', 's', ?, 'active')",
+                (json.dumps({"steps": [{"fid": "fid-alpha"}],
+                             "acts": [{"name": "m", "from_step": 0, "to_step": 0}]}),))
+    con.commit()
+    con.close()
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    render_fusion.build_fusion(repo, out, None)
+    t = (out / "fusion.html").read_text(encoding="utf-8")
+    assert t.count("const D = {") == 1, "const D 赋值必须唯一"
+    assert t.count('"rowsTruncated"') == 1, "data_json 不得被 narr 占位二次注入"
+    D = _extract_D(t)  # JSON 仍可解析
+    assert ["dunder", "__DATA__"] in D["slices"]
+
+
+def test_clean_render_out_removes_stale_fusion():
+    """AU2：fusion.html 属 render 自有产物——陈旧文件必须随 _clean_render_out 清除。"""
+    tmp, repo, con = _mk_repo()
+    con.close()
+    out = repo / ".vrp" / "report"
+    (out / "chain").mkdir(parents=True)
+    (out / "chain" / "old.html").write_text("x", encoding="utf-8")
+    (out / "fusion.html").write_text("stale", encoding="utf-8")
+    render._clean_render_out(out)
+    assert not (out / "fusion.html").exists(), "陈旧 fusion.html 未清除（R6' 孤儿产物）"
+    assert not (out / "chain").exists()
+
+
+def test_chain_file_caps_match_page_anchors():
+    """AU3：file_caps 必须等于页内实际最大行锚点（尾部多空行文件防幻影区间）。"""
+    if render.find_archify_mjs() is None or shutil.which("node") is None:
+        pytest.skip("archify/node not available")
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    # 尾部多空行（旧实现 caps 只减一个空行 → cap 12 > 实际锚点上限 10）
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "x.py").write_text(
+        "def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n\n\n"
+        "def gamma():\n    return 3\n\n\n", encoding="utf-8")
+    con.close()
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    mjs = render.find_archify_mjs()
+    chain = render_chain.build_chain(repo, out / "chain", mjs)
+    assert chain["ok"]
+    assert chain["file_caps"], "fixture 必须产出至少一个文件页（否则断言空转）"
+    for fp, cap in chain["file_caps"].items():
+        code = (out / "chain" / chain["file_pages"][fp]).read_text(encoding="utf-8")
+        ids = [int(m) for m in re.findall(r'id="L(\d+)"', code)]
+        assert ids, f"{fp} 页内无行锚点"
+        assert max(ids) == cap, f"{fp}: cap={cap} != 页内实际锚点上限={max(ids)}"

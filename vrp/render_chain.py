@@ -1214,6 +1214,19 @@ def _code_page_doc(title: str, h1: str, meta: str, rows_html: list[str],
         "</main></body></html>")
 
 
+def _page_src(lines: list[str]) -> list[str]:
+    """整文件页渲染行切片：CHAIN_FILE_LINES_CAP 截断 + 尾部空行全去除。
+
+    write_file_page 的 id="L{n}" 锚点上限与 build_chain 的 file_caps 上限
+    共用本切片语义（渲染审计 AU3：caps 必须等于页内实际最大行锚点——
+    旧实现只减一个尾部空行，多空行结尾文件会产生幻影锚点区间）。
+    """
+    src = lines[:CHAIN_FILE_LINES_CAP]
+    while src and src[-1] == "":
+        src.pop()
+    return src
+
+
 def write_file_page(out_dir: Path, lines: list[str], fpath: str,
                     crumbs: list[tuple[str | None, str]],
                     action: tuple[str, str] | None = None,
@@ -1231,9 +1244,7 @@ def write_file_page(out_dir: Path, lines: list[str], fpath: str,
     ?slice= 时 .sym 命中橙标高亮。返回输出文件名。
     """
     lines_truncated = len(lines) > CHAIN_FILE_LINES_CAP
-    src = lines[:CHAIN_FILE_LINES_CAP]
-    while src and src[-1] == "":
-        src.pop()
+    src = _page_src(lines)
     n_lines = len(src)
 
     syms: list[tuple[int, int, str]] = []
@@ -2168,8 +2179,7 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
 
         caps: dict[str, int] = {}
         for fpath, lines in written.items():
-            caps[fpath] = min(CHAIN_FILE_LINES_CAP,
-                              max(0, len(lines) - (1 if lines and lines[-1] == "" else 0)))
+            caps[fpath] = len(_page_src(lines))
         fid_ok: set[str] = set()
         for fid in all_fids:
             r = rows.get(fid)

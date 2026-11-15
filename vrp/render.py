@@ -1485,7 +1485,7 @@ def _clean_render_out(out: Path) -> None:
         d = out / sub
         if d.is_dir():
             shutil.rmtree(d)
-    for pattern in ("*.mmd", "findings.sarif", "report.html"):
+    for pattern in ("*.mmd", "findings.sarif", "report.html", "fusion.html"):
         for f in out.glob(pattern):
             f.unlink()
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import html as H
 import json
 import math
+import re
 import sqlite3
 from pathlib import Path
 
@@ -296,7 +297,7 @@ def _load_data(con: sqlite3.Connection, chain: dict | None) -> dict:
         "kindTop": [[r[0], r[1]] for r in kinds],
         "kindMap": {r[0]: r[1] for r in q("SELECT kind, COUNT(*) c FROM findings GROUP BY kind")},
         "edgeTypes": [[r[0], r[1]] for r in edge_types],
-        "conf": [[str(r[0]), r[1]] for r in conf_hist],
+        "conf": [[str(r[0]) if r[0] is not None else "null", r[1]] for r in conf_hist],
         "graph": {"nodes": nodes,
                   "links": [{"source": l["s"], "target": l["t"],
                              "lineStyle": {"width": l["lw"]}} for l in links]},
@@ -535,10 +536,13 @@ const PCOL = {P1:'#f87171',P2:'#fbbf24',P3:'#a78bfa',P4:'#34d399',P9:'#f472b6'};
 const CATCOL = ['#34d399','#fbbf24','#fb923c','#f87171'];
 const fmt = n => n.toLocaleString('en-US');
 const $ = id => document.getElementById(id);
+// 注入面统一转义：DB 派生串（文件名/符号/目录名）进 innerHTML 前必须过 esc
+// （对齐 chain 层 html.escape 全覆盖口径；过滤/搜索仍用原始值，不受影响）
+const esc = s => String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
 $('cards').innerHTML = D.cards.map(c =>
-  '<div class="card"><div class="t">'+c[0]+'</div><div class="v">'+c[1]+'</div><div class="s">'+c[2]+'</div></div>').join('');
-$('ft').innerHTML = 'vrp '+D.meta.vrp+' · facts git '+(D.meta.head||'').slice(0,7)+' · etl '+D.meta.etl+
+  '<div class="card"><div class="t">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2])+'</div></div>').join('');
+$('ft').innerHTML = 'vrp '+esc(D.meta.vrp)+' · facts git '+esc((D.meta.head||'').slice(0,7))+' · etl '+esc(D.meta.etl)+
   ' · findings '+fmt(D.finTotal)+' · 复现性：同 facts.db → 字节级同报告（构想v9 §6）';
 if(!D.cmp){ $('compare').style.display='none'; }
 
@@ -571,7 +575,7 @@ mk('chConf', {tooltip:{},grid:{left:10,right:16,top:26,bottom:6,containLabel:tru
   yAxis:{...AXC},
   series:[{type:'bar',data:D.conf.map(x=>x[1]),itemStyle:{color:cssVar('--accent')}}]});
 
-const graphC = mk('graph', {tooltip:{formatter:p=>p.dataType==='node'? p.name+'<br>符号 '+fmt(p.value)+(p.data.fin!==undefined?'<br>findings '+p.data.fin:'') : p.data.source+' → '+p.data.target},
+const graphC = mk('graph', {tooltip:{formatter:p=>p.dataType==='node'? esc(p.name)+'<br>符号 '+fmt(p.value)+(p.data.fin!==undefined?'<br>findings '+p.data.fin:'') : esc(p.data.source)+' → '+esc(p.data.target)},
   legend:{show:false},
   series:[{type:'graph',layout:'none',roam:true,draggable:true,
     categories:[{name:'低'},{name:'中'},{name:'高'},{name:'极高'}],
@@ -626,9 +630,9 @@ function renderTbl(){
   if(st.page>=pages) st.page = pages-1;
   const slice = rs.slice(st.page*PER,(st.page+1)*PER);
   $('tbody').innerHTML = slice.map(r=>{
-    const loc = r.h ? '<a href="'+r.h+'" target="_blank" title="chain 源码页（行级锚点）">'+r.f+':'+r.ln+'</a>' : r.f+':'+r.ln;
-    return '<tr data-i="'+r.i+'"><td><span class="badge p'+r.p+'">'+r.p+'</span></td><td>'+r.k+'</td>'+
-    '<td class="fp">'+loc+'</td><td>'+r.sym+'</td></tr>';}).join('');
+    const loc = r.h ? '<a href="'+r.h+'" target="_blank" title="chain 源码页（行级锚点）">'+esc(r.f)+':'+r.ln+'</a>' : esc(r.f)+':'+r.ln;
+    return '<tr data-i="'+r.i+'"><td><span class="badge p'+esc(r.p)+'">'+esc(r.p)+'</span></td><td>'+esc(r.k)+'</td>'+
+    '<td class="fp">'+loc+'</td><td>'+esc(r.sym)+'</td></tr>';}).join('');
   $('cnt').textContent = D.rowsTruncated
     ? '命中 '+fmt(rs.length)+' · 嵌入 '+fmt(D.rows.length)+' / 全量 '+fmt(D.finTotal)+'（超过嵌入上限按 id 序截断——构想v9 §4 降级路径）'
     : '命中 '+fmt(rs.length)+' · 全量 '+fmt(D.rows.length)+' 行内嵌（无截断）';
@@ -653,18 +657,18 @@ function show(html){ $('pbody').innerHTML=html; $('panel').classList.add('open')
 function closePanel(){ $('panel').classList.remove('open'); history.replaceState(null,'',location.pathname+location.search); }
 function openDir(i){
   const p = D.panels[i];
-  const bp = Object.keys(p.bypath).sort().map(k=>'<span class="badge p'+k+'">'+k+'</span> '+fmt(p.bypath[k])).join('<br>') || '无';
+  const bp = Object.keys(p.bypath).sort().map(k=>'<span class="badge p'+esc(k)+'">'+esc(k)+'</span> '+fmt(p.bypath[k])).join('<br>') || '无';
   const fl = p.files.map(f=>{
     const href = D.pages[f[0]];
-    const nm = href ? '<a href="'+href+'" target="_blank">'+f[0]+'</a>' : f[0];
+    const nm = href ? '<a href="'+href+'" target="_blank">'+esc(f[0])+'</a>' : esc(f[0]);
     return '<li>'+nm+' <span class="fp">('+fmt(f[1])+')</span></li>';}).join('');
-  show('<h3>'+p.name+'</h3><div class="kv">'+
+  show('<h3>'+esc(p.name)+'</h3><div class="kv">'+
     '<span>符号数</span><b>'+fmt(p.syms)+'</b>'+
     '<span>findings</span><b>'+fmt(p.fin)+'（密度 '+(p.dens*100).toFixed(1)+'%）</b></div>'+
     '<div class="sec">findings 病理分布</div>'+bp+
     '<div class="sec">top 文件（按符号数，链接→chain 细节页）</div><ul>'+fl+'</ul>'+
-    '<div class="sec">CALLS 出边 top3</div><ul>'+(p.out.map(o=>'<li>'+o[0]+' <span class="fp">('+fmt(o[1])+')</span>').join('')||'<li>无')+'</ul>'+
-    '<div class="sec">CALLS 入边 top3</div><ul>'+(p.in.map(o=>'<li>'+o[0]+' <span class="fp">('+fmt(o[1])+')</span>').join('')||'<li>无')+'</ul>'+
+    '<div class="sec">CALLS 出边 top3</div><ul>'+(p.out.map(o=>'<li>'+esc(o[0])+' <span class="fp">('+fmt(o[1])+')</span>').join('')||'<li>无')+'</ul>'+
+    '<div class="sec">CALLS 入边 top3</div><ul>'+(p.in.map(o=>'<li>'+esc(o[0])+' <span class="fp">('+fmt(o[1])+')</span>').join('')||'<li>无')+'</ul>'+
     '<div class="sec">archify 细节层</div><ul><li><a href="chain/index.html" target="_blank">chain/ 总入口（模块交互图链 · 文件级源码页）</a></li></ul>');
   history.replaceState(null,'','#d/'+i);
 }
@@ -673,11 +677,11 @@ function openFinding(id){
   const jumpBtn = r.h
     ? '<a class="btn" href="'+r.h+'" target="_blank">跳转源码位置 →'+(r.h.includes('#L')?'（行级锚点）':'（文件级定位）')+'</a>'
     : '<div class="fp">该文件未入 chain 细节层（未入链文件的源码页不在报告产物内）</div>';
-  show('<h3>'+r.k+'</h3><div class="kv">'+
-    '<span>病理</span><b><span class="badge p'+r.p+'">'+r.p+'</span></b>'+
-    '<span>位置</span><b>'+(r.h?'<a href="'+r.h+'" target="_blank">'+r.f+':'+r.ln+'</a>':r.f+':'+r.ln)+'</b>'+
-    '<span>锚定符号</span><b>'+(r.sym||'—')+'</b>'+
-    '<span>来源</span><b>'+r.s+'</b></div>'+
+  show('<h3>'+esc(r.k)+'</h3><div class="kv">'+
+    '<span>病理</span><b><span class="badge p'+esc(r.p)+'">'+esc(r.p)+'</span></b>'+
+    '<span>位置</span><b>'+(r.h?'<a href="'+r.h+'" target="_blank">'+esc(r.f)+':'+r.ln+'</a>':esc(r.f)+':'+r.ln)+'</b>'+
+    '<span>锚定符号</span><b>'+(r.sym?esc(r.sym):'—')+'</b>'+
+    '<span>来源</span><b>'+esc(r.s)+'</b></div>'+
     '<div class="sec">跳转</div>'+jumpBtn+
     '<div class="sec">证据链</div><div class="fp" style="font-size:12px">行级锚定 file:start-end + window_hash 溯源（facts.db findings 表 #'+r.i+'）</div>');
   history.replaceState(null,'','#f/'+id);
@@ -721,12 +725,17 @@ def build_fusion(repo: Path, out_dir: Path, chain: dict | None) -> dict:
     data_json = json.dumps(D, ensure_ascii=False, separators=(",", ":"),
                            sort_keys=True).replace("</", "<\\/")
     echarts = _ECHARTS.read_text(encoding="utf-8")
-    html_out = (_template()
-                .replace("__REPO__", H.escape(repo.name))
-                .replace("__THEMES__", render_theme.theme_root_css())
-                .replace("__ECHARTS__", echarts)
-                .replace("__NARR__", narr)
-                .replace("__DATA__", data_json))
+    # 单趟占位替换：替换产物（narr/data_json 可含 DB 派生的 "__DATA__" 等
+    # 字面量）不再被后续替换重扫——串行 replace 链存在二次注入面
+    subs = {
+        "__REPO__": H.escape(repo.name),
+        "__THEMES__": render_theme.theme_root_css(),
+        "__ECHARTS__": echarts,
+        "__NARR__": narr,
+        "__DATA__": data_json,
+    }
+    html_out = re.sub(r"__[A-Z]+__",
+                      lambda m: subs.get(m.group(0), m.group(0)), _template())
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / "fusion.html"
     target.write_bytes(html_out.encode("utf-8"))
