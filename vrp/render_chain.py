@@ -1218,6 +1218,88 @@ def _code_page_doc(title: str, h1: str, meta: str, rows_html: list[str],
         "</main></body></html>")
 
 
+# ---------------------------------------------------------------- 报告产物密钥卫生
+# 交接 #141（学 code-modernization / unwind 设计文档 01b #13）：chain 源码页
+# 原样嵌入被分析仓源码——命中保守高置信探测器即在渲染层掩蔽（数据层/
+# facts.db/源文件不动），行数不变（#L 锚点、符号行区间、file_caps 语义
+# 全部保持），纯函数确定性可复现。命中清单由 render.py 落
+# .vrp/SECRETS.local.md（gitignored 本地文件）。
+_SECRET_INLINE: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("aws-access-key", re.compile(r"\bA(?:KIA|SIA)[0-9A-Z]{16}\b")),
+    ("github-token", re.compile(
+        r"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255})\b")),
+    ("gitlab-token", re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,255}\b")),
+    ("slack-token", re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,255}\b")),
+    ("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
+    ("openai-key", re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_\-]{20,255}\b")),
+    ("jwt", re.compile(
+        r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}\b")),
+)
+# URL 凭据：userinfo 段收紧为 RFC 3986 用户名常见字符（排除 > < \ 等——
+# tsa 实证误报：`"<http://example.com>\n<mailto:test@…>"` 中裸 URL+mailto
+# 组合曾把 mailto: 后段误当密码掩蔽，交接 #141）
+_URL_CRED = re.compile(
+    r"([a-z][a-z0-9+.\-]*://[A-Za-z0-9._%+\-]{1,64}:)([^/\s@]{3,255})(@)")
+_PK_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
+_PK_END = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
+
+
+def _mask_inline(line: str) -> tuple[str, list[dict]]:
+    """单行内联掩蔽：token/JWT 命中子串 → [VRP-MASKED:类型:前4字符…]；
+    URL 凭据只掩蔽密码段（scheme://user 保留）。返回 (行, 命中)。"""
+    found: list[dict] = []
+
+    def _sub_of(name: str):
+        def _sub(m: "re.Match[str]") -> str:
+            found.append({"type": name, "preview": m.group(0)[:4]})
+            return f"[VRP-MASKED:{name}:{m.group(0)[:4]}…]"
+        return _sub
+
+    for name, pat in _SECRET_INLINE:
+        line = pat.sub(_sub_of(name), line)
+
+    def _cred_sub(m: "re.Match[str]") -> str:
+        found.append({"type": "url-credential", "preview": m.group(2)[:4]})
+        return f"{m.group(1)}[VRP-MASKED:url-credential:{m.group(2)[:4]}…]{m.group(3)}"
+
+    return _URL_CRED.sub(_cred_sub, line), found
+
+
+def mask_source_lines(lines: list[str]) -> tuple[list[str], list[dict]]:
+    """源码行密钥掩蔽（渲染层专用，行数不变）。
+
+    单行探测器命中 → 命中子串替换为 [VRP-MASKED:类型:前4字符…]；
+    私钥块 BEGIN..END 之间整行掩蔽为 [VRP-MASKED:private-key-body:前4字符…]
+    （BEGIN 行截断于 CHAIN_FILE_LINES_CAP 无 END 时后续行全掩蔽——诚实偏保守；
+    BEGIN/END 标记行本身保留，标记非密料）。无命中返回原列表对象（零拷贝）。
+    返回 (掩蔽后行列表, 命中清单 [{line(1 起), type, preview}])。
+    """
+    hits: list[dict] = []
+    out: list[str] = []
+    in_key_block = False
+    for i, line in enumerate(lines, 1):
+        if in_key_block:
+            if _PK_END.search(line):
+                in_key_block = False
+                out.append(line)
+                continue
+            hits.append({"line": i, "type": "private-key-body", "preview": line[:4]})
+            out.append(f"[VRP-MASKED:private-key-body:{line[:4]}…]")
+            continue
+        if _PK_BEGIN.search(line):
+            in_key_block = True
+            hits.append({"line": i, "type": "private-key-header", "preview": ""})
+            out.append(line)
+            continue
+        masked, found = _mask_inline(line)
+        for h in found:
+            hits.append({"line": i, "type": h["type"], "preview": h["preview"]})
+        out.append(masked)
+    if not hits:
+        return lines, hits
+    return out, hits
+
+
 def _page_src(lines: list[str]) -> list[str]:
     """整文件页渲染行切片：CHAIN_FILE_LINES_CAP 截断 + 尾部空行全去除。
 
@@ -1980,8 +2062,10 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
       index      chain/index.html 路径（ok=False 时为 None）；
       cards      模块卡片（index.html 数据）；
       counts     {modules, diagrams, file_pages, pages}；
-      notes      诚实注记（弃链模块原因、帽截断）；
-      file_pages {规范文件路径 → 页文件名}（report findings 链接用）。
+      notes      诚实注记（弃链模块原因、帽截断、密钥掩蔽）；
+      file_pages {规范文件路径 → 页文件名}（report findings 链接用）；
+      secrets_hits 密钥掩蔽命中清单（{file,line,type,preview}，
+                  SECRETS.local.md 原料；无命中为空列表）。
     ok=False 时调用方降级 L1/L2（Mermaid），chain/ 已清理。
     """
     repo = Path(repo)
@@ -2229,6 +2313,18 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
         caps: dict[str, int] = {}
         for fpath, lines in written.items():
             caps[fpath] = len(_page_src(lines))
+        # 交接 #141 密钥卫生：渲染层掩蔽（行数不变——caps/#L 锚点/符号区间不动）
+        secrets_hits: list[dict] = []
+        for fpath in sorted(written):
+            masked, shits = mask_source_lines(written[fpath])
+            if shits:
+                written[fpath] = masked
+                secrets_hits.extend({"file": fpath, "line": h["line"],
+                                     "type": h["type"], "preview": h["preview"]}
+                                    for h in shits)
+        if secrets_hits:
+            notes.append(f"secrets masked in file pages: {len(secrets_hits)} hit(s) "
+                         f"(manifest: .vrp/SECRETS.local.md)")
         fid_ok: set[str] = set()
         for fid in all_fids:
             r = rows.get(fid)
@@ -2345,6 +2441,8 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
             # V-2 行级精跳：fpath → 有效行锚点上限（行 > cap 无 id="L{n}"，
             # fusion/report 链接降级页级）
             "file_caps": {fp: caps[fp] for fp in written},
+            # 交接 #141 密钥卫生：渲染层掩蔽命中清单（{file,line,type,preview}）
+            "secrets_hits": secrets_hits,
             "counts": {
                 "modules": len(ok_plans),
                 "diagrams": sum(len(p["diagrams"]) for p, _ in ok_plans),

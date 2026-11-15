@@ -1490,6 +1490,31 @@ def _clean_render_out(out: Path) -> None:
             f.unlink()
 
 
+def _write_secrets_manifest(repo: Path, hits: list) -> None:
+    """交接 #141 密钥卫生：掩蔽命中清单落 repo/.vrp/SECRETS.local.md。
+
+    学 code-modernization / unwind 01b #13：chain 源码页命中即掩蔽，
+    本清单是本地对照（file:line type preview，完整值不出现在任何报告
+    产物中），gitignored、勿提交。有命中覆盖写（确定性）；无命中删除
+    陈旧清单（R6'：清单与最新一次渲染同步——chain 失败=本轮无源码页
+    =掩蔽状态已知为空，同样清空）。
+    """
+    path = repo / ".vrp" / "SECRETS.local.md"
+    if hits:
+        lines = [
+            "# VRP secrets masked in report artifacts",
+            "",
+            "以下源码行在 chain/ 源码页中被掩蔽为 [VRP-MASKED:type:preview…]，",
+            "完整值不出现在任何报告产物中。本文件为本地对照清单，勿提交。",
+            "",
+        ]
+        for h in hits:
+            lines.append(f"- {h['file']}:{h['line']} {h['type']} {h['preview']}…")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    else:
+        path.unlink(missing_ok=True)
+
+
 def render_report(repo: Path, out_dir: Path | None = None) -> dict:
     """S8 全量报告：IR → archify/Mermaid/SARIF → .vrp/report/report.html。
 
@@ -1530,6 +1555,9 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
                          "counts": {"modules": 0, "diagrams": 0, "file_pages": 0, "pages": 0},
                          "notes": [f"module chain crashed: {exc}"]}
         use_chain = bool(chain and chain.get("ok"))
+        # 交接 #141 密钥卫生：清单与最新一次渲染同步（chain 失败=无源码页=清空）
+        _write_secrets_manifest(repo,
+                                (chain.get("secrets_hits") or []) if use_chain else [])
         # R7' L1/L2：模块页/符号页数据（连接存活期收完；Row 关连接后仍可读）
         module_datas: list[dict] = []
         symbol_datas: list[dict] = []
