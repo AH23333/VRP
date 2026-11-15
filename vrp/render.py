@@ -1668,6 +1668,18 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         modules_section = _chain_section(chain)
     else:
         modules_section = _modules_index_section(module_datas, modules_truncated, len(symbol_datas), symbols_truncated)
+
+    # V-2 融合报告（构想v9 定稿）：六风格单页总览，chain 同批联动行级跳转；
+    # 崩溃/降级不阻塞 report（融合层注记进 degraded）
+    fusion_res: dict | None = None
+    try:
+        from . import render_fusion
+        fusion_res = render_fusion.build_fusion(
+            repo, out, chain if use_chain else None)
+        artifacts.append("fusion.html")
+        degraded_reasons.extend(fusion_res.get("notes", []))
+    except Exception as exc:  # 融合层意外失败不阻塞报告
+        degraded_reasons.append(f"fusion crashed: {exc}")
     # 用户产物信息架构：引导 → 总览（AI 梳理）→ 模块链 → 架构 → 体检 →
     # findings 全清单（折叠）→ 重构决定 → 业务线 → 深层数据（折叠）
     esc = html_mod.escape
@@ -1678,6 +1690,16 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
                      if "html/timeline.html" in archify_html else "")
     sections = [
         _how_to_read_section(),
+        ({
+            "title": "Fusion 总览（融合报告）",
+            "body": ('<p>V-2 融合报告：六风格单页总览（仪表盘/叙事/结构图/下钻/'
+                     '双引擎对账/数据切片），主题模板与 chain 同令牌源，切片详情'
+                     '行级跳转联动 chain/ 源码页：'
+                     '<a href="fusion.html">fusion.html</a>。</p>')
+        } if fusion_res is not None else {
+            "title": "Fusion 总览（融合报告）",
+            "body": "<p>融合报告生成失败（见 Deep data 降级注记）。</p>",
+        }),
         _overview_section(structure_payload, len(seq_irs), len(verdicts)),
         modules_section,
         {
@@ -1727,6 +1749,7 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
             "symbol_pages": len(symbol_datas),
             "chain_modules": chain["counts"]["modules"] if use_chain else 0,
             "chain_pages": chain["counts"]["pages"] if use_chain else 0,
+            "fusion": bool(fusion_res),
         },
         "chain": {
             "ok": use_chain,

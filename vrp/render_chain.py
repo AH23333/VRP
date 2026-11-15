@@ -1182,7 +1182,10 @@ def _code_page_doc(title: str, h1: str, meta: str, rows_html: list[str],
         ".code{margin-top:10px;background:#0b1226;border:1px solid #1e293b;"
         "border-radius:10px;padding:10px 0;font:12.5px/1.62 ui-monospace,"
         "'JetBrains Mono',Consolas,monospace;overflow-x:auto}"
-        ".row{display:flex;min-width:max-content}.row:hover{background:#0e1730}"
+        ".row{display:flex;min-width:max-content;scroll-margin-top:120px}"
+        ".row:hover{background:#0e1730}"
+        ".row:target{background:rgba(34,211,238,.10)}"
+        ".row:target .ln{color:#22d3ee;font-weight:600}"
         ".ln{flex:0 0 56px;text-align:right;padding-right:16px;color:#475569;"
         "user-select:none}.lc{white-space:pre;flex:1}"
         ".k{color:#c678dd}.s{color:#98c379}.c{color:#7f848e;font-style:italic}"
@@ -1318,7 +1321,7 @@ def write_file_page(out_dir: Path, lines: list[str], fpath: str,
                 parts.append(f'<span class="{c}">{esc}</span>')
             else:
                 parts.append(esc)
-        rows_html.append(f'<div class="row"><span class="ln">{off}</span>'
+        rows_html.append(f'<div class="row" id="L{off}"><span class="ln">{off}</span>'
                          f'<span class="lc">{"".join(parts) or "&nbsp;"}</span></div>')
     while stack:
         stack.pop()
@@ -1971,6 +1974,7 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
     _reset_state()
     notes: list[str] = []
     result = {"ok": False, "index": None, "cards": [], "file_pages": {},
+              "file_caps": {},
               "counts": {"modules": 0, "diagrams": 0, "file_pages": 0, "pages": 0},
               "notes": notes}
 
@@ -2279,6 +2283,9 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
             "index": str(out_chain / "index.html"),
             "cards": cards,
             "file_pages": {fp: file_page_stem_of(fp) + ".html" for fp in written},
+            # V-2 行级精跳：fpath → 有效行锚点上限（行 > cap 无 id="L{n}"，
+            # fusion/report 链接降级页级）
+            "file_caps": {fp: caps[fp] for fp in written},
             "counts": {
                 "modules": len(ok_plans),
                 "diagrams": sum(len(p["diagrams"]) for p, _ in ok_plans),
