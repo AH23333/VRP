@@ -201,6 +201,32 @@ def test_report_diff_window_and_dual_diagrams(tmp_path, monkeypatch):
     assert html.count("class=\"mermaid\"") == 2  # 双图并排（Mermaid 降级）
 
 
+def test_report_archify_validate_error_channel(tmp_path, monkeypatch):
+    """AU-11：archify validate --json 失败的错误在 stdout JSON 的 error 字段（stderr
+    恒空——R7' tsa 病根）；修前 session_report 裸用 stderr → 降级注记空括号
+    "archify validate failed: begin ()"；修后经 _archify_error_text 提取原文。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    session.session_begin(repo)
+    _mutate(repo)
+    session.session_end(repo)
+
+    def _fake_run(mjs, args, timeout=None):
+        if args[0] == "validate":
+            return 1, json.dumps({"ok": False, "error": "sequence schema boom"}), ""
+        return 0, "", ""
+
+    monkeypatch.setattr(render_mod, "find_archify_mjs", lambda: Path("fake.mjs"))
+    monkeypatch.setattr(render_mod, "_run_archify", _fake_run)
+    result = session.session_report(repo)
+    assert result["archify"] is False
+    assert any("archify validate failed: begin (sequence schema boom)" in d
+               for d in result["degraded"])
+    assert any("archify validate failed: end (sequence schema boom)" in d
+               for d in result["degraded"])
+    assert not any(d.endswith("()") for d in result["degraded"])  # 空括号病根不复发
+
+
 def test_report_active_session_rejected(tmp_path, monkeypatch):
     _no_archify(monkeypatch)
     repo = _mk_repo(tmp_path)

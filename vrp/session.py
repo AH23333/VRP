@@ -284,11 +284,15 @@ def session_report(repo: Path, session_id: str = "", out_dir: Path | None = None
             ir_path = out / "ir" / f"{label}-architecture.json"
             target = out / "html" / f"{label}.html"
             try:
-                rc, _, err = render_mod._run_archify(
+                rc, a_out, a_err = render_mod._run_archify(
                     mjs, ["validate", ir["diagram_type"], str(ir_path), "--json"]
                 )
                 if rc != 0:
-                    degraded.append(f"archify validate failed: {label} ({err.strip()[:120]})")
+                    # AU-11：validate --json 的错误在 stdout JSON 的 error 字段（stderr
+                    # 恒空——R7' tsa 病根），经 _archify_error_text 提取（AU-10 守卫版）。
+                    degraded.append(
+                        f"archify validate failed: {label} ({render_mod._archify_error_text(a_out, a_err)})"
+                    )
                     continue
                 rc, _, err = render_mod._run_archify(
                     mjs, ["render", ir["diagram_type"], str(ir_path), str(target)]
