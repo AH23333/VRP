@@ -36,6 +36,11 @@ FR_ITERS = 300
 PUSH_ROUNDS = 240
 ROW_ID_CAP = 20000  # 切片嵌入上限（超大仓降级；按 id 序截断无病理偏置）
 
+# 影响面（交接 #142，学 TSA nav action=impact）：调用图 BFS 只走调用语义边
+_IMPACT_EDGE_TYPES = ("CALLS", "CALL_REFERENCE")
+IMPACT_BFS_CAP = 4000  # 传递可达 BFS 帽（防枢纽符号全图扩散；截断=下界诚实注记）
+IMPACT_TOP_N = 3  # top 调用方/被调名单长度（平行边数降序+名字升序确定性）
+
 _ECHARTS = Path(__file__).resolve().parent / "assets" / "echarts.min.js"
 
 DIR_EXPR = """
@@ -166,6 +171,72 @@ def _layout(nodes: list[dict], links: list[dict]) -> None:
 # ---------------------------------------------------------------- 数据装配
 
 
+def _load_impacts(con: sqlite3.Connection, anchor_fids: list[str]) -> dict:
+    """影响面（交接 #142，学 TSA nav action=impact）：锚定符号调用图 BFS。
+
+    每锚算：直达（dc 调用方数/dx 被调数）+传递可达（uc 上游/xc 下游
+    BFS，帽 IMPACT_BFS_CAP 截断 cap=true——计数为下界）+top-N 名单
+    （平行边数降序+名字升序，确定性）。只走调用语义边
+    （_IMPACT_EDGE_TYPES），DEFINES/WRITES 等结构边不算调用流。
+    无调用边的锚也进表（全零——dead-code 类 findings 的佐证信号）。
+    返回按锚 fid 排序的列表 [{dc, dx, uc, xc, cap, up: [...], down: [...]}]
+    （调用方以 sorted fids 序配索引——行 a 字段引用下标）。
+    """
+    if not anchor_fids:
+        return []
+    # top 名单用 name（真实符号名——label 是种类 'Function'/'Method'，
+    # sym 列语义才是 label；此处给读者看必须用 name）
+    edge_rows = con.execute(
+        f"SELECT e.src_fid, e.dst_fid, s.name, d.name FROM edges e "
+        f"LEFT JOIN symbols s ON s.fid = e.src_fid "
+        f"LEFT JOIN symbols d ON d.fid = e.dst_fid "
+        f"WHERE e.type IN ({','.join('?' * len(_IMPACT_EDGE_TYPES))})",
+        _IMPACT_EDGE_TYPES).fetchall()
+    out_adj: dict[str, list[str]] = {}
+    in_adj: dict[str, list[str]] = {}
+    out_lab: dict[str, list[str]] = {}
+    in_lab: dict[str, list[str]] = {}
+    for src, dst, sl, dl in edge_rows:
+        out_adj.setdefault(src, []).append(dst)
+        in_adj.setdefault(dst, []).append(src)
+        out_lab.setdefault(src, []).append(dl or "")
+        in_lab.setdefault(dst, []).append(sl or "")
+
+    def _bfs(adj: dict[str, list[str]], start: str) -> tuple[set[str], bool]:
+        seen = {start}
+        frontier = [start]
+        while frontier:
+            nxt: list[str] = []
+            for f in frontier:
+                for t in adj.get(f, ()):
+                    if t not in seen:
+                        seen.add(t)
+                        if len(seen) >= IMPACT_BFS_CAP:
+                            return seen, True
+                        nxt.append(t)
+            frontier = nxt
+        return seen, False
+
+    def _top(labels: list[str]) -> list[str]:
+        cnt: dict[str, int] = {}
+        for lb in labels:
+            if lb:
+                cnt[lb] = cnt.get(lb, 0) + 1
+        return [lb for lb, _ in sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))[:IMPACT_TOP_N]]
+
+    impacts: list = []
+    for fid in sorted(set(anchor_fids)):
+        up_seen, up_cap = _bfs(in_adj, fid)
+        dn_seen, dn_cap = _bfs(out_adj, fid)
+        impacts.append({
+            "dc": len(set(in_adj.get(fid, ()))), "dx": len(set(out_adj.get(fid, ()))),
+            "uc": len(up_seen) - 1, "xc": len(dn_seen) - 1,
+            "cap": up_cap or dn_cap,
+            "up": _top(in_lab.get(fid, [])), "down": _top(out_lab.get(fid, [])),
+        })
+    return impacts
+
+
 def _load_data(con: sqlite3.Connection, chain: dict | None) -> dict:
     q = lambda s, p=(): con.execute(s, p).fetchall()  # noqa: E731
     meta = {k: v for k, v in q("SELECT key, value FROM meta")}
@@ -254,12 +325,19 @@ def _load_data(con: sqlite3.Connection, chain: dict | None) -> dict:
     # #139 覆盖面：行位置 COALESCE 锚点符号兜底——旧库 similar_to 漏填
     # （etl 已修）仍可定位到锚点文件/行
     rows_raw = q("SELECT f.id, f.pathology, f.kind, f.source,"
-                 " COALESCE(f.file_path, s.file_path), COALESCE(f.start_line, s.start_line), s.label "
+                 " COALESCE(f.file_path, s.file_path), COALESCE(f.start_line, s.start_line), s.label, f.anchor_fid "
                  "FROM findings f LEFT JOIN symbols s ON f.anchor_fid = s.fid "
                  "ORDER BY f.id LIMIT ?", (ROW_ID_CAP,))
     truncated = fin_total > len(rows_raw)
     file_pages = (chain or {}).get("file_pages") or {}
     file_caps = (chain or {}).get("file_caps") or {}
+    # 影响面（交接 #142）：按锚 fid 去重计算（tsa 实测 15741 行 → 7737 锚），
+    # D.impacts 为列表（锚序=sorted fids 确定性），行只带 int 索引 a
+    # （64 字符 fid 逐行重复会膨胀 ~1.5MB——列表+索引压至 ~1MB）；
+    # 无锚行 a=-1（面板诚实注记不可算）
+    anchors = sorted({r[7] for r in rows_raw if r[7]})
+    impacts = _load_impacts(con, anchors)
+    anchor_idx = {fid: i for i, fid in enumerate(anchors)}
     rows = []
     for r in rows_raw:
         fp = r[4] or ""
@@ -272,7 +350,8 @@ def _load_data(con: sqlite3.Connection, chain: dict | None) -> dict:
             if ln and (cap is None or 1 <= ln <= cap):
                 href += f"#L{ln}"
         rows.append({"i": r[0], "p": r[1], "k": r[2], "s": r[3], "f": fp,
-                     "ln": ln, "sym": r[6] or "", "h": href})
+                     "ln": ln, "sym": r[6] or "", "h": href,
+                     "a": anchor_idx.get(r[7], -1)})
     pages = {}
     for r in rows:
         if r["f"] and r["f"] not in pages:
@@ -306,6 +385,7 @@ def _load_data(con: sqlite3.Connection, chain: dict | None) -> dict:
                              "lineStyle": {"width": l["lw"]}} for l in links]},
         "panels": panels,
         "rows": rows,
+        "impacts": impacts,
         "rowsTruncated": truncated,
         "pages": pages,
         "cmp": cmp_data,
@@ -675,6 +755,18 @@ function openDir(i){
     '<div class="sec">archify 细节层</div><ul><li><a href="chain/index.html" target="_blank">chain/ 总入口（模块交互图链 · 文件级源码页）</a></li></ul>');
   history.replaceState(null,'','#d/'+i);
 }
+function impactHtml(r){
+  if(r.a < 0) return '<div class="fp">无锚定符号——影响面不可算（该 finding 未锚定到符号）</div>';
+  const m = D.impacts[r.a];
+  if(!m) return '<div class="fp">无调用边——直接影响面为零</div>';
+  const pre = m.cap ? '≥ ' : '';
+  return '<div class="kv">'+
+    '<span>直接影响</span><b>被 '+fmt(m.dc)+' 符号调用 · 调用 '+fmt(m.dx)+' 符号</b>'+
+    '<span>传递影响</span><b>上游 '+pre+fmt(m.uc)+' · 下游 '+pre+fmt(m.xc)+(m.cap?'（BFS 帽截断，为下界）':'')+'</b>'+
+    (m.up.length?'<span>top 调用方</span><b>'+m.up.map(esc).join('、')+'</b>':'')+
+    (m.down.length?'<span>top 被调</span><b>'+m.down.map(esc).join('、')+'</b>':'')+
+    '</div>';
+}
 function openFinding(id){
   const r = D.rows.find(x=>x.i===id); if(!r) return;
   const jumpBtn = r.h
@@ -686,6 +778,7 @@ function openFinding(id){
     '<span>锚定符号</span><b>'+(r.sym?esc(r.sym):'—')+'</b>'+
     '<span>来源</span><b>'+esc(r.s)+'</b></div>'+
     '<div class="sec">跳转</div>'+jumpBtn+
+    '<div class="sec">影响面</div>'+impactHtml(r)+
     '<div class="sec">证据链</div><div class="fp" style="font-size:12px">行级锚定 file:start-end + window_hash 溯源（facts.db findings 表 #'+r.i+'）</div>');
   history.replaceState(null,'','#f/'+id);
 }

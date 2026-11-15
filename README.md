@@ -60,7 +60,7 @@ vrp drift <repo>                       # 梳理工件漂移查询面（只读）
 vrp remap <repo>                       # 漂移恢复半自动环：drift 的唯一候选 remap 一键写回 .vrp/ai/*.json（unresolved 诚实上报 → rc=1；再跑 vrp curate 复活）
 vrp refresh <repo>                     # 漂移恢复一键环：S0→S1→ETL→xcheck→drift→remap→curate→report（代码变更后工件全链路自动追平）
 vrp enforce <repo>                      # S7 架构执法：curate 入库的 structure 按语言路由执行（.py→import-linter；.ts/.js→dependency-cruiser；.go→go list 原生导入图；.rs→内置 use 解析器；.java→内置 package/import 解析器；.cs→内置 namespace/using 解析器；.kt→内置 package/import 解析器；.c/.cc/.cpp→内置 #include 解析器；.php→内置 namespace/use 解析器；.scala→内置 package/import 解析器；.rb→内置 module/require 解析器；.dart→内置 import 解析器；.swift→内置 Package.swift target 解析器；.zig→内置 @import 解析器；.lua→内置 require 解析器；.m/.mm→内置 #import 解析器），违例落 P9 findings
-vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SARIF+Mermaid+archify html+fusion.html 融合报告（构想v9 V-2：六风格单页总览——仪表盘/叙事/结构图/下钻/双引擎对账/数据切片，vendored ECharts 零外链，chain 同批联动行级跳转 #L{n}，主题令牌与 chain 同源三预设）；R7' 多级颗粒度——archify 图链成功出 chain/（替代 L1/L2），否则 L1 模块页+L2 符号页；archify 缺失降级不阻塞；用户产物信息架构——How to read/Project overview（AI 梳理职责+层规则）/Pathology checkup（P 码人话体检）/Deep data 折叠（AI 材料归拢）；报告产物密钥卫生——chain 源码页命中高置信密钥探测器（云 token/JWT/私钥块/URL 凭据）渲染层掩蔽 [VRP-MASKED:type:preview…]（行数不变 #L 锚点保持），命中清单落 .vrp/SECRETS.local.md 本地勿提交））
+vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SARIF+Mermaid+archify html+fusion.html 融合报告（构想v9 V-2：六风格单页总览——仪表盘/叙事/结构图/下钻/双引擎对账/数据切片，vendored ECharts 零外链，chain 同批联动行级跳转 #L{n}，主题令牌与 chain 同源三预设）；R7' 多级颗粒度——archify 图链成功出 chain/（替代 L1/L2），否则 L1 模块页+L2 符号页；archify 缺失降级不阻塞；用户产物信息架构——How to read/Project overview（AI 梳理职责+层规则）/Pathology checkup（P 码人话体检）/Deep data 折叠（AI 材料归拢）；报告产物密钥卫生——chain 源码页命中高置信密钥探测器（云 token/JWT/私钥块/URL 凭据）渲染层掩蔽 [VRP-MASKED:type:preview…]（行数不变 #L 锚点保持），命中清单落 .vrp/SECRETS.local.md 本地勿提交；finding 影响面——切片行锚定符号调用图 BFS 直达/传递可达（dc/dx/uc/xc+top 调用方/被调名单），BFS 帽截断下界诚实注记，无锚行注记不可算））
 vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 facts.db 快照 → 计数 diff + 双 L0 图并排 + verdict 时间线
 ```
 
@@ -109,9 +109,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1390 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1393 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 2913 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 2916 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -120,7 +120,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 2913 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1390 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1393 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）
 
 ## 外部工具（可选，缺失则降级）

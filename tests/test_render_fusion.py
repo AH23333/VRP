@@ -407,3 +407,73 @@ def test_chain_backfill_cap_counts_desc_and_notes(tmp_path, monkeypatch):
     assert any("over backfill cap 2" in n for n in chain["notes"]), "超帽必须诚实注记"
     got = {fp for fp in chain["file_pages"] if fp != "pkg/x.py"}
     assert got == {"d1/f.py", "d2/f.py"}, "计数降序优先回填（5/3 入，1 出）"
+
+
+# ---------- 影响面（交接 #142，学 TSA nav action=impact） ----------
+
+def _seed_anchored_finding(repo, fid="fid-beta", pathology="P2", kind="similar_to"):
+    """锚定 findings（fixture 默认无 anchor_fid——影响面行需真锚）。"""
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO findings (pathology, kind, source, file_path, start_line,"
+                " anchor_fid, payload_json) VALUES (?, ?, 's2-astgrep', 'pkg/x.py', 4, ?, '{}')",
+                (pathology, kind, fid))
+    con.commit()
+    con.close()
+
+
+def test_fusion_impact_basic():
+    """影响面：调用图 BFS 直达+传递可达+top 名单（name 非 label），
+    行带 int 索引 a（列表省字节），模板影响面节静态锁。"""
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    _seed_anchored_finding(repo)
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    render_fusion.build_fusion(repo, out, None)
+    t = (out / "fusion.html").read_text(encoding="utf-8")
+    D = _extract_D(t)
+    row = next(r for r in D["rows"] if r["a"] == 0)
+    assert row["k"] == "similar_to"
+    assert D["impacts"][0] == {
+        "dc": 1, "dx": 1, "uc": 1, "xc": 1, "cap": False,
+        "up": ["alpha"], "down": ["gamma"]}, "up/down 必须是 name（label 是种类）"
+    # 无锚行（fixture 自带 finding 无 anchor_fid）诚实 -1
+    assert any(r["a"] == -1 for r in D["rows"])
+    # 模板影响面节静态锁
+    assert "D.impacts[r.a]" in t and "影响面" in t
+    assert "BFS 帽截断" in t and "无锚定符号——影响面不可算" in t
+
+
+def test_fusion_impact_zero_edges():
+    """零调用边锚：全零影响面进表（dead-code 类 findings 佐证信号）。"""
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO symbols (fid, project, qualified_name, label, name,"
+                " file_path, start_line, end_line, content_hash)"
+                " VALUES ('fid-lone', 'p', 'pkg.lone', 'Function', 'lone',"
+                " 'pkg/x.py', 5, 6, 'h')")
+    con.commit()
+    con.close()
+    _seed_anchored_finding(repo, fid="fid-lone")
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    render_fusion.build_fusion(repo, out, None)
+    D = _extract_D((out / "fusion.html").read_text(encoding="utf-8"))
+    assert D["impacts"][0] == {
+        "dc": 0, "dx": 0, "uc": 0, "xc": 0, "cap": False, "up": [], "down": []}
+
+
+def test_fusion_impact_bfs_cap(tmp_path, monkeypatch):
+    """BFS 帽：超帽计数为下界（cap=true → 面板 ≥ 前缀诚实注记）。"""
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    _seed_anchored_finding(repo)
+    monkeypatch.setattr(render_fusion, "IMPACT_BFS_CAP", 1)
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    render_fusion.build_fusion(repo, out, None)
+    D = _extract_D((out / "fusion.html").read_text(encoding="utf-8"))
+    m = D["impacts"][0]
+    assert m["cap"] is True, "帽触发必须标记"
+    assert m["uc"] == 1 and m["xc"] == 1, "截断于首个邻居（下界）"
