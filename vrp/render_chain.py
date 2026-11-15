@@ -60,6 +60,10 @@ FID_CHUNK = 500
 CHAIN_MODULES_CAP = 30
 CHAIN_FILE_PAGES_CAP = 400
 CHAIN_FILE_LINES_CAP = 4000
+# #139 覆盖面回填：模块链未收录的 findings 文件补独立源码页的全局帽
+# （findings 计数降序 + 路径升序确定性截断；超帽文件无页——fusion 行
+# 诚实降级空链接）
+CHAIN_FINDING_FILES_CAP = 2000
 CHAIN_DIAGRAMS_GLOBAL_CAP = 240
 REL_EXT_CAP = 8  # rel 条链外对端 chips 封顶（超出 +N more）
 
@@ -2046,8 +2050,31 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
                 if fp and fp not in seen_fp:
                     seen_fp.add(fp)
                     fpaths.append(fp)
+        # ---- #139 覆盖面回填：模块链未收录的 findings 文件补独立源码页。
+        # 有效位置 = COALESCE(f.file_path, s.file_path)（同 fusion 行口径）；
+        # findings 计数降序 + 路径升序确定性，全局帽截断诚实注记。
+        backfill_fps: list[str] = []
+        seen_bf: set[str] = set()
+        mod_fps = {_norm(x) for x in fpaths}
+        fin_rows = con.execute(
+            "SELECT COALESCE(f.file_path, s.file_path) fp, COUNT(*) c"
+            " FROM findings f LEFT JOIN symbols s ON f.anchor_fid = s.fid"
+            " GROUP BY 1").fetchall()
+        for fp, _c in sorted(fin_rows, key=lambda x: (-x[1], str(x[0] or ""))):
+            nfp = _norm(str(fp or ""))
+            if (not fp or str(fp).startswith("<") or nfp in seen_bf
+                    or nfp in mod_fps):
+                continue
+            seen_bf.add(nfp)
+            backfill_fps.append(str(fp))
+        if len(backfill_fps) > CHAIN_FINDING_FILES_CAP:
+            notes.append(f"{len(backfill_fps)} finding files without module pages"
+                         f" over backfill cap {CHAIN_FINDING_FILES_CAP},"
+                         f" only first {CHAIN_FINDING_FILES_CAP} chained (truncated)")
+            backfill_fps = backfill_fps[:CHAIN_FINDING_FILES_CAP]
         all_fids = list(dict.fromkeys(
-            all_fids + _load_full_file_fids(con, fpaths)))
+            all_fids + _load_full_file_fids(con, fpaths)
+            + _load_full_file_fids(con, backfill_fps)))
         rows, edges = _load_rows_edges(con, all_fids, any_endpoint=True)
         # CALLS 边链外对端符号行补载：rel 条外部目标可命名（无页，仅名 + @file）
         _load_symbol_rows(
@@ -2176,6 +2203,28 @@ def build_chain(repo: Path, out_chain: Path, mjs: Path) -> dict:
         if dropped_files:
             notes.append(f"{len(dropped_files)} files over per-module file page cap "
                          f"{CHAIN_FILE_PAGES_CAP}, no code pages emitted (truncated)")
+
+        # ---- #139 覆盖面回填落盘：非模块 findings 文件进 written（全量符号
+        # 已随 all_fids 载入 rows——sindex 给出符号锚点/关系条；面包屑
+        # home+路径，无模块归属）
+        for fp in backfill_fps:
+            nfp = _norm(fp)
+            if nfp in written:
+                continue
+            if not _path_ok(fp):
+                lines = []
+                fnote = ["path rejected by guard (absolute / .. / synthetic)"]
+            else:
+                try:
+                    lines = (repo / fp).read_text(
+                        encoding="utf-8", errors="replace").split("\n")
+                    fnote = []
+                except OSError:
+                    lines = []
+                    fnote = ["file missing or unreadable"]
+            written[nfp] = lines
+            file_notes[nfp] = fnote
+            file_crumbs_of[nfp] = [("index.html", "home"), (None, nfp)]
 
         caps: dict[str, int] = {}
         for fpath, lines in written.items():

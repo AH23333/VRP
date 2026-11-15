@@ -319,3 +319,91 @@ def test_chain_file_caps_match_page_anchors():
         ids = [int(m) for m in re.findall(r'id="L(\d+)"', code)]
         assert ids, f"{fp} 页内无行锚点"
         assert max(ids) == cap, f"{fp}: cap={cap} != 页内实际锚点上限={max(ids)}"
+
+
+# ---------- 覆盖面提升（#139） ----------
+
+def test_fusion_row_location_falls_back_to_anchor():
+    """#139：行位置 COALESCE 锚点兜底——file_path/start_line NULL 的 finding
+    （旧库 similar_to）仍定位到锚点符号文件/行。"""
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO findings (pathology, kind, source, anchor_fid, payload_json)"
+                " VALUES ('P2', 'similar_to', 'etl', 'fid-alpha', '{}')")
+    con.commit()
+    con.close()
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    render_fusion.build_fusion(repo, out, None)
+    D = _extract_D((out / "fusion.html").read_text(encoding="utf-8"))
+    row = next(r for r in D["rows"] if r["k"] == "similar_to")
+    assert row["f"] == "pkg/x.py" and row["ln"] == 1, "COALESCE 兜底 fid-alpha @ pkg/x.py:1"
+    assert row["sym"] == "Function" and row["h"] == ""
+
+
+def test_chain_backfills_finding_files_without_module_pages():
+    """#139 覆盖面回填：非模块 findings 文件补独立源码页，fusion 行可链。"""
+    if render.find_archify_mjs() is None or shutil.which("node") is None:
+        pytest.skip("archify/node not available")
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    _seed_files(repo)
+    (repo / "orphan").mkdir()
+    (repo / "orphan" / "z.py").write_text("def lone():\n    return 9\n", encoding="utf-8")
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO symbols (fid, project, qualified_name, label, name, file_path,"
+                " start_line, end_line, content_hash)"
+                " VALUES ('fid-lone', 'p', 'orphan.lone', 'Function', 'lone',"
+                " 'orphan/z.py', 1, 2, 'h')")
+    con.execute("INSERT INTO findings (pathology, kind, source, file_path, start_line,"
+                " anchor_fid, payload_json)"
+                " VALUES ('P1', 'k', 's2-astgrep', 'orphan/z.py', 2, 'fid-lone', '{}')")
+    con.commit()
+    con.close()
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    mjs = render.find_archify_mjs()
+    chain = render_chain.build_chain(repo, out / "chain", mjs)
+    assert chain["ok"]
+    assert "orphan/z.py" in chain["file_pages"], "非模块 findings 文件必须回填源码页"
+    page = chain["file_pages"]["orphan/z.py"]
+    code = (out / "chain" / page).read_text(encoding="utf-8")
+    assert 'id="L2"' in code, "回填页行级锚点"
+    assert chain["file_caps"]["orphan/z.py"] == 2
+    render_fusion.build_fusion(repo, out, chain)
+    D = _extract_D((out / "fusion.html").read_text(encoding="utf-8"))
+    row = next(r for r in D["rows"] if r["f"] == "orphan/z.py")
+    assert row["h"] == f"chain/{page}#L2", "回填文件行必须行级精跳"
+
+
+def test_chain_backfill_cap_counts_desc_and_notes(tmp_path, monkeypatch):
+    """#139 回填帽：findings 计数降序优先，超帽诚实注记。"""
+    if render.find_archify_mjs() is None or shutil.which("node") is None:
+        pytest.skip("archify/node not available")
+    tmp, repo, con = _mk_repo()
+    _seed(con)
+    _seed_files(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    for d, n in (("d1", 5), ("d2", 3), ("d3", 1)):
+        (repo / d).mkdir()
+        (repo / d / "f.py").write_text("def fn():\n    pass\n", encoding="utf-8")
+        con.execute("INSERT INTO symbols (fid, project, qualified_name, label, name,"
+                    " file_path, start_line, end_line, content_hash)"
+                    " VALUES (?, 'p', ?, 'Function', 'fn', ?, 1, 2, 'h')",
+                    (f"fid-{d}", f"{d}.fn", f"{d}/f.py"))
+        for _i in range(n):
+            con.execute("INSERT INTO findings (pathology, kind, source, file_path,"
+                        " start_line, payload_json)"
+                        " VALUES ('P2', 'k', 's2-astgrep', ?, 1, '{}')", (f"{d}/f.py",))
+    con.commit()
+    con.close()
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True)
+    monkeypatch.setattr(render_chain, "CHAIN_FINDING_FILES_CAP", 2)
+    mjs = render.find_archify_mjs()
+    chain = render_chain.build_chain(repo, out / "chain", mjs)
+    assert chain["ok"]
+    assert any("over backfill cap 2" in n for n in chain["notes"]), "超帽必须诚实注记"
+    got = {fp for fp in chain["file_pages"] if fp != "pkg/x.py"}
+    assert got == {"d1/f.py", "d2/f.py"}, "计数降序优先回填（5/3 入，1 出）"

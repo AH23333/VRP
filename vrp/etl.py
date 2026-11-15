@@ -378,7 +378,7 @@ def _etl_edges(
 
         if table == "findings_p2":
             payload = json.dumps({"jaccard": props.get("jaccard"), "same_file": props.get("same_file")})
-            findings_rows.append(("P2", "similar_to", src_fid, dst_fid, None, None, None, payload))
+            findings_rows.append((src_fid, dst_fid, payload))
         elif table == "history_coupling":
             history_rows.append((src_fid, dst_fid, props_raw))
         elif table == "test_linkage":
@@ -427,10 +427,15 @@ def _etl_edges(
     dst.executemany("INSERT INTO usage_hints (src_fid, dst_fid, properties_json) VALUES (?,?,?)", usage_rows)
     dst.executemany("INSERT INTO history_coupling (src_fid, dst_fid, properties_json) VALUES (?,?,?)", history_rows)
     dst.executemany("INSERT INTO test_linkage (test_fid, target_fid, source, properties_json) VALUES (?,?,?,?)", tests_rows)
+    # #139 覆盖面：similar_to findings 去规范化锚点位置（file_path/start_line/
+    # end_line 取锚点符号行）——渲染层行级跳转依赖；INSERT..SELECT 与符号行
+    # 同源（符号已先于本函数入库，fid 经 fid_by_id 必命中）
     dst.executemany(
-        "INSERT INTO findings (pathology, kind, source, anchor_fid, related_fid, file_path, start_line, end_line, payload_json)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
-        [(r[0], r[1], "etl", *r[2:]) for r in findings_rows],
+        "INSERT INTO findings (pathology, kind, source, anchor_fid, related_fid,"
+        " file_path, start_line, end_line, payload_json)"
+        " SELECT 'P2', 'similar_to', 'etl', ?, ?, s.file_path, s.start_line,"
+        " s.end_line, ? FROM symbols s WHERE s.fid = ?",
+        [(a, b, p, a) for a, b, p in findings_rows],
     )
 
     stats["edges"] = len(edge_rows)

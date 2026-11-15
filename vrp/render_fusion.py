@@ -250,8 +250,11 @@ def _load_data(con: sqlite3.Connection, chain: dict | None) -> dict:
                        "files": files_by_dir.get(nm, []), "in": in_l, "out": out_l})
     _layout(nodes, links)
 
-    # 切片行（cap 降级：按 id 序无病理偏置——V-9.1 cap 教训）
-    rows_raw = q("SELECT f.id, f.pathology, f.kind, f.source, f.file_path, f.start_line, s.label "
+    # 切片行（cap 降级：按 id 序无病理偏置——V-9.1 cap 教训）。
+    # #139 覆盖面：行位置 COALESCE 锚点符号兜底——旧库 similar_to 漏填
+    # （etl 已修）仍可定位到锚点文件/行
+    rows_raw = q("SELECT f.id, f.pathology, f.kind, f.source,"
+                 " COALESCE(f.file_path, s.file_path), COALESCE(f.start_line, s.start_line), s.label "
                  "FROM findings f LEFT JOIN symbols s ON f.anchor_fid = s.fid "
                  "ORDER BY f.id LIMIT ?", (ROW_ID_CAP,))
     truncated = fin_total > len(rows_raw)
