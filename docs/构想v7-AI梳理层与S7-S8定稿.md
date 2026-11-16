@@ -910,3 +910,25 @@ unwind 的 slices 是**代码库分区**（partition：每 id 恰属一片，sea
 
 - **测试**：+2（test_procs_priority.py 补 normal_priority 真测：Windows 子进程回读 NORMAL(32) / POSIX `os.nice(0)<10`，skipif 守卫）；全量快速层 **1507 绿**（1505+2 精确）。
 - **文档**：README 计数 1507/1523/3030+pre-push、交接 #149、本节收口。契约零改（run_tree 签名加缺省参数，既有调用方零迁移）。
+
+## 21. #150 批次：code-atlas 交互调用回撤低优先级（2026-11-16，#149 后续——全量 3030 第二轮 t3 flake 修实，已收口）
+
+### 21.0 实况
+
+- **触发**：全量 3030 第二轮（#149 修 stryker 后）冒新红 `test_dossier_big_repo_full_external_t3`——t3 单跑 30.9s 绿、deep 层单独跑 **1523 全绿**（15:46）、仅 quick+deep 混合全量连跑 37min 饱和负载下红。两轮全量各冒一个 flake（第一轮 stryker/第二轮 t3）——#147 低优先级的回归面逐个暴露。
+- **根因**：`s5_cabrief.call_code_atlas` 是 **120s watchdog 超时即树杀降级 `failed`** 的交互外链调用（repo_map_brief 伪失败→t3 断言 `status == "ok"` 红）；#147 给它接线了低优先级——atlas（node serve+jsonrpc）在饱和负载+BELOW_NORMAL 下启动/响应变慢→120s 伪超时。**atlas 是秒级交互调用非重型批处理**，#147 把它算进"重型子进程"是过度覆盖。
+- **#147 边界例外的完整版图**（#149+#150 两批后定型）：低优先级只适用于"结果与墙钟无关"的重型批处理（CBM 索引/freeze 基线/archify 渲染/git 快照）；不适用于①时序敏感测量（mutate 三引擎——超时边界决定 killed/survived 判定）②超时即降级的交互外链（code-atlas——120s watchdog 伪超时即伪失败）。
+
+### 21.1 实施
+
+- `s5_cabrief.call_code_atlas` spawn 回撤低优先级（POSIX 去 nice 前缀 / win32 去 creationflags——#147 接线点回撤）；`start_new_session`/watchdog 树杀逻辑不动。
+- #147 其余接线面不变（run_tree 消费链/s4_freeze._run_one）；#149 三 mutate 引擎 `normal_priority=True` 不变。
+
+### 21.2 红线
+
+- 零新依赖；watchdog/降级语义零改（tests/test_s5_cabrief.py 8 绿背书）；无新增测试（quick 层无稳定 atlas 环境，deep 才有——回撤正确性由 t3 deep E2E 全量第三轮验收背书）。
+
+### 21.3 收口记实
+
+- **测试**：无新增（计数 1507/1523/3030 不变）；全量 3030 第三轮验收 0 红（两 flake 均收敛）。
+- **文档**：交接 #150、本节收口。README 零改（计数不变）。契约零改。

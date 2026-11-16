@@ -59,10 +59,10 @@ def call_code_atlas(repo: Path, tool: str, arguments: dict, timeout: int = 120) 
         # kill_tree 的 POSIX 分支按进程组击杀：子进程必须自成组长，
         # 否则 killpg 会打到 VRP 自己的组（procs.run_tree 同款纪律）。
         popen_kwargs["start_new_session"] = True
-        # #147 低优先级（POSIX nice 前缀；win32 走 creationflags）
-        argv = [*procs.low_priority_argv_prefix(), *argv]
-    else:
-        popen_kwargs["creationflags"] = procs.low_priority_creationflags()
+    # #150：交互外链调用不降优先级——120s watchdog 超时即树杀降级 failed
+    # （repo_map_brief 伪失败），#149 mutate 同型的时序敏感面；atlas 是
+    # 秒级交互调用非重型批处理，#147 低优先级接线在此回撤（全量 3030
+    # 饱和负载实测 t3 伪超时红，deep 单跑/单测绿）。
     proc = subprocess.Popen(
         argv,
         stdin=subprocess.PIPE,
