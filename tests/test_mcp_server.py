@@ -21,6 +21,7 @@ TOOL_NAMES = {
     "nav_callees",
     "nav_slice",
     "nav_path",
+    "seams",
     "query_facts",
     "curate_submit",
     "curate_slices",
@@ -161,6 +162,18 @@ def test_nav_chain_over_mcp(tmp_path):
     assert [p["fid"] for p in out["path"]["path"]] == ["f1", "f2"]
     assert out["path"]["hops_detail"][0]["type"] == "CALLS"
     assert out["rev"]["found"] is False
+
+
+def test_seams_over_mcp(tmp_path):
+    """#143 A 件：seams 工具 over the wire（结构缺失诚实降级面）。"""
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "seams", {})
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert out["structure"] == "missing"
+    assert "curate structure" in out["note"]
 
 
 def test_error_json_not_crash(tmp_path):

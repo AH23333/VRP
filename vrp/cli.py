@@ -13,6 +13,8 @@ from . import __version__
 from . import dbpath
 from . import etl as etl_mod
 from . import curate as curate_mod
+from . import nav as nav_mod
+from . import propose as propose_mod
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
 from . import auto_curate
 from . import session as session_mod
@@ -383,6 +385,25 @@ def cmd_drift(args) -> int:
     return 1 if result["summary"]["active_but_drifted"] else 0
 
 
+def cmd_seams(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = nav_mod.nav_seams(repo)
+    _print_json(result)
+    return 0
+
+
+def cmd_propose(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = propose_mod.propose_structure(
+        repo,
+        out=Path(args.out) if args.out else None,
+        target_modules=args.target_modules,
+        balance_cap=args.balance_cap,
+    )
+    _print_json(result)
+    return 0 if result.get("ok") else 1
+
+
 def cmd_remap(args) -> int:
     repo = _repo_arg(args.repo)
     facts_path = repo / ".vrp" / "facts.db"
@@ -683,6 +704,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("repo")
     p.set_defaults(func=cmd_remap)
+
+    p = sub.add_parser(
+        "seams",
+        help="#143: cross-module seam aggregation over the active structure (read-only; unwind seams; "
+        "module dependency graph raw material)",
+    )
+    p.add_argument("repo")
+    p.set_defaults(func=cmd_seams)
+
+    p = sub.add_parser(
+        "propose",
+        help="#143: deterministic structure partition proposal (unwind slices propose; top-dir seeds + "
+        "edge-weight greedy merge + balance cap; writes .vrp/proposals/ NOT .vrp/ai/ - adopt via curate)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--out", help="output file (default: <repo>/.vrp/proposals/structure-proposal.json)")
+    p.add_argument("--target-modules", type=int, default=None, help="target module count (default 8)")
+    p.add_argument("--balance-cap", type=float, default=None,
+                   help="max merged module share of candidates (default 0.6)")
+    p.set_defaults(func=cmd_propose)
 
     p = sub.add_parser(
         "refresh",

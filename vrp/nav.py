@@ -22,6 +22,9 @@ import sqlite3
 import time
 from pathlib import Path
 from . import dbpath
+# #143：SLICE_EDGE_TYPES 单一权威在 curate（slice 验证同口径），nav 只读复用
+# 防口径漂移（curate 纯 stdlib 无包内导入——零环）
+from .curate import SLICE_EDGE_TYPES
 
 MODULE_SYMBOL_CAP = 200
 MODULE_FINDINGS_CAP = 20
@@ -575,6 +578,127 @@ def nav_path(
         "verify low-confidence edges via nav_symbol or source; ties broken deterministically "
         "(lexicographically smallest fid)",
     }
+
+
+SEAM_EDGES_CAP = 20  # 每模块对 top 边样本帽（计数/by_type 不受样本帽影响）
+
+
+def nav_seams(repo: Path) -> dict:
+    """缝合线查询面（#143 A 件，学 unwind seams）：active structure 模块间跨界边聚合。
+
+    只读：跨模块边（SLICE_EDGE_TYPES 同口径——CALLS/CALL_REFERENCE/HTTP_CALLS，
+    单一权威从 curate 导入）按有序模块对聚合——总数+by_type 细分+distinct
+    fid 对数；每对附 top 边样本（fid 对平行边数降序+fid 字典序 tie-break，
+    SEAM_EDGES_CAP 帽超限 capped=true 诚实注记——计数不受样本帽影响）。
+    未分配符号参与的边计入 unassigned_edges（不并入任何模块对——无主符号
+    无缝）；同模块内部边计入 internal_edges 供参照。seams 列表本身即模块
+    依赖图（strangler 重建顺序原料——本工具只给数据，排序由消费方决策）。
+    无 structure 表/无 active 行 → structure=missing 诚实降级（不伪造缝合线）。
+    """
+    con = _connect_ro(repo)
+    try:
+        if not _has_table(con, "structure"):
+            return {
+                "level": "seams", "structure": "missing",
+                "note": "no structure table - seams need an ingested partition (curate structure)",
+            }
+        row = con.execute(
+            "SELECT payload_json FROM structure WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return {
+                "level": "seams", "structure": "missing",
+                "note": "no active structure - seams need an ingested partition (curate structure)",
+            }
+        try:
+            payload = json.loads(row[0])
+        except json.JSONDecodeError:
+            raise SystemExit("nav_seams: corrupt structure payload - re-run curation to rebuild it")
+        if not isinstance(payload, dict):
+            raise SystemExit("nav_seams: corrupt structure payload - re-run curation to rebuild it")
+        modules_raw = payload.get("modules", [])
+        if (
+            not isinstance(modules_raw, list)
+            or not modules_raw
+            or any(
+                not isinstance(mod, dict) or not isinstance(mod.get("symbol_fids", []), list)
+                for mod in modules_raw
+            )
+        ):
+            # 与 nav_architecture 嵌套形状守卫同口径：整份结构不可信不部分采信
+            raise SystemExit("nav_seams: corrupt structure payload - re-run curation to rebuild it")
+        fid_to_mod: dict[str, str] = {}
+        for mod in modules_raw:
+            mid = mod.get("module_id", "")
+            for fid in mod["symbol_fids"]:
+                fid_to_mod[fid] = mid
+        marks = ",".join("?" * len(SLICE_EDGE_TYPES))
+        pair_total: dict[tuple[str, str], int] = {}
+        pair_by_type: dict[tuple[str, str], dict[str, int]] = {}
+        pair_fid_pairs: dict[tuple[str, str], dict[tuple[str, str], int]] = {}
+        internal_edges = 0
+        unassigned_edges = 0
+        for src, dst, etype in con.execute(
+            f"SELECT src_fid, dst_fid, type FROM edges WHERE type IN ({marks})", SLICE_EDGE_TYPES
+        ):
+            a = fid_to_mod.get(src)
+            b = fid_to_mod.get(dst)
+            if a is None or b is None:
+                unassigned_edges += 1
+                continue
+            if a == b:
+                internal_edges += 1
+                continue
+            key = (a, b)
+            pair_total[key] = pair_total.get(key, 0) + 1
+            bt = pair_by_type.setdefault(key, {})
+            bt[etype] = bt.get(etype, 0) + 1
+            fp = pair_fid_pairs.setdefault(key, {})
+            fp[(src, dst)] = fp.get((src, dst), 0) + 1
+        seams: list[dict] = []
+        for key in sorted(pair_total, key=lambda k: (-pair_total[k], k[0], k[1])):
+            a, b = key
+            fid_pairs = pair_fid_pairs[key]
+            top = sorted(fid_pairs.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:SEAM_EDGES_CAP]
+            samples: list[dict] = []
+            for (src, dst), n in top:
+                srow = con.execute(
+                    "SELECT name, file_path, start_line FROM symbols WHERE fid = ?", (src,)
+                ).fetchone()
+                drow = con.execute(
+                    "SELECT name, file_path, start_line FROM symbols WHERE fid = ?", (dst,)
+                ).fetchone()
+                entry: dict = {"src_fid": src, "dst_fid": dst, "edges": n}
+                if srow is not None:
+                    entry["src"] = f"{srow['name']} ({srow['file_path']}:{srow['start_line']})"
+                if drow is not None:
+                    entry["dst"] = f"{drow['name']} ({drow['file_path']}:{drow['start_line']})"
+                samples.append(entry)
+            seams.append({
+                "from": a,
+                "to": b,
+                "edges": pair_total[key],
+                "by_type": dict(sorted(pair_by_type[key].items())),
+                "fid_pairs": len(fid_pairs),
+                "capped": len(fid_pairs) > SEAM_EDGES_CAP,
+                "top_edges": samples,
+            })
+        return {
+            "level": "seams",
+            "structure": "active",
+            "modules": [
+                {"module_id": m.get("module_id", ""), "symbols": len(m["symbol_fids"])}
+                for m in sorted(modules_raw, key=lambda m: m.get("module_id", ""))
+            ],
+            "seams": seams,
+            "internal_edges": internal_edges,
+            "unassigned_edges": unassigned_edges,
+            "note": "cross-module edges (CALLS/CALL_REFERENCE/HTTP_CALLS) over the active structure; "
+            "seams list = module dependency graph (strangler rebuild-order raw material - consumer sorts); "
+            "top_edges capped per pair (counts unaffected)",
+        }
+    finally:
+        con.close()
 
 
 def query_facts(repo: Path, sql: str, params: str = "", max_rows: int = QUERY_MAX_ROWS) -> dict:

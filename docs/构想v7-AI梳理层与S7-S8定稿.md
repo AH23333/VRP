@@ -623,3 +623,52 @@ MCP+skills（§1.4）服务**有 agent 环境的用户**；内置循环服务**�
 - **模型选型结论（智谱免费档实测）**：glm-4-flash 指令遵循力不足（verbatim 邻接纪律 3 轮 3 拒，材料三轮补强后行为不变——诚实记录为不可用）；glm-4.5-flash 推理模型不适用（97.5s+2048 tokens 全烧 reasoning、content 空）；**glm-4.5 可用**（thinking 开启时 slices/structure 稳定 attempt-1 过，关 thinking 则 slices 退化 3 拒——verbatim 纪律依赖思考模式；max_output_tokens 32768 下结构一次成型）；engines 面结论已并入 §13.3 配置示例
 - **测试收口**：tests/test_auto_curate.py **37 例**（+grounding 2：真实符号/边/链节+截断标注；+thinking 2：配置开关校验+显式才发送）；tests/test_s7_enforce_ts.py 多契约逗号回归 1；快测 **478 绿**
 - **deep 冒烟**（skipif 无 `VRP_LLM_API_KEY`）留作下批可选
+
+## 14. #143 批次设计稿：缝合线查询面 + 重组切片提议（2026-11-16，学 unwind slices propose+seams——已批已实施）
+
+### 14.0 概念翻译（先对齐再动手）
+
+unwind 的 slices 是**代码库分区**（partition：每 id 恰属一片，seams=跨界边→接口契约→strangler 重建顺序）。VRP 两个既有概念中：**structure modules 才是分区**（symbol_fids 不重叠、跨模块边即耦合面）；**VRP slices 是业务流链**（steps 序列，非分区）。故本批学习对象映射：
+
+- unwind **seams** → VRP **structure 模块间跨模块边**的只读查询面（缝合线）
+- unwind **slices propose**（import 图确定性聚类、顶层目录播种、按候选数平衡）→ VRP **structure 分区的确定性提议生成器**（重组切片提议——供 AI/人采纳后经 curate 全量验证入库）
+
+### 14.1 A 件：缝合线 seams（只读查询面）
+
+- **`nav_seams()`**（vrp/nav.py）+ MCP `seams` 工具 + CLI `vrp seams <repo>`：
+  - 输入：active structure；缺/非 active → 诚实降级 `structure_missing`（缝不存在于无分区仓，报 unassigned_symbols 全量口径不伪造缝合线）
+  - 计算：`SLICE_EDGE_TYPES`（CALLS/CALL_REFERENCE/HTTP_CALLS，与 slice 验证同口径）跨模块边聚合——每有序模块对 (a→b)：边计数（按 type 细分）+ top-N 边样本（src/dst name+file:line，平行边数降序+字典序 tie-break 确定性，`SEAM_EDGES_CAP`/对 帽，超帽诚实 `capped` 注记；**计数不受样本帽影响**）
+  - 未分配符号的边：`unassigned` 计数诚实上报，不并入任何模块对
+  - 模块依赖图 = 有缝即依赖（拓扑可供 strangler 式重建顺序——unwind "seams drive Play" 的 VRP 对应物；本批只给数据不给顺序算法，顺序=消费方决策）
+- **红线**：纯 stdlib 只读（mode=ro），零写库零产物
+
+### 14.2 B 件：重组切片提议 propose（确定性分区提议，不旁路 curate）
+
+- **`vrp propose <repo> [--out <path>]`**（vrp/propose.py，CLI；MCP 不加面——curate-auto/agent 经 CLI 或直接读文件）：
+  - **候选域**：structure 目标符号全量（排除 File/Folder/File-like 伪符号——auto_curate grounding 同排除口径）
+  - **算法（确定性，无随机）**：①种子=顶层目录（unwind "seeded by top-level directories"）；②贪心凝聚合并——种子对按跨种子边权（调用边计数）降序合并至目标模块数 `PROPOSE_TARGET_MODULES`（默认 8），同权字典序 tie-break；③平衡帽——合并后模块符号数 ≤ `PROPOSE_BALANCE_CAP`（默认 60%）才许并，超帽禁并（unwind "balanced by candidate count"）；④单目录超帽按子目录切分再参与合并
+  - **输出**：**curate structure 输入格式**草案——modules[].module_id=目录 slug、name/responsibility=`[PROPOSED] …` 占位（非空合法但明示待 AI/人补语义）、单层 `proposed`（层 DAG 单层合法）；**写入 `.vrp/proposals/structure-proposal.json`（不在 `.vrp/ai/`——curate 扫 `.vrp/ai/` 全收，误放=未经审阅自动提交；提议与采纳分离）**
+  - **采纳路径**：AI/人把草案改写（补 name/responsibility 人话、调边界）后放 `.vrp/ai/` 走既有 curate 全量验证——**提议不旁路，重提仍全量重验**（remap 同哲学）
+  - **幂等**：同 facts.db → 字节级同提议文件（无时间戳）
+- **红线**：纯 stdlib、只读 facts.db、写 proposals/ 一文件
+
+### 14.3 测试与实证
+
+- **测试（预估 ~18）**：test_nav 追加 seams（聚合/未分配/降级/确定性/cap/MCP over the wire）；test_propose 新建（种子/合并序/平衡帽/伪符号排除/占位 schema 过 `_validate_structure` dry-run/幂等字节级/CLI 接线/空仓诚实）
+- **tsa 实证**：tsa 有 active structure（7 模块）→ seams 真数据（模块对计数+unassigned 口径）；propose 对 66k 符号跑（性能+平衡帽真实触发）；两跑字节级复现
+- **文档**：契约《梳理工件契约》§3 命令面 + README + 交接 #143 + 本节收口
+
+### 14.4 明确不做（本批）
+
+- 渲染面（fusion/module 页缝合计数列）——后续批
+- auto_curate structure 步材料加 proposal 参照——后续批（先让提议面独立稳定）
+- 重建顺序算法（拓扑排序包装）——消费方（AI/人）自取数据自排
+- unwind Server/UQL/Merkle 增量——红线维持不学
+
+### 14.5 实施记实（2026-11-16）
+
+- **A 件落地**：`nav_seams(repo)`（vrp/nav.py）+ MCP `seams` 工具 + CLI `vrp seams`。口径复用 `curate.SLICE_EDGE_TYPES`（单一权威防漂移）；per 有序模块对：总数+by_type+distinct fid 对+top 边样本帽 `SEAM_EDGES_CAP=20`（平行边数降序+fid 字典序，`capped` 注记，计数不受帽影响）；unassigned/internal 分流计数；结构缺失/非 active→`structure=missing` 诚实降级；corrupt payload→SystemExit。
+- **B 件落地**：vrp/propose.py `propose_structure(repo, out, target_modules, balance_cap)` + CLI `vrp propose`（MCP 不加面）。顶层目录播种（根级 "(root)"）、边权贪心凝聚（同权字典序）、平衡帽默认 0.6（绝对符号数 `max(1, int(ratio*total))`）、零权对不合并、超帽单目录子目录一层切分（**单子目录不切——只在实际产生 ≥2 子种子时改名，防改名噪声**——实施期细化）、候选排除 File/Module 伪符号与空 file_path；输出 `.vrp/proposals/structure-proposal.json`（curate structure 输入格式，`[PROPOSED]` 占位，单层 proposed）。
+- **测试 18 个**（预估 ~18 命中）：test_nav +5（聚合/缺失/corrupt/帽+确定性/CLI）、test_propose 新建 12、test_mcp_server +1（over the wire）；MCP 工具集合测试 TOOL_NAMES 同步加 `seams`。
+- **tsa 实证**：seams——active structure 实况 **2 模块**（tsa-kernel 21 符号 + tsa-interface 323 符号，2026-11-06 建；设计稿"7 模块"为记忆偏差，库即真相）：跨模块边 **0**（与 #131 探针"跨仓 deps:[]"定性一致——数据真相非工具缺陷）、unassigned_edges 77,974 诚实上报。propose——66,116 符号 **<1s** 出 8 模块（tests 35,699=54%、tree_sitter_analyzer 20,088、rfcs 1,813、docs 1,499 等；(root)/examples/benchmarks/compatibility_test 凝聚进主包）；**两跑字节级全等** sha256 `6101AF1B982282250830F1CC85675F12B1279274F9667AC7D5D77FA9F1FE5DBA`（4,528,673 bytes）。
+- 实施期修正 1 个收集错：proposals 目录常量 str/Path 拼接 TypeError → `PROPOSAL_DEFAULT_PATH` Path 常量。

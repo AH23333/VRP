@@ -527,3 +527,119 @@ def test_query_facts_time_budget_interrupts_pathological_query(tmp_path):
         raise AssertionError("query_facts hung >30s on unbounded cross-join: no time budget guard")
     assert proc.returncode != 0
     assert "time budget" in proc.stderr
+
+
+# ---------- 缝合线查询面（#143 A 件，学 unwind seams） ----------
+
+def _add_structure(repo: Path, modules: list[dict]) -> None:
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO structure (payload_json, status) VALUES (?, 'active')",
+        (json.dumps({
+            "modules": modules,
+            "layers": [{"name": m.get("layer", "L"), "may_depend_on": []} for m in modules],
+        }),),
+    )
+    con.commit()
+    con.close()
+
+
+def test_nav_seams_aggregates_cross_module_edges(tmp_path):
+    """跨模块边按有序模块对聚合（总数/by_type/fid 对数），内部/未分配分流。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
+    _add_symbol(repo, "f2", "pkg.b.y", "y", "pkg/b.py", 1)
+    _add_symbol(repo, "f3", "pkg.c.z", "z", "pkg/c.py", 1)
+    _add_symbol(repo, "f9", "pkg.d.orphan", "orphan", "pkg/d.py", 1)  # 未入 structure
+    _add_structure(repo, [
+        {"module_id": "m1", "name": "甲", "responsibility": "r", "symbol_fids": ["f1", "f2"], "layer": "L"},
+        {"module_id": "m2", "name": "乙", "responsibility": "r", "symbol_fids": ["f3"], "layer": "L"},
+    ])
+    _add_edge(repo, "f1", "f3", "CALLS")            # m1→m2
+    _add_edge(repo, "f1", "f3", "CALL_REFERENCE")   # m1→m2 第二类
+    _add_edge(repo, "f3", "f1", "CALLS")            # m2→m1 反向
+    _add_edge(repo, "f1", "f2", "CALLS")            # m1 内部
+    _add_edge(repo, "f1", "f9", "CALLS")            # 未分配（f9 不在任何模块）
+    out = nav.nav_seams(repo)
+    assert out["structure"] == "active"
+    assert [(m["module_id"], m["symbols"]) for m in out["modules"]] == [("m1", 2), ("m2", 1)]
+    assert out["internal_edges"] == 1
+    assert out["unassigned_edges"] == 1
+    assert len(out["seams"]) == 2
+    s12 = next(s for s in out["seams"] if (s["from"], s["to"]) == ("m1", "m2"))
+    assert s12["edges"] == 2 and s12["by_type"] == {"CALL_REFERENCE": 1, "CALLS": 1}
+    assert s12["fid_pairs"] == 1 and s12["capped"] is False
+    assert s12["top_edges"][0]["edges"] == 2
+    assert "x (pkg/a.py:1)" in s12["top_edges"][0]["src"]
+    s21 = next(s for s in out["seams"] if (s["from"], s["to"]) == ("m2", "m1"))
+    assert s21["edges"] == 1
+    # 非缝边类型（DEFINES 等结构边）不入缝合线
+    _add_edge(repo, "f2", "f3", "DEFINES")
+    out2 = nav.nav_seams(repo)
+    assert sum(s["edges"] for s in out2["seams"]) == 3
+
+
+def test_nav_seams_missing_structure_honest(tmp_path):
+    """无 structure 表/无 active 行 → structure=missing 诚实降级。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
+    out = nav.nav_seams(repo)
+    assert out["structure"] == "missing"
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("INSERT INTO structure (payload_json, status) VALUES ('{}', 'rejected')")
+    con.commit()
+    con.close()
+    assert nav.nav_seams(repo)["structure"] == "missing"
+
+
+def test_nav_seams_corrupt_payload_rejected(tmp_path):
+    """坏 payload（不可解析/非 dict/空 modules/嵌套违形）→ SystemExit 不部分采信。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    for bad in ("{not json", "[1, 2]", json.dumps({"modules": []}),
+                json.dumps({"modules": [42]})):
+        con.execute("DELETE FROM structure")
+        con.execute("INSERT INTO structure (payload_json, status) VALUES (?, 'active')", (bad,))
+        con.commit()
+        try:
+            nav.nav_seams(repo)
+            raise AssertionError("corrupt structure must raise")
+        except SystemExit:
+            pass
+    con.close()
+
+
+def test_nav_seams_cap_and_determinism(tmp_path, monkeypatch):
+    """top 边样本帽：超帽 capped=true（计数不受影响）；两调用结果全等。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "fa", "pkg.a.a", "a", "pkg/a.py", 1)
+    fids_b = []
+    for i in range(5):
+        fid = f"fb{i}"
+        fids_b.append(fid)
+        _add_symbol(repo, fid, f"pkg.b.m{i}", f"m{i}", "pkg/b.py", i)
+    _add_structure(repo, [
+        {"module_id": "m1", "name": "甲", "responsibility": "r", "symbol_fids": ["fa"], "layer": "L"},
+        {"module_id": "m2", "name": "乙", "responsibility": "r", "symbol_fids": fids_b, "layer": "L"},
+    ])
+    for fid in fids_b:
+        _add_edge(repo, "fa", fid)
+    monkeypatch.setattr(nav, "SEAM_EDGES_CAP", 2)
+    out = nav.nav_seams(repo)
+    s = out["seams"][0]
+    assert s["edges"] == 5 and s["fid_pairs"] == 5 and s["capped"] is True
+    assert len(s["top_edges"]) == 2  # 帽截断样本，计数 5 不受影响
+    assert nav.nav_seams(repo) == out  # 确定性
+
+
+def test_nav_seams_cli_wiring(tmp_path, capsys):
+    """CLI vrp seams 接线（读面走 build_parser 全链）。"""
+    from vrp import cli
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
+    argv = cli.build_parser().parse_args(["seams", str(repo)])
+    assert argv.func is cli.cmd_seams
+    assert argv.func(argv) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["structure"] == "missing"

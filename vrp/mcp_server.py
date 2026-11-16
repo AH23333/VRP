@@ -137,6 +137,9 @@ def build_server(repo: Path) -> "MCPServer":
     def nav_path(from_fid: str, to_fid: str, max_hops: int = 5) -> str:
         return _dumps(nav.nav_path(repo, from_fid, to_fid, max_hops))
 
+    def seams() -> str:
+        return _dumps(nav.nav_seams(repo))
+
     def curate_submit(kind: str, payload_json: str) -> str:
         con = _open_facts_rw(repo)
         try:
@@ -317,6 +320,14 @@ def build_server(repo: Path) -> "MCPServer":
         description="Coupling path lookup: shortest from→to path along edges (src→dst) (WITH RECURSIVE BFS); "
         "hops_detail carries per-hop type/evidence/confidence — verify low-confidence edges by drilling down; "
         "found=false when unreachable (raise max_hops up to 10 or query the reverse direction)",
+    )
+    server.add_tool(
+        _guard(seams),
+        name="seams",
+        description="Seam query face (#143, unwind seams): cross-module edge aggregation over the active curated structure "
+        "(per ordered module pair: total + by-type counts + distinct fid pairs + capped top edge samples; "
+        "plus internal/unassigned totals); seams list = module dependency graph (strangler rebuild-order raw material); "
+        "honestly reports structure=missing when no active structure",
     )
     server.add_tool(
         _guard(curate_submit),
