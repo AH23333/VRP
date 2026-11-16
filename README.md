@@ -114,9 +114,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1462 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1474 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 2985 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 2997 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -125,12 +125,14 @@ python -m pytest -m "deep or not deep" -q  # 全量 2985 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1462 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1474 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）
 
 ## 外部工具（可选，缺失则降级）
 
 CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / Stryker 10.1.1 / cargo-mutants（变异）、difftastic 0.72.0（结构 diff）、knip / vulture / jscpd、repomix（rawpack）、[archify](https://github.com/tt-a1i/archify) v3.2.0（S8 渲染，`bootstrap.py --with-archify` 装，`VRP_ARCHIFY_MJS` 覆盖）。二进制沙箱化于 `work/`，路径可用环境变量覆盖（`VRP_*_BIN` / `VRP_DIFFTASTIC_BIN` 等）。
+
+- **子进程 CPU 优先级**（#147，学 TSA local_low_impact）：重型子进程（CBM 索引/变异引擎/freeze 基线/archify 等 procs.run_tree 全链+s4_freeze/s5_cabrief 流式通道）默认 BELOW_NORMAL（Windows creationflags 0x4000 纯 stdlib）/`nice -n 15`（POSIX，which 探测缺失回退）——不抢占交互前台，空闲机满速、争时机让位，只影响调度不影响结果（确定性零影响）。逃生门：`VRP_CHILD_PRIORITY=normal` 恢复普通优先级（专用 CI 机/基准场景）。
 
 ## 文档（docs/）
 

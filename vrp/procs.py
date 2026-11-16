@@ -17,15 +17,56 @@ communicate() 挂死——超时连墙钟都不守（work/repro_rl_tree.py R1a �
   TimeoutExpired 而是返回 timed_out=True；管道持有者随树全灭，
   communicate 即返（不挂死）。返回
   {"returncode", "timed_out", "stdout", "stderr"}。
+- low_priority_creationflags()/low_priority_argv_prefix(): 子进程低
+  CPU 优先级（#147，学 TSA local_low_impact 的 nice -n 15 模式）——
+  重型子进程（CBM 索引/mutate 引擎/freeze 基线/archify）不抢占交互
+  前台；nice 语义=空闲机满速、争时机让位，只影响调度不影响结果
+  （确定性红线不触）。Windows 走 creationflags 优先级类位（纯
+  stdlib，TSA 因走 nice(1) 前缀而跳过 Windows——直接 spawn 可设）；
+  POSIX 走 nice 前缀（which 探测，缺失诚实回退）。逃生门
+  VRP_CHILD_PRIORITY=normal 恢复普通优先级（专用 CI 机/基准场景）。
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
 from pathlib import Path
+
+BELOW_NORMAL_PRIORITY_CLASS = 0x00004000  # Win32 CreateProcess dwCreationFlags 优先级类位（API 文档值）
+NICE_LEVEL = 15  # TSA local_low_impact 同值（nice -n 15）
+
+
+def _priority_escape() -> bool:
+    """逃生门：VRP_CHILD_PRIORITY=normal 恢复普通优先级；其余值/未设=低。"""
+    return os.environ.get("VRP_CHILD_PRIORITY", "").lower() == "normal"
+
+
+def low_priority_creationflags() -> int:
+    """Windows 子进程低 CPU 优先级 creationflags（BELOW_NORMAL）。
+
+    非零仅 win32；POSIX 返回 0（Popen 的 creationflags 仅 Windows 平台）；
+    逃生门恢复 0（NORMAL，父进程缺省）。
+    """
+    if sys.platform != "win32" or _priority_escape():
+        return 0
+    return BELOW_NORMAL_PRIORITY_CLASS
+
+
+def low_priority_argv_prefix() -> list[str]:
+    """POSIX 子进程低优先级 argv 前缀（nice -n 15，TSA 同值）。
+
+    which("nice") 探测，缺失回退 []（诚实降级不阻塞）；win32 返回 []；
+    逃生门恢复 []。
+    """
+    if sys.platform == "win32" or _priority_escape():
+        return []
+    if shutil.which("nice") is None:
+        return []
+    return ["nice", "-n", str(NICE_LEVEL)]
 
 
 def kill_tree(proc: subprocess.Popen) -> None:
@@ -73,10 +114,14 @@ def run_tree(
       strict 解码错误会静默吞掉输出使 stdout=None，必须 replace）
     """
     kwargs: dict = {}
+    argv = cmd
     if sys.platform != "win32":
         kwargs["start_new_session"] = True
+        argv = [*low_priority_argv_prefix(), *cmd]
+    else:
+        kwargs["creationflags"] = low_priority_creationflags()
     proc = subprocess.Popen(
-        cmd,
+        argv,
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

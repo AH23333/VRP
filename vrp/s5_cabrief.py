@@ -54,12 +54,17 @@ def call_code_atlas(repo: Path, tool: str, arguments: dict, timeout: int = 120) 
     if js is None:
         return {"status": "skipped", "reason": "code-atlas dist not found (set VRP_CODE_ATLAS_JS)"}
     popen_kwargs: dict = {}
+    argv = [node, str(js), "serve", "--root", str(repo), *SERVER_FLAGS]
     if sys.platform != "win32":
         # kill_tree 的 POSIX 分支按进程组击杀：子进程必须自成组长，
         # 否则 killpg 会打到 VRP 自己的组（procs.run_tree 同款纪律）。
         popen_kwargs["start_new_session"] = True
+        # #147 低优先级（POSIX nice 前缀；win32 走 creationflags）
+        argv = [*procs.low_priority_argv_prefix(), *argv]
+    else:
+        popen_kwargs["creationflags"] = procs.low_priority_creationflags()
     proc = subprocess.Popen(
-        [node, str(js), "serve", "--root", str(repo), *SERVER_FLAGS],
+        argv,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

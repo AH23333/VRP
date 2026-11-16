@@ -32,10 +32,18 @@ def _run_one(repo: Path, command: str, timeout: int) -> dict:
     started = time.monotonic()
     timed_out = False
     popen_kwargs = {}
+    run_command = command
     if sys.platform != "win32":
         popen_kwargs["start_new_session"] = True
+        # #147 低优先级：POSIX nice 前缀拼进 shell 文本（记录面保留原命令
+        # 声明语义——前缀是实现细节，跨平台产物一致）
+        prefix = procs.low_priority_argv_prefix()
+        if prefix:
+            run_command = " ".join([*prefix, command])
+    else:
+        popen_kwargs["creationflags"] = procs.low_priority_creationflags()
     proc = subprocess.Popen(
-        command,
+        run_command,
         shell=True,
         cwd=repo,
         stdout=subprocess.PIPE,

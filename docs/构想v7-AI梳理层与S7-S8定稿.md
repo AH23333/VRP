@@ -809,3 +809,42 @@ unwind 的 slices 是**代码库分区**（partition：每 id 恰属一片，sea
 - **快测**：全量快速层 **1462 绿**（+18=1444+18 精确）。
 
 **遗留**：无——轮子学习批次六收口。剩余候选：#7 子进程 CPU 优先级（观察改进项）、#8 验证器自检。
+
+## 18. #147 批次：子进程 CPU 优先级（2026-11-16，学 TSA local_low_impact——已收口）
+
+轮子学习批次七。学对象 TSA change-impact 的 `resource_profile` 机制（`verify/tree-sitter-analyzer/tree_sitter_analyzer/mcp/tools/utils/change_impact_analysis.py:610-631` `_low_impact_pytest_command`——#7 观察项出处）：**本地交互机 vs CI 边界双 profile**——本地验证命令重写为低影响形态（`nice -n 15` 前缀，POSIX-only Windows 跳过 + `-n 2` worker 帽），CI/队列边界命令全速（default profile）。哲学：**重型验证负载不该抢占交互前台——nice 语义=空闲机满速、争时机让位，不影响正确性只影响调度**。
+
+### 18.0 定位与实况
+
+- **VRP 现状缺口**：VRP 是 agent 跑在用户交互机上的工具，重型子进程分钟级满载 CPU（本会话全量快测 8min 满载即实例）——零优先级控制，前台 IDE/浏览器被抢占。CBM 源码无优先级处理（grep SetPriorityClass/nice/setpriority 全无——C 进程自身即主负载）；TSA 的 nice 模式是参照系。
+- **census（spawn 面全景）**：①共享层 `procs.run_tree`（vrp/procs.py:58）——**唯一树杀纪律入口**，消费者全景：CBM CLI（s1_cbm）、mutate 三引擎（mutmut/stryker/cargo-mutants）、astgrep/jscpd/p4、repomix、difftastic、archify node、s7 九语言 enforcer、xcheck、git 全家（etl/impact/s0/s4/s6/render）；②procs 层外直接 `Popen` 仅两处——`s4_freeze._run_one`（:37，管道读线程+watchdog 流式模式）与 `s5_cabrief`（:61，MCP stdio 桥）——流式边跑边读不能换 run_tree；③`procs.kill_tree` 内 taskkill（轻命令不降级）；④线程面仅 s5_cabrief watchdog（spawn 均在主线程，无多线程 spawn）。
+- **TSA 学点边界**：TSA 的 `-n 2` pytest worker 帽不适用（VRP 不 spawn pytest 并发套件——freeze 基线命令是用户仓命令文本）；学点主体=低优先级前缀+平台分支+逃生门语义。
+
+### 18.1 设计：procs 共享层低优先级 spawn
+
+- **共享层两助手**（`vrp/procs.py`，修在共享层不留本地副本）：
+  - `low_priority_creationflags() -> int`：Windows 返回 `BELOW_NORMAL_PRIORITY_CLASS (0x00004000)`——subprocess `creationflags` 直接透传 CreateProcess dwCreationFlags，优先级类位合法（TSA "Windows 跳过"是因走 nice(1) 前缀；我们直接 spawn 纯 stdlib 可设）；非 Windows 返回 0。
+  - `low_priority_argv_prefix() -> list[str]`：POSIX 上 `shutil.which("nice")` 探测到则 `["nice", "-n", "15"]`（TSA 同值 15），缺失回退 `[]`（诚实降级不阻塞）；Windows 返回 `[]`。
+  - **逃生门**：`VRP_CHILD_PRIORITY=normal` env → 两助手返回零值（专用 CI 机/基准测试可恢复全速）；默认 `low`。
+- **接线三处**：①`procs.run_tree` Popen 加 `creationflags=low_priority_creationflags()`（Windows）+ argv 前缀（POSIX）——全消费者链自动获益；②`s4_freeze._run_one` Popen 同接；③`s5_cabrief` Popen 同接。git 轻命令同降无害（nice 语义：空闲机照跑满速）。
+- **红线对照**：确定性零影响——优先级只影响调度不影响结果，静态产物字节级复现红线不触；零第三方依赖（ctypes/shutil/creationflags 全 stdlib）；纯行为改进批次——CLI/MCP 零新面（无新工具无 TOOLS 计数变化）。
+
+### 18.2 测试与实证
+
+- **测试（预估 +6~8，新建 tests/test_procs_priority.py）**：助手单测 4（creationflags 平台分支 0x4000/0、nice prefix which 探测命中/缺失回退、env 逃生门 normal→零值、默认 low）+Windows 真测 1（`run_tree([sys.executable, "-c", "ctypes...GetPriorityClass..."])` 子进程回读断言 BELOW_NORMAL=0x4000）+run_tree 集成 1（Windows 子进程回读经 argv 前缀路径无 nice）+POSIX 分支 skipif（非 win32 才跑，代码在测试在）。
+- **实证**：Windows 真机跑 `run_tree` spawn 子进程回读优先级=0x4000；`VRP_CHILD_PRIORITY=normal` 同探针回读 NORMAL=0x20。
+- **文档**：README 环境变量行（VRP_CHILD_PRIORITY）、交接 #147、本节收口。契约零改（无命令面变化）。
+
+### 18.3 红线
+
+- 只改调度不改结果（确定性红线）；零第三方依赖（creationflags/ctypes/shutil 全 stdlib）；procs 共享层单点修改（三个 spawn 点全走助手不留本地副本）；逃生门 env 单键（normal 恢复，不做多级 profile——TSA 双 profile 因它输出命令文本给用户，VRP 直接 spawn 单形态）；CLI/MCP 零新面。
+
+### 18.4 实施记实（收口）
+
+- **实施**：①`vrp/procs.py` 加 `BELOW_NORMAL_PRIORITY_CLASS=0x00004000`（Win32 CreateProcess dwCreationFlags 优先级类位，API 文档值）+`NICE_LEVEL=15`（TSA 同值）+`_priority_escape()`（`VRP_CHILD_PRIORITY` env `.lower()=="normal"` 逃生门，大小写宽容，其余值 fail-safe 保持低）+两助手 `low_priority_creationflags()`（win32→0x4000，其余 0）/`low_priority_argv_prefix()`（POSIX `shutil.which("nice")` 探测→`["nice","-n","15"]`，缺失回退 `[]`，win32 `[]`）。②接线三 spawn 点：`run_tree`（win32 creationflags/POSIX argv 前缀——全消费者链 CBM 索引、mutate 三引擎、astgrep/jscpd/p4、repomix、difftastic、archify node、s7 九语言、xcheck、git 全家自动获益）；`s4_freeze._run_one`（shell=True——POSIX 前缀拼进 shell 文本，**返回 dict 的 command 字段保留原命令声明语义**——前缀是实现细节，跨平台产物一致）；`s5_cabrief`（argv 通道同 run_tree）。`kill_tree` 内 taskkill 轻命令不降级（设计稿已定）。
+- **测试（+12，tests/test_procs_priority.py 新建）**：助手单测 8（creationflags 平台分支 win32=0x4000/posix=0、逃生门 normal 恢复、乱值 fast 保持低+NORMAL 大写宽容恢复、argv 前缀 which 命中/缺失回退/win32 空/逃生门）+Windows 真测 3（run_tree 子进程 ctypes 回读优先级类=16384、逃生门 normal 回读=32、s4_freeze._run_one shell 通道同降+command 字段声明语义锁）+POSIX 真测 1（os.nice(0)>=10 回读，skipif win32 守卫——本机 skip 代码在）。
+- **ctypes 探针坑记实（Windows 真测首版 3 红→修）**：`GetCurrentProcess` 伪句柄 -1 必须 `wintypes.HANDLE` restype（默认 c_int 32 位传递→GetPriorityClass 失败返 0）；HANDLE restype 拿到无符号 64 位 0xFFFF...FFFF 后传回必须同步 `GetPriorityClass.argtypes=[wintypes.HANDLE]`（否则 ctypes int 参数转换溢出 ArgumentError）——两处都设后本进程自验 32（NORMAL）→子进程回读 16384（BELOW_NORMAL）全绿。
+- **文档**：README 计数 1474/1523/2997+pre-push+外部工具节加 VRP_CHILD_PRIORITY 行、交接 #147、本节收口。契约零改（无命令面变化，设计稿已定）。
+- **快测**：全量快速层 **1474 绿**（+12=1462+12 精确）；docs_drift 守卫先行拦截 README/交接计数滞后一次（守卫照常工作）后同批更新转绿。
+
+**遗留**：无——轮子学习批次七收口。剩余候选：#8 验证器自检。
