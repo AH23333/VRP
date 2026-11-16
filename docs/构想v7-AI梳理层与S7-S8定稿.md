@@ -672,3 +672,57 @@ unwind 的 slices 是**代码库分区**（partition：每 id 恰属一片，sea
 - **测试 18 个**（预估 ~18 命中）：test_nav +5（聚合/缺失/corrupt/帽+确定性/CLI）、test_propose 新建 12、test_mcp_server +1（over the wire）；MCP 工具集合测试 TOOL_NAMES 同步加 `seams`。
 - **tsa 实证**：seams——active structure 实况 **2 模块**（tsa-kernel 21 符号 + tsa-interface 323 符号，2026-11-06 建；设计稿"7 模块"为记忆偏差，库即真相）：跨模块边 **0**（与 #131 探针"跨仓 deps:[]"定性一致——数据真相非工具缺陷）、unassigned_edges 77,974 诚实上报。propose——66,116 符号 **<1s** 出 8 模块（tests 35,699=54%、tree_sitter_analyzer 20,088、rfcs 1,813、docs 1,499 等；(root)/examples/benchmarks/compatibility_test 凝聚进主包）；**两跑字节级全等** sha256 `6101AF1B982282250830F1CC85675F12B1279274F9667AC7D5D77FA9F1FE5DBA`（4,528,673 bytes）。
 - 实施期修正 1 个收集错：proposals 目录常量 str/Path 拼接 TypeError → `PROPOSAL_DEFAULT_PATH` Path 常量。
+
+## 15. #144 批次：CBM 运行时双面（2026-11-16，A 升级就绪基建 + B 运行时调用证据学 CBM ingest_traces——已收口）
+
+### 15.0 定位与实况
+
+轮子学习批次四。学对象 CBM（codebase-memory-mcp，VRP 唯一硬外部索引依赖）：
+
+- **实况（2026-11-16 探针）**：装 v0.12.1（2026-11-02，`--version` 实证）=上游最新 release（ls-remote 实证 v0.12.1 最新 tag）；上游 main 领先 20+ commits 未发版（pkgmap 顺序修复/LSP perf/registry-receiver gate/vba grammar 等）。**今天无版可升**——本批做升级就绪基建，升级日一到即用。
+- **VRP 消费现状缺口**：`find_cbm()` 定位 exe、`run_cli` 驱动（R-AI 收编 procs.run_tree）、`verify_cbm_schema` 守 schema 契约——但 **CBM 版本零溯源**（meta 只有 vrp_version/git_head，无 cbm_version）：升级后 facts 是哪个版本建的不可考，盲飞。
+- **B 件学点**：CBM `ingest_traces` 工具（src/mcp/mcp.c :860 实证）——记录**观测到的运行时调用**以区分 observed vs merely possible paths；trace=qn 调用路径（相邻=caller→callee）或裸 caller/callee 对+count；per run label 存储、qn 键（reindex-proof——fid 随 content 轮换，qn 跨索引稳定，与 VRP fid_ledger 同哲学）；**只存两端都能解析到已索引符号的对，未解析名诚实上报（cap 10）**。VRP runtime_evidence 现只记"命令跑了"（freeze 四槽+mutate-run 命名空间），不记"哪些调用真实发生"——静态 CALLS 边无法区分理论可达与实际发生。
+
+### 15.1 A 件：CBM 升级就绪基建
+
+1. **版本溯源**：etl 写 `meta.cbm_version`（`codebase-memory-mcp --version` 输出，如 `0.12.1`）——etl 前一次子进程调用（etl 本就重外链，~百 ms 级）；exe 缺失（库在 exe 不在的边缘态）→ `null` 诚实（status 显示 unknown），不伪造。
+2. **陈旧暴露（软提示非硬闸）**：status/drift 家族暴露 `cbm_version_stale`（meta.cbm_version vs 现行 exe 版本不一致 → true + 提示重跑 etl）。**不学 M4 git_head 硬闸**：代码变 facts 必错（硬闸合理）；CBM 版本变 facts 未必错（提取口径可能未变——钉值复验才知道），硬闸会误伤无害升级。
+3. **升级规程固化**：交接文档升级日规程一节——`cbm update`（exe 自带 update 命令）或手动装新版 → **删 CBM 缓存库重索引**（#77 教训：artifact 复活通道，干净重建必先删）→ `vrp index` → `vrp run`（etl 复验+schema 契约自动过）→ 对账钉值（tsa 66132/251727、lusiem 1887/4211——dual_repo 深测组即行程碑）→ `vrp report` 字节复现抽查 → deep 受影响组复跑。schema 漂移检测既有（verify_cbm_schema+CBM_SCHEMA_CONTRACT），本批不重造。
+
+### 15.2 B 件：运行时调用证据 `vrp traces`（学 ingest_traces）
+
+- **输入**：traces JSON 文件——`{"traces": [{"path": [qn, ...]} | {"caller": qn, "callee": qn, "count": n}], "label": "pytest 2026-11-16"}`（CBM 同款双形态：调用路径相邻对展开+裸对；count 默认 1 累计）。**生产者外部**（pytest 插件/profiler/agent 手记——VRP 只记录外部观测，与 freeze 记录命令输出同哲学；**采集器不在本批**）。
+- **存储**：新表 `runtime_calls (id, label, caller_qn, callee_qn, count, created_at)`——**qn 键非 fid**（fid 随 content_hash 轮换，qn 跨 etl 稳定=fid_ledger 同哲学；消费时 qn→现行 fid 正查）；per label 整批替换（同 label 重导入=DELETE 后 INSERT，幂等——CBM "whole runs age out together" 对应）；不并入 runtime_evidence（彼为四槽命令审计，混放消费方口径分叉）。
+- **解析诚实**：只存两端都解析到现行符号的对；unresolved 名单诚实上报（cap 10，CBM 同款）不静默丢——收据 `{stored, skipped_unresolved, unresolved_sample, label}`。
+- **对账三分类**（ingest_traces "distinguish observed from merely possible paths" 的 VRP 落地）：导入收据附 agreement 面——**agreed**（观测对且静态 CALLS/CALL_REFERENCE 有边）/ **observed-only**（观测但静态无边——动态路径静态分析漏了，xcheck ca_only 同型信号）/ **static-only**（静态有边从未观测——理论可达未发生，dead-code/coverage 佐证）。静态口径复用 `curate.SLICE_EDGE_TYPES`（单一权威）。
+- **接线**：CLI `vrp traces <repo> --file <json> [--label]`（导入+收据+对账一体；MCP 不加面——生产者外部，propose 同先例 agent 经 CLI）；查询并入 drift/status 不新开（B 件是证据导入面非查询面）。
+- **红线**：观测证据独立表，**不并入静态 facts**（CALLS 边/视图零动——静态分析本体红线）；纯 stdlib；同输入同 label 两跑库内容确定（created_at 时间戳除外——对账复现以业务列计）。
+
+### 15.3 测试与实证
+
+- **测试（预估 ~18）**：A 件 ~5（meta cbm_version 写入/exe 缺失 null 诚实/版本不一致 stale=true/一致 stale=false/CLI status 接线）；B 件 ~13（路径展开相邻对/裸对+count 累计/label 整批替换幂等/unresolved 诚实跳过+样本/三分类对账/全 unresolved 空导入合法/非法 JSON rc/缺 file rc/qn 解析对现行 fid/两跑业务列确定/CLI 接线/跨 etl 存续（qn 键 reindex-proof）/空 traces 数组合法）。
+- **实证**：tsa 仓手工造 traces 文件（真实 qn 对——静态 CALLS 76409 边既有面）导入→三分类非空实证（agreed/observed-only 各造样本）；vrp 自仓 dogfood 一轮；A 件 status 实景（cbm_version 字段+一致 stale=false）。
+- **文档**：交接 #144+本节收口+契约（runtime_calls 表入《事务契约》或 facts schema 文档如有）+README（命令面+计数）。
+
+### 15.4 明确不做（本批）
+
+- trace 采集器（pytest 插件/sys.settrace/coverage 桥）——外部生产者，后续批
+- CBM exe 实际升级（v0.12.1 已最新——基建先行）
+- 观测证据渲染面（fusion/chain 页 observed 标注）——证据先落库，渲染后续批
+- MCP ingest 工具面（agent 经 CLI，propose 同先例）
+- observed-only 进 findings（P 类新病理）——先做证据+对账，病理化后续批
+
+### 15.5 实施记实（2026-11-16）
+
+- **代码面**：
+  - schema：`facts_schema.sql` 加 `runtime_calls (id, label, caller_qn, callee_qn, count, created_at)` + `idx_runtime_calls_label`/`idx_runtime_calls_pair` 两索引（runtime_evidence 后）。
+  - `vrp/traces.py` 新建：`ingest_traces(con, file_path, label=None)`——`_load_traces_file`（JSON/形状守卫：非 dict/`traces` 非数组/条目非 object/`path` 不在 2..256/`count` 非正整数→SystemExit 整文件拒绝）+`_pair_counts`（路径相邻对展开、自环跳过（静态边零自环口径一致）、裸对 count 累计）+qn→fid 单遍正查（`ORDER BY fid LIMIT 1` 取确定值）+per label DELETE+INSERT 幂等+对账三分类（静态口径 `curate.SLICE_EDGE_TYPES` 单一权威）+收据（`skipped_unresolved`/`unresolved_sample` cap 10/`observed_only_sample` cap 5）；label 优先级 CLI>文件字段>`unlabeled`（CBM 同默认）。
+  - `vrp/s1_cbm.py`：`cbm_version(timeout=30)` 助手——`find_cbm` FileNotFoundError→None 诚实；`--version` 输出取尾段版本号；**不做进程内缓存**（全量快测 test_module_scope 纪律违例红——模块级可变 dict 禁直突（render_chain 六 memo 唯一豁免）；且 CLI 每调用新进程、etl/status 单进程各调一次，缓存零收益——砍缓存=纪律胜利，测试即时抓出设计走样）。
+  - `vrp/etl.py`：OWNED_TABLES 加 `runtime_calls`（快照回灌跨 etl 存续）；`_write_meta` 加 `cbm_version`（None→空串诚实）。
+  - `vrp/cli.py`：`traces` 子命令（`--file` 必填+`--label` 可选，写入经 `_open_facts_rw`=M4 硬闸同族）；`status` 加 `cbm_version` 节 `{recorded, current, stale, note}`——meta 无记录或 exe 缺失→`stale: null`（unknown 诚实）；note 明示软提示语义。
+- **测试面**：`tests/test_traces.py` 新建 17 例（B 件 12：路径展开/裸对累计/label 整批替换/空 traces/unresolved 跳过+样本/全 unresolved/三分类/自环/形状违例七连（含非法 JSON、缺 file）/两跑业务列确定/CLI 接线/缺 facts.db 拒绝；A 件 5：cbm_version 解析+缓存/exe 缺失 None/_write_meta 记录+空串/status stale 三面（true/false/null）/meta 无记录 unknown）+`test_etl_preserve.py` 更新（OWNED_TABLES 常量锁+roundtrip 增 runtime_calls 行断言）。快速层 1411→1428。
+- **tsa 实证（2026-11-16）**：
+  - `vrp traces` 导入手工 traces（真实 qn：agreed 1 对（`build_standalone.install_pyinstaller→builtins.print` 静态 CALLS 有边）+observed-only 2 对（autonomous-runtime loop→status 模块间，静态无边）+unresolved 1（假名））→收据：stored 3/skipped 1/agreement `agreed=1, observed_only=2, static_only=77949, static_pairs_total=77950`——三分类非空实证成立。
+  - 升级规程彩排（index→run→对账）：runtime_calls 3 行经 etl 重建**原样存续**（OWNED_TABLES 快照回灌实证）；meta `cbm_version=0.12.1` 落库（真 exe 实景）；钉值复现 symbols 66132/edges 251727；产物指纹：report 全树 2085 件+dossier.json+xcheck 基线 2088 件中 **2086 字节全同**，仅 xcheck.json/precheck.json 两件因重跑自然再生成（xcheck=对账收据每次重算；precheck 的 git dirty 列表含 CBM 本次新建 `.codebase-memory/` untracked 目录）——**#144 对静态产物零影响实证成立**。
+  - `vrp status` 实景：`cbm_version {recorded: 0.12.1, current: 0.12.1, stale: false}`。
+- **红线核验**：观测证据独立表不并入静态 facts（CALLS 边/视图零动——产物指纹实证）；qn 键非 fid；写入经 `_open_facts_rw`；MCP 面零动（二十八件不变）；生产者外部（无采集器）；纯 stdlib。

@@ -81,6 +81,7 @@ OWNED_TABLES = (
     "dossier_views",
     "baseline",
     "runtime_evidence",
+    "runtime_calls",
     "slices",
     "structure",
     "decisions",
@@ -641,6 +642,7 @@ def _write_meta(dst: sqlite3.Connection, cbm_name: str, store_meta: dict, repo: 
         "cbm_project": cbm_name,
         "cbm_db_uid": store_meta.get("db_uid", ""),
         "cbm_mutation_gen": store_meta.get("mutation_gen", ""),
+        "cbm_version": s1_cbm.cbm_version() or "",  # #144 A 件：CBM 版本溯源（exe 缺失→空串诚实）
         "git_head": current_git_head(repo),
         "facts_schema": "1",
     }

@@ -94,6 +94,25 @@ def _record_repo_path(db_path: Path, repo_path: str) -> None:
         con.close()
 
 
+def cbm_version(timeout: int = 30) -> str | None:
+    """#144 A 件：现行 CBM exe 版本（如 "0.12.1"）；exe 缺失/查询失败 → None 诚实。
+
+    `codebase-memory-mcp --version` 输出形如 "codebase-memory-mcp 0.12.1"
+    ——取尾段版本号。溯源写入 meta.cbm_version（etl），status 消费对账。
+    不做进程内缓存：CLI 每调用新进程，etl/status 单进程各调一次——
+    缓存零收益，而模块级可变 dict 违反模块状态纪律（test_module_scope）。
+    """
+    try:
+        exe = find_cbm()
+    except FileNotFoundError:
+        return None
+    result = procs.run_tree([str(exe), "--version"], timeout=timeout)
+    if not result["timed_out"] and result["returncode"] == 0:
+        parts = (result["stdout"] or "").strip().split()
+        return parts[-1] if parts else None
+    return None
+
+
 def run_cli(args: list[str], timeout: int = 3600) -> dict:
     exe = find_cbm()
     # R-AI: 树杀超时（procs.run_tree，#84 孙进程孤儿纪律）+ 超时统一转

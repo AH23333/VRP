@@ -78,6 +78,22 @@ CREATE TABLE IF NOT EXISTS runtime_evidence (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- #144 B 件：运行时调用证据（学 CBM ingest_traces）——观测到的 caller->callee
+-- 对，qn 键非 fid（fid 随 content_hash 轮换，qn 跨 etl 稳定 = fid_ledger 同
+-- 哲学）；per label 整批替换（同 label 重导入 = DELETE 后 INSERT）；跨 etl
+-- 经 OWNED_TABLES 快照回灌存续。观测证据独立表，不并入静态 facts（CALLS
+-- 边/视图零动——静态分析本体红线）。
+CREATE TABLE IF NOT EXISTS runtime_calls (
+    id INTEGER PRIMARY KEY,
+    label TEXT NOT NULL,
+    caller_qn TEXT NOT NULL,
+    callee_qn TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_calls_label ON runtime_calls(label);
+CREATE INDEX IF NOT EXISTS idx_runtime_calls_pair ON runtime_calls(caller_qn, callee_qn);
+
 CREATE TABLE IF NOT EXISTS findings (
     id INTEGER PRIMARY KEY,
     pathology TEXT NOT NULL,

@@ -15,6 +15,7 @@ from . import etl as etl_mod
 from . import curate as curate_mod
 from . import nav as nav_mod
 from . import propose as propose_mod
+from . import traces as traces_mod
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
 from . import auto_curate
 from . import session as session_mod
@@ -404,6 +405,17 @@ def cmd_propose(args) -> int:
     return 0 if result.get("ok") else 1
 
 
+def cmd_traces(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        result = traces_mod.ingest_traces(con, Path(args.file), label=args.label)
+    finally:
+        con.close()
+    _print_json(result)
+    return 0 if result.get("ok") else 1
+
+
 def cmd_remap(args) -> int:
     repo = _repo_arg(args.repo)
     facts_path = repo / ".vrp" / "facts.db"
@@ -517,8 +529,30 @@ def cmd_status(args) -> int:
     freshness = {"state": state}
     if staleness is not None:
         freshness.update(staleness)
+    # #144 A 件：CBM 版本软提示（非硬闸——CBM 版本变 facts 未必错，钉值复验才知道；
+    # M4 git_head 是硬闸因代码变 facts 必错）。meta 无记录（pre-#144 库）→ unknown 诚实。
+    recorded_cbm = meta.get("cbm_version", "") or ""
+    current_cbm = s1_cbm.cbm_version() or ""
+    if not recorded_cbm or not current_cbm:
+        cbm_stale = None  # exe 缺失或无记录——不可判
+    else:
+        cbm_stale = recorded_cbm != current_cbm
     _print_json(
-        {"meta": meta, "counts": counts, "edges_by_evidence": by_evidence, "freshness": freshness}
+        {
+            "meta": meta,
+            "counts": counts,
+            "edges_by_evidence": by_evidence,
+            "freshness": freshness,
+            "cbm_version": {
+                "recorded": recorded_cbm or None,
+                "current": current_cbm or None,
+                "stale": cbm_stale,
+                "note": "soft hint (not a gate) - a changed CBM version does not imply wrong facts; "
+                "re-run etl to refresh provenance, pinned-count tests are the real tripwire"
+                if cbm_stale is not None
+                else "unknown (missing exe or no recorded version)",
+            },
+        }
     )
     return 0
 
@@ -724,6 +758,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--balance-cap", type=float, default=None,
                    help="max merged module share of candidates (default 0.6)")
     p.set_defaults(func=cmd_propose)
+
+    p = sub.add_parser(
+        "traces",
+        help="#144: ingest runtime call traces -> runtime_calls + observed-vs-static agreement "
+        "(CBM ingest_traces; qn-keyed reindex-proof, per-label whole-run replace; external producers)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--file", required=True, help="traces JSON file ({traces: [path|caller/callee], label})")
+    p.add_argument("--label", help="run label override (default: file 'label' field or 'unlabeled')")
+    p.set_defaults(func=cmd_traces)
 
     p = sub.add_parser(
         "refresh",
