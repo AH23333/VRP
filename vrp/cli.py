@@ -16,6 +16,7 @@ from . import curate as curate_mod
 from . import nav as nav_mod
 from . import propose as propose_mod
 from . import traces as traces_mod
+from . import coverage as coverage_mod
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
 from . import auto_curate
 from . import session as session_mod
@@ -416,6 +417,13 @@ def cmd_traces(args) -> int:
     return 0 if result.get("ok") else 1
 
 
+def cmd_coverage(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = coverage_mod.check_coverage(repo, paths=args.paths, kinds=args.kinds)
+    _print_json(result)
+    return 0
+
+
 def cmd_remap(args) -> int:
     repo = _repo_arg(args.repo)
     facts_path = repo / ".vrp" / "facts.db"
@@ -768,6 +776,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--file", required=True, help="traces JSON file ({traces: [path|caller/callee], label})")
     p.add_argument("--label", help="run label override (default: file 'label' field or 'unlabeled')")
     p.set_defaults(func=cmd_traces)
+
+    p = sub.add_parser(
+        "coverage",
+        help="#145: index completeness check (CBM check_index_coverage; read-only; "
+        "parse_partial/parse_unusable/not_indexed gap inventory + per-path status)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--path", dest="paths", action="append",
+                   help="path to verify (repeatable, cap 128; exact + ancestor match, per-path status)")
+    p.add_argument("--kind", dest="kinds", action="append", help="kind filter (repeatable; e.g. parse_partial)")
+    p.set_defaults(func=cmd_coverage)
 
     p = sub.add_parser(
         "refresh",

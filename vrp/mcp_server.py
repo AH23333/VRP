@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 from . import nav, s6_transact
+from . import coverage as coverage_mod
 from . import dbpath
 from . import curate as curate_mod
 from . import etl as etl_mod
@@ -139,6 +140,9 @@ def build_server(repo: Path) -> "MCPServer":
 
     def seams() -> str:
         return _dumps(nav.nav_seams(repo))
+
+    def coverage(paths: list[str] | None = None, kinds: list[str] | None = None) -> str:
+        return _dumps(coverage_mod.check_coverage(repo, paths=paths, kinds=kinds))
 
     def curate_submit(kind: str, payload_json: str) -> str:
         con = _open_facts_rw(repo)
@@ -328,6 +332,15 @@ def build_server(repo: Path) -> "MCPServer":
         "(per ordered module pair: total + by-type counts + distinct fid pairs + capped top edge samples; "
         "plus internal/unassigned totals); seams list = module dependency graph (strangler rebuild-order raw material); "
         "honestly reports structure=missing when no active structure",
+    )
+    server.add_tool(
+        _guard(coverage),
+        name="coverage",
+        description="Index completeness check (#145, CBM check_index_coverage): verify a path before citing it from the graph "
+        "(paths: per-path status - exact + ancestor gap match, status in unusable/partial/unresolved_calls/skipped/excluded/no_recorded_issue "
+        "each with a recommended_action; kinds: optional kind filter); "
+        "no paths = gap inventory summary by kind; "
+        "no_recorded_issue is not proof of completeness - clean means no recorded gap",
     )
     server.add_tool(
         _guard(curate_submit),

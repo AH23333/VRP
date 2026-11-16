@@ -726,3 +726,42 @@ unwind 的 slices 是**代码库分区**（partition：每 id 恰属一片，sea
   - 升级规程彩排（index→run→对账）：runtime_calls 3 行经 etl 重建**原样存续**（OWNED_TABLES 快照回灌实证）；meta `cbm_version=0.12.1` 落库（真 exe 实景）；钉值复现 symbols 66132/edges 251727；产物指纹：report 全树 2085 件+dossier.json+xcheck 基线 2088 件中 **2086 字节全同**，仅 xcheck.json/precheck.json 两件因重跑自然再生成（xcheck=对账收据每次重算；precheck 的 git dirty 列表含 CBM 本次新建 `.codebase-memory/` untracked 目录）——**#144 对静态产物零影响实证成立**。
   - `vrp status` 实景：`cbm_version {recorded: 0.12.1, current: 0.12.1, stale: false}`。
 - **红线核验**：观测证据独立表不并入静态 facts（CALLS 边/视图零动——产物指纹实证）；qn 键非 fid；写入经 `_open_facts_rw`；MCP 面零动（二十八件不变）；生产者外部（无采集器）；纯 stdlib。
+
+## 16. #145 批次：完备性标注（2026-11-16，学 CBM check_index_coverage——已收口）
+
+### 16.0 定位与实况
+
+轮子学习批次五。学对象 CBM `check_index_coverage` 工具（src/mcp/mcp.c :790 schema、:7507 handler）——**给 AI 消费者的引用前核验面**：引用 graph 里某文件前先问"它被完整索引了吗"（parse_partial 行区间缺符号/parse_unusable 几乎全文件/not_indexed 排除），"Clean is not proof of completeness"（best-effort 信号哲学）。
+
+- **CBM 语义实证**（handler :7383-7505 精读）：kind→status 判定（pass 优先序）——`parse_unusable`→unusable / `parse_partial`→partial / `not_indexed_*` 前缀→excluded / 其他非空 kind≠unresolved_calls→skipped / `unresolved_calls`→unresolved_calls / 无命中→no_recorded_issue；**exact 行存在时只判 exact 行**（精确命中降权祖先行）；recommended_action 映射表——unusable/skipped→read_source_directly、partial→read_ranges_and_verify_scope、unresolved_calls→read_source_and_verify_calls、excluded→read_source_or_change_ignore_rules、no_recorded_issue→use_graph_with_best_effort_caveat；paths cap 128 分页查。
+- **tsa CBM db index_coverage 实况**（73 行）：`not_indexed_dir` 64（.claude/.codebase-memory 等，detail='excluded subtree'）/ `not_indexed_file` 2（.code-atlas/index.db，detail=ignored-suffix/gitignore）/ `parse_partial` 5（examples/BigService.json detail='1-1,2-2,3-3,3-5'——行区间语法）/ `parse_unusable` 2（pytest.ini detail='1-105'——几乎全文件）。
+- **VRP 现状缺口**：etl `_etl_coverage` 已把 index_coverage 全量拉进 `coverage_gaps (file_path, kind, detail)`（etl.py :462，73 行落库），但消费面仅三处计数——cli status count / fusion 仪表盘 count / s6 G1 闸 `_parse_gaps`（编辑文件精确匹配 parse gap）。**零核验查询面**：dossier/nav/MCP 消费者引用 `pytest.ini` 或 `examples/BigService.json` 时不知道符号/边可能缺失——AI 引用未核验文件=在 partial 图上答全图问题。
+
+### 16.1 设计：`vrp coverage` 查询面 + MCP `coverage` 工具
+
+- **CLI `vrp coverage <repo> [--path P ...] [--kind K ...]`**（`vrp/coverage.py` 新建，只读）：
+  - 无 `--path`：**盘点面**——kind 汇总分布（GROUP BY 计数+每 kind 样本 cap 5 文件名）；`--kind` 过滤细分。
+  - `--path`（可多次，cap 128 同 CBM）：**核验面**——exact+祖先匹配（`file_path = ? OR ? LIKE file_path || '/%'`——gap 行是请求路径的祖先目录时命中，not_indexed_dir 语义）；命中行序：exact 行存在只判 exact（CBM 同款降权），否则判全部祖先行；status 六态判定+recommended_action 映射全表照抄 CBM；收据含逐 path `{path, status, matched:[{file_path, kind, detail, match: exact|ancestor}], recommended_action}`；无命中→`no_recorded_issue` + `use_graph_with_best_effort_caveat`（诚实注记 clean 非完备证明）。
+  - 退出码恒 0（只读查询面，seams 同例；缺 facts.db → rc=1 诚实错）。
+- **MCP `coverage(paths)` 工具**（AI 消费线刚需——取材前核验正是 CBM 设计命题 :1476/:1487/:1495 "verify cited paths with check_index_coverage"）：TOOL_NAMES 二十八→二十九件；README/契约/_INSTRUCTIONS 同步。
+- **不做**（范围控制）：dossier/curate-auto 材料内嵌 coverage caveat（查询面先行，标注接入后续批）；freshness/generation 复验（VRP facts 是 etl 快照，M4 git_head 闸已保新鲜——CBM 的 coverage_unavailable 态在 VRP 无对应需求）；分页（VRP 单仓 facts.db 本地查询，cap 128 一次回，无 cursor 必要）。
+
+### 16.2 测试与实证
+
+- **测试（预估 ~10）**：盘点 kind 汇总/--kind 过滤/exact 命中/祖先目录命中（not_indexed_dir 前缀）/exact 优先降权祖先/status 六态（unusable/partial/excluded/skipped/unresolved_calls/no_recorded_issue）/recommended_action 映射全表/无 gap 库 no_recorded_issue/CLI 接线/MCP over the wire+TOOL_NAMES 锁更新。
+- **tsa 实证**：73 行实况——`--path pytest.ini` → unusable (1-105) → read_source_directly；`--path examples/BigService.json` → partial 行区间 → read_ranges_and_verify_scope；`--path .claude/agents.md` → 祖先 not_indexed_dir 命中 → excluded；`--path vrp 实文件` → no_recorded_issue。
+- **文档**：契约 §3 命令面+MCP 面、README CLI 用法+MCP 二十九件+计数、交接 #145、本节收口。
+
+### 16.3 红线
+
+- 只读查询面零写库（facts.db 零变更）；纯 stdlib；不改 etl/schema（数据已落库）；MCP 加一件 28→29（README/契约/集合锁三处同步——MCP 工具集合测试锁名单纪律）；status 判定逻辑照抄 CBM pass 序（轮子语义不发明）。
+
+### 16.4 实施记实（收口）
+
+- **`vrp/coverage.py` 新建**：`COVERAGE_PATH_CAP=128`/`KIND_SAMPLE_CAP=5`/`NOT_INDEXED_PREFIX="not_indexed"`（CBM 前缀长 11 同款）常量；`RECOMMENDED_ACTIONS` 全表（六态映射照抄）；`_row_status(kind)` 单行 pass 序展开（parse_unusable→unusable / parse_partial→partial / not_indexed_*→excluded / 其他非空≠unresolved_calls→skipped / unresolved_calls→unresolved_calls / 空→None）；`_rows_status` 多行归并（pass 序取最先：unusable>partial>excluded>skipped>unresolved_calls）；`check_coverage(repo, paths?, kinds?)` 双面——paths 空=盘点面（全量行 GROUP BY kind 计数+样本 cap 5，`total_rows` 记全量、过滤只作用 kinds 出口）；paths 非空=核验面（SQL `WHERE file_path = ? OR ? LIKE file_path || '/%'` 祖先匹配，exact 行存在只判 exact 池（CBM 降权同款），matched 逐行 `match: exact|ancestor` 标记，反斜杠归一 `_norm_rel`）；连接 `dbpath.ro_connect`（R-S 纪律：URI percent-encode+mode=ro 统一入口）；缺 facts.db SystemExit（rc=1 诚实）；路径超 cap SystemExit。
+- **CLI**（cli.py）：`coverage` 子命令（`--path` append 可重复 cap 128、`--kind` append），`cmd_coverage` 只读直调+`_print_json`+rc=0；parser 位序 traces 后。
+- **MCP**（mcp_server.py）：`coverage(paths, kinds)` 工具（seams 同款 def+add_tool 格式，`_guard` 包注册）；TOOL_NAMES 集合锁 28→29（test_mcp_server.py 同步加 "coverage"）。
+- **测试（+16，tests/test_coverage.py 新建）**：盘点面 2（kind 汇总+样本帽/`--kind` 过滤）+核验面 9（exact unusable/partial 行区间/祖先 not_indexed_dir→excluded/exact 降权祖先/status pass 序 unusable>partial/unresolved_calls+skipped/无命中 no_recorded_issue+clean≠proof note/kinds 过滤核验面/路径 cap 128/缺 facts.db）+RECOMMENDED_ACTIONS 全表锁+CLI 接线 2（盘点+核验+`--path` 重复/缺库拒）+MCP over the wire 1（memory streams 对打：check+summary 双调用）。快速层 1428→1444。
+- **tsa 实证**（73 行实况）：`--path pytest.ini` → unusable (1-105) → read_source_directly ✓；`--path examples/BigService.json` → partial (1-1,2-2,3-3,3-5) → read_ranges_and_verify_scope ✓；`--path .claude/agents.md` → 祖先 `.claude` not_indexed_dir (excluded subtree) → excluded → read_source_or_change_ignore_rules ✓；`--path src/analyzer.py` → no_recorded_issue → use_graph_with_best_effort_caveat ✓；盘点面 not_indexed_dir 64/not_indexed_file 2/parse_partial 5/parse_unusable 2 与 CBM db index_coverage 实况一致。
+- **文档**：契约 §3 加 CLI/MCP coverage 行；README CLI 用法行+MCP 二十九件+计数 1444/1523/2967；交接 #145；本节收口。
+- **红线核验**：只读（ro_connect 零写库）；纯 stdlib；etl/schema 零改动；MCP 二十九件三处同步（README/契约/集合锁）；status 判定照抄 CBM pass 序。
