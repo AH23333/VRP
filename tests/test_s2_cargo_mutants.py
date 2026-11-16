@@ -37,10 +37,11 @@ def test_find_cargo_mutants_home_default_then_which(tmp_path, monkeypatch):
 def test_run_cargo_mutants_cmd_and_rc2_ok(tmp_path, monkeypatch):
     seen: dict = {}
 
-    def fake_run_tree(cmd, cwd=None, timeout=None):
+    def fake_run_tree(cmd, cwd=None, timeout=None, normal_priority=False):
         seen["cmd"] = list(cmd)
         seen["cwd"] = cwd
         seen["timeout"] = timeout
+        seen["normal_priority"] = normal_priority
         return {"returncode": 2, "timed_out": False,
                 "stdout": "12 mutants tested: 4 missed, 8 caught", "stderr": ""}
 
@@ -54,12 +55,13 @@ def test_run_cargo_mutants_cmd_and_rc2_ok(tmp_path, monkeypatch):
     ]
     assert seen["cwd"] == tmp_path
     assert seen["timeout"] == 300
+    assert seen["normal_priority"] is True  # #149：测量场景显式豁免低优先级
 
 
 def test_run_cargo_mutants_rc1_not_ok(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "vrp.procs.run_tree",
-        lambda cmd, cwd=None, timeout=None: {
+        lambda cmd, cwd=None, timeout=None, normal_priority=False: {
             "returncode": 1, "timed_out": False, "stdout": "", "stderr": "baseline tests failed",
         },
     )
@@ -72,7 +74,7 @@ def test_run_cargo_mutants_rc1_not_ok(tmp_path, monkeypatch):
 def test_run_cargo_mutants_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "vrp.procs.run_tree",
-        lambda cmd, cwd=None, timeout=None: {
+        lambda cmd, cwd=None, timeout=None, normal_priority=False: {
             "returncode": -1, "timed_out": True, "stdout": "", "stderr": "",
         },
     )

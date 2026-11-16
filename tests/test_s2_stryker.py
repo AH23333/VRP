@@ -52,10 +52,11 @@ def test_write_config_bom_free_with_json_reporter(tmp_path):
 def test_run_stryker_passes_positional_config(tmp_path, monkeypatch):
     seen: dict = {}
 
-    def fake_run_tree(cmd, cwd=None, timeout=None):
+    def fake_run_tree(cmd, cwd=None, timeout=None, normal_priority=False):
         seen["cmd"] = list(cmd)
         seen["cwd"] = cwd
         seen["timeout"] = timeout
+        seen["normal_priority"] = normal_priority
         return {"returncode": 0, "timed_out": False, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr("vrp.procs.run_tree", fake_run_tree)
@@ -64,12 +65,13 @@ def test_run_stryker_passes_positional_config(tmp_path, monkeypatch):
     assert seen["cmd"] == ["fake-stryker", "run", CONF_NAME]
     assert seen["cwd"] == tmp_path
     assert seen["timeout"] == 120
+    assert seen["normal_priority"] is True  # #149：测量场景显式豁免低优先级
 
 
 def test_run_stryker_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "vrp.procs.run_tree",
-        lambda cmd, cwd=None, timeout=None: {
+        lambda cmd, cwd=None, timeout=None, normal_priority=False: {
             "returncode": -1, "timed_out": True, "stdout": "", "stderr": "",
         },
     )

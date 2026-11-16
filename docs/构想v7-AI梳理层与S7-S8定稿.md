@@ -888,3 +888,25 @@ unwind 的 slices 是**代码库分区**（partition：每 id 恰属一片，sea
 - **罐头首版 1 红修正记实**：Face C 罐头 README 文本含 "unmentioned" 一词——守卫 `doc.stem in README` 子串命中自豁免（守卫正确、罐头自己打自己）；罐头 README 改不含文件名词后转绿——罐头构造必须避开守卫的子串匹配面。
 - **测试**：+31（29 Canary+surface 1+cwd 1）；全量快速层 **1505 绿**（1474+31 精确）；docs_drift 守卫先行拦截 README/交接计数滞后一次（守卫照常工作）后同批更新转绿。
 - **文档**：README 计数 1505/1523/3028+pre-push、交接 #148、本节收口。契约零改（无命令面变化）。
+
+## 20. #149 批次：mutate 引擎豁免低优先级（2026-11-16，#147 后续观察项——dogfood 补账+全量验收 flake 修实，已收口）
+
+### 20.0 实况
+
+- **触发**：dogfood 产物刷新（8 批欠账——facts.db 停 2026-11-12，落后 #141-#148）+ 全量验收 3028 发现 1 红：`test_deep_stryker.py::test_stryker_idempotent`——`killed 7 != 4` 非确定性（单跑 60s 绿）；3026 绿 1 skip 39min。
+- **根因**：Stryker per-mutant 超时基于各自 dry-run 基线×倍率——borderline 变异体在 Killed/Timeout 间漂移（Timeout 独立归类不算 killed，`s2_stryker.STRYKER_STATUS_MAP`）。#147 BELOW_NORMAL 在饱和负载（全量连跑）下是放大器——**mutate 是时序敏感测量，降速直接污染测量**（#147 "只影响调度不影响结果"预判的边界例外记实）。
+- **dogfood 闭环**（8 批欠账补）：`vrp run`（facts git_head=9fbd508，6056 符号/23984 边）→ `vrp report`（chain 573→576 页）→ structure stale → remap 闭环：drift 74 对自动+**2 对人工裁决**（`s4_freeze._kill_tree`→`procs.kill_tree`（#147 集中化）；`s7_enforce._RULE_TEXT`→`_rule_text_pair`（单正则重构）——两符号真实消亡，drift 候选 10 个全模糊不可自动，语义继承新 fid 从 facts.db 查）→ `vrp curate` accepted/stale 空 → `vrp drift` 复验全 fresh → `vrp report` 再刷 notes []（stale 注记消失）。.vrp/ 全目录 gitignore 无需 commit。
+
+### 20.1 实施
+
+- `procs.run_tree` 加 `normal_priority: bool = False` 显式参数——win32 creationflags=0 / POSIX 无 nice 前缀；与 `VRP_CHILD_PRIORITY=normal` 逃生门同语义但**按调用点显式声明**（测量场景是代码属性不是运行时偏好）。
+- 三 mutate 引擎 spawn 点接线：`s2_mutate_run.run_mutmut` / `s2_stryker.run_stryker` / `s2_cargo_mutants.run_cargo_mutants`——mutmut 已有 `--test-time-multiplier 10.0` 基线余量（批负载下 reconcile 确定性），normal 优先级补齐同型防线。
+
+### 20.2 红线
+
+- 只改 mutate 三 spawn 点，其余 run_tree 消费链（CBM 索引/freeze/archify/git 等）保持低优先级（#147 语义不变）；零第三方依赖；同 facts.db 字节级同产物（调度策略不入产物）。
+
+### 20.3 收口记实
+
+- **测试**：+2（test_procs_priority.py 补 normal_priority 真测：Windows 子进程回读 NORMAL(32) / POSIX `os.nice(0)<10`，skipif 守卫）；全量快速层 **1507 绿**（1505+2 精确）。
+- **文档**：README 计数 1507/1523/3030+pre-push、交接 #149、本节收口。契约零改（run_tree 签名加缺省参数，既有调用方零迁移）。

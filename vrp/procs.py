@@ -101,11 +101,18 @@ def run_tree(
     cwd: Path | str | None = None,
     timeout: int | None = None,
     env: dict | None = None,
+    normal_priority: bool = False,
 ) -> dict:
     """subprocess.run 替身：超时杀整树而非只杀直子。
 
     env=None 继承父进程环境；显式 env 透传子进程（R-AN：s7_enforce._execute
     钉 PYTHONUTF8/COLUMNS 的共享层入口，#89 修在共享层不留本地副本）。
+
+    normal_priority=True 显式跳过低优先级（#149）：mutate 引擎是时序敏感
+    测量——per-mutant 超时基于各自 dry-run 基线，BELOW_NORMAL 在饱和负载
+    （全量 3028 连跑）下挤压测量使 borderline 变异体在 Killed/Timeout 间
+    漂移（stryker idempotent 实测 7!=4，单跑绿）——测量场景不吃降速，
+    与 VRP_CHILD_PRIORITY=normal 逃生门同语义但按调用点显式声明。
 
     返回 dict（超时不抛异常）：
     - returncode: 进程退出码；超时树杀后为被杀码（Windows taskkill /F 为 -1）
@@ -117,9 +124,10 @@ def run_tree(
     argv = cmd
     if sys.platform != "win32":
         kwargs["start_new_session"] = True
-        argv = [*low_priority_argv_prefix(), *cmd]
+        if not normal_priority:
+            argv = [*low_priority_argv_prefix(), *cmd]
     else:
-        kwargs["creationflags"] = low_priority_creationflags()
+        kwargs["creationflags"] = 0 if normal_priority else low_priority_creationflags()
     proc = subprocess.Popen(
         argv,
         cwd=cwd,

@@ -65,7 +65,12 @@ def run_cargo_mutants(bin_path: str, repo: Path, files: list[str], timeout: int)
     cmd = [bin_path, "mutants", "-o", OUT_DIR_NAME, "--no-times"]
     for f in files:
         cmd += ["-f", f]
-    rr = procs.run_tree(cmd, cwd=repo, timeout=timeout)
+    rr = procs.run_tree(
+        cmd,
+        cwd=repo,
+        timeout=timeout,
+        normal_priority=True,  # #149：mutate 是时序敏感测量，不吃低优先级
+    )
     if rr["timed_out"]:
         return {
             "ok": False,

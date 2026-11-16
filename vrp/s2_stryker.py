@@ -93,7 +93,12 @@ def write_config(repo: Path, files: list[str]) -> Path:
 
 def run_stryker(bin_path: str, repo: Path, files: list[str], timeout: int) -> dict:
     conf = write_config(repo, files)
-    rr = procs.run_tree([bin_path, "run", CONF_NAME], cwd=repo, timeout=timeout)
+    rr = procs.run_tree(
+        [bin_path, "run", CONF_NAME],
+        cwd=repo,
+        timeout=timeout,
+        normal_priority=True,  # #149：mutate 是时序敏感测量，不吃低优先级
+    )
     if rr["timed_out"]:
         return {
             "ok": False,

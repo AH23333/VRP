@@ -98,6 +98,7 @@ def run_mutmut(bin_path: str, repo: Path, files: list[str], timeout: int) -> dic
         ],
         cwd=repo,
         timeout=timeout,
+        normal_priority=True,  # #149：mutate 是时序敏感测量，不吃低优先级
     )
     if rr["timed_out"]:
         return {"ok": False, "returncode": None, "stderr_tail": f"mutmut timed out after {timeout}s"}

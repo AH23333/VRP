@@ -55,10 +55,11 @@ def test_run_mutmut_cmd_and_kwargs(tmp_path, monkeypatch):
     """R-L：run_mutmut 经 procs.run_tree 树杀执行，命令面/参数原样保持。"""
     seen: dict = {}
 
-    def fake_run_tree(cmd, cwd=None, timeout=None):
+    def fake_run_tree(cmd, cwd=None, timeout=None, normal_priority=False):
         seen["cmd"] = list(cmd)
         seen["cwd"] = cwd
         seen["timeout"] = timeout
+        seen["normal_priority"] = normal_priority
         return {"returncode": 0, "timed_out": False, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr("vrp.procs.run_tree", fake_run_tree)
@@ -71,12 +72,13 @@ def test_run_mutmut_cmd_and_kwargs(tmp_path, monkeypatch):
     ]
     assert seen["cwd"] == tmp_path
     assert seen["timeout"] == 600
+    assert seen["normal_priority"] is True  # #149：测量场景显式豁免低优先级
 
 
 def test_run_mutmut_timeout_honest_dict(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "vrp.procs.run_tree",
-        lambda cmd, cwd=None, timeout=None: {
+        lambda cmd, cwd=None, timeout=None, normal_priority=False: {
             "returncode": -1, "timed_out": True, "stdout": "", "stderr": "",
         },
     )

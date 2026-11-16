@@ -144,3 +144,30 @@ def test_run_tree_child_niced_posix(monkeypatch, tmp_path):
     )
     assert res["returncode"] == 0
     assert int(res["stdout"].strip()) >= 10
+
+
+# ---------- #149：normal_priority=True 测量场景显式豁免 ----------
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows creationflags 通道")
+def test_run_tree_normal_priority_windows(monkeypatch, tmp_path):
+    """#149：normal_priority=True——子进程优先级类回读 NORMAL（32），
+    与逃生门 env 同效但按调用点显式声明（mutate 引擎时序敏感测量）。"""
+    monkeypatch.delenv("VRP_CHILD_PRIORITY", raising=False)
+    res = procs.run_tree([sys.executable, "-c", _WIN_PRIORITY_PROBE],
+                         cwd=tmp_path, timeout=120, normal_priority=True)
+    assert res["returncode"] == 0 and res["timed_out"] is False
+    assert res["stdout"].strip() == str(NORMAL)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX nice 前缀通道")
+def test_run_tree_normal_priority_posix(monkeypatch, tmp_path):
+    """#149：POSIX normal_priority=True——argv 无 nice 前缀，
+    子进程继承父优先级（os.nice(0) < 10）。"""
+    monkeypatch.delenv("VRP_CHILD_PRIORITY", raising=False)
+    res = procs.run_tree(
+        [sys.executable, "-c", "import os; print(os.nice(0))"],
+        cwd=tmp_path, timeout=120, normal_priority=True,
+    )
+    assert res["returncode"] == 0
+    assert int(res["stdout"].strip()) < 10
