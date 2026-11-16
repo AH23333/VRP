@@ -765,3 +765,47 @@ unwind 的 slices 是**代码库分区**（partition：每 id 恰属一片，sea
 - **tsa 实证**（73 行实况）：`--path pytest.ini` → unusable (1-105) → read_source_directly ✓；`--path examples/BigService.json` → partial (1-1,2-2,3-3,3-5) → read_ranges_and_verify_scope ✓；`--path .claude/agents.md` → 祖先 `.claude` not_indexed_dir (excluded subtree) → excluded → read_source_or_change_ignore_rules ✓；`--path src/analyzer.py` → no_recorded_issue → use_graph_with_best_effort_caveat ✓；盘点面 not_indexed_dir 64/not_indexed_file 2/parse_partial 5/parse_unusable 2 与 CBM db index_coverage 实况一致。
 - **文档**：契约 §3 加 CLI/MCP coverage 行；README CLI 用法行+MCP 二十九件+计数 1444/1523/2967；交接 #145；本节收口。
 - **红线核验**：只读（ro_connect 零写库）；纯 stdlib；etl/schema 零改动；MCP 二十九件三处同步（README/契约/集合锁）；status 判定照抄 CBM pass 序。
+
+## 17. #146 批次：测试影响（2026-11-16，学 CBM detect_changes/test_impact——已收口）
+
+### 17.0 定位与实况
+
+轮子学习批次六。学对象 CBM `detect_changes` MCP 工具（mcp.c :806-841 schema、:19322-20505 handler）与 test_impact 引擎族（scope:"tests" 独立流水线）——**变更→受影响符号→建议测试**的查询面。
+
+- **CBM detect_changes 语义实证**（两路 explore 精读）：①变更面三路并集——merge-base..HEAD 已提交 diff ∪ worktree 未暂存 diff ∪ status 暂存+untracked（-z 保 UTF-8）；②播种——hunk 行区间（`--unified=0` 解析，cap 4096 超限整请求退整文件播种绝不静默欠播种）与符号行区间重叠判定，零重叠回退整文件播种，剔除结构容器 label；③影响面——多源 BFS（`cbm_store_bfs_multi`）跨种子集 MIN(hop)、hop 上限 clamp 15、行上限 5000 触顶 `engine_saturated` 诚实注记；④模块聚合 top-2 路径段 cap 256 溢出进 "(other)"；⑤四条独立分页流 cursor（snapshot SHA 防漂移）；⑥scope:"tests" 是**另一条管线**——冻结 HEAD 快照现场重建图+测试模型（TEST()/SUITE 宏）+no-lift 静态可达+coverage map admission，"Missing evidence never narrows" 保守哲学（存疑一律 run_all）；⑦**detect_changes 本体无风险标签**——hop 距离是事实上的严重性代理（cbm_hop_to_risk 4 级只被 trace_path 消费）。
+- **VRP 现状缺口**：agent 改码后问"我动了什么、该跑哪些测试"无查询面——#142 finding 影响面是 finding 锚定 BFS（非 diff 锚定），G1 闸只对编辑文件精确匹配 parse gap，test_linkage 表（tsa 23512 行/自仓 1569 行，cbm+etl-js-ts+etl-rust 三源）零查询消费面。
+- **test_linkage 实况**（本批探针 work/probe_146_testlink.py）：tsa 16051 distinct 测试符号/4088 目标符号；自仓 1343/400——数据面完备，缺消费面。
+
+### 17.1 设计：`vrp impact` 变更影响查询面 + MCP `impact` 工具
+
+- **CLI `vrp impact <repo> [--base B] [--paths P ...] [--depth N] [--direction inbound|outbound|both] [--tests/--no-tests]`**（`vrp/impact.py` 新建，只读）：
+  - **变更面**（学三路并集，VRP agent 场景简化）：默认 = worktree+index 变更（`git status --porcelain` 全量 + `git diff --name-only HEAD`）——agent 场景问"我未提交的改动影响什么"；`--base B` 时 = merge-base..HEAD 已提交 diff ∪ worktree 变更（CBM 并集同款）。非 git 仓且无 `--paths` → 诚实错（无变更面可算）；`--paths` 显式播种（跳过 git，直接给定变更路径——CI/调试场景）。
+  - **播种**（学 hunk 行区间重叠）：`git diff --unified=0` 解析 hunk 行区间 → symbols (file_path, start_line, end_line) 区间重叠 → 种子（结构性 label File/Folder/Project/Module/Package/Section 剔除，CBM 同款）；新增/untracked 文件无 hunk → 整文件播种；有 hunk 但零重叠 → 回退整文件播种（CBM 零重叠回退同款）；hunk cap 4096 超限 → 该文件退整文件播种。
+  - **影响面**：多源 BFS（学 bfs_multi）——种子集出发、跨种子 MIN(hop)、(hop, qn) 稳定序；方向默认 inbound（callers 爆炸半径，CBM 同默认），`--direction` 可选 outbound/both；边类型 CALLS+CALL_REFERENCE（render_fusion _IMPACT_EDGE_TYPES 同口径）；depth 默认 2 clamp 15（CBM 同款）；行上限 5000 触顶 `saturated: true` 诚实注记。
+  - **建议测试**（VRP 特色，学 scope:"tests" 精神用已有 test_linkage）：suggested_tests = test_linkage.target_fid ∈ (种子 ∪ 受影响符号) 的测试符号，按测试文件聚合（test file + 命中测试符号数 + 样本 cap 5）；诚实注记：test_linkage 是 etl 静态推导（best-effort 建议面非 gate——"suggested" 不是 "sufficient"，全量测试仍由消费方决定；CBM shadow never-gates 哲学）。
+  - **模块聚合**：top-2 路径段（学 CBM），cap 256 溢出 "(other)"。
+  - **输出**：`{level, mode, base, changed_files[], seeds[{fid,qn,file,hop:0}], impacted[{qn,file,hop}], impacted_total, saturated, suggested_tests[{test_file, count, sample_qns}], modules[{module,count}], note}`；空变更 → changed_files=[] 正常输出（CBM 同款不早退）；缺 facts.db → rc=1 诚实。
+  - 退出码恒 0（只读建议面，seams/coverage 同例）。
+- **MCP `impact(base?, paths?, depth?, direction?, tests?)` 工具**：TOOL_NAMES 29→30；README/契约/集合锁三处同步。
+- **不做**（范围控制）：cursor 分页（#145 同裁决——本地查询 cap 一次回）；冻结快照/coverage map/receipt 族（CBM CI gate 层——VRP 是建议面非 gate 面，shadow 哲学：建议不阻塞全量）；测试模型 TEST()/SUITE 宏解析（消费 test_linkage 已有面）；风险标签（CBM detect_changes 本体也无——hop 就是事实代理，不发明）；fixpoint/via/edge_types opt-in walk（高级面，先给默认 BFS）。
+
+### 17.2 测试与实证
+
+- **测试（预估 ~15）**：变更面 4（worktree diff 播种/untracked 整文件/非 git 仓无 --paths 诚实错/空变更正常输出）+播种 4（hunk 行区间重叠/零重叠回退整文件/--paths 显式播种/结构 label 剔除）+BFS 3（inbound hop 距离/direction both/saturation cap 触顶诚实）+建议测试 2（test_linkage 命中聚合/无测试关联空列表）+模块聚合 1+CLI 接线 1+MCP over the wire 1（TOOL_NAMES 30 锁同步）。
+- **tsa 实证**：改一个真实生产文件（如 `tree_sitter_analyzer/_ast_cache_index_mixin.py` 加注释行）→ seeds 命中该文件符号 + impacted callers + suggested_tests 命中 `tests/unit/test_ast_cache_index_project.py`（test_linkage 实况有此链）；回滚后空变更正常输出。
+- **文档**：契约 §3 命令面+MCP 面、README CLI 用法+MCP 三十件+计数、交接 #146、本节收口。
+
+### 17.3 红线
+
+- 只读查询面零写库；纯 stdlib（git 经 subprocess，procs 纪律）；不改 etl/schema（test_linkage 数据已在库）；MCP 加一件 29→30（README/契约/集合锁三处同步）；播种近似宽松无害（多播种=多建议测试，CBM "每个近似都多选测试，绝不少选" 同哲学）；建议面非 gate 面（不发明 CI 决策，suggested ≠ sufficient 诚实注记）。
+
+### 17.4 实施记实（收口）
+
+- **实施**（`vrp/impact.py` 新建 300 行级）：①变更面——`git -c core.quotepath=false status --porcelain` 解析（XY 码/rename `old -> new` 双计/untracked `??`；s0_precheck 同款非 ASCII 保真）；`--base` 时 `git merge-base` 失败诚实错+`diff --name-only -z` 已提交面并集；`git diff --unified=0` hunk 解析 `@@ -a,b +c,d @@` **双侧（旧/新行号）区间并集**宽松播种——worktree 场景 - 侧=HEAD 坐标对齐 facts.db 上次 etl 快照、+ 侧=当前坐标，两侧都试（CBM 单侧更紧，我们更宽松=多播种方向）；`+++ /dev/null`（删除文件）切出当前文件防错挂前一个文件；②播种——hunk 与符号区间重叠 `start_line <= hunk.end AND end_line >= hunk.start`（CBM cbm_detect_node_in_hunks 同款）；无 hunk（untracked/--paths）/零重叠/hunk 总量超 HUNK_CAP=4096 → 整文件播种（绝不静默欠播种）；STRUCTURE_LABELS 六 label 剔除；③BFS——TEMP 表种 seeds + 递归 CTE `UNION` 去重 (fid,hop)，最终 `MIN(hop)` GROUP BY、`hop > 0 AND fid NOT IN seeds`（种子排除——**实施中发现 both 方向/循环场景种子会被反向边以 hop>0 重新发现**，加 NOT IN 种子表根治）；`both` 方向 CASE WHEN 取对端单递归项（不赌 SQLite 多递归项方言）；④建议测试——test_linkage `target_fid IN (种子∪impacted)` DISTINCT 聚合 per test file + 样本 cap 5，500 fid 分块防变量上限；⑤模块 top-2 聚合 cap 256 溢出 "(other)"；⑥空 `paths` 列表按 CBM 语义回退自动变更面（files 参数缺省/空同义）。
+- **接线**：CLI `vrp impact`（--base/--path append/--depth 默认 2/--direction choices/--no-tests）；MCP `impact(base?, paths?, depth?, direction?, tests?)` 三十件；TOOL_NAMES 集合锁同步。
+- **测试（+18，实际超预估 ~15）**：tests/test_impact.py 新建——变更面 7（worktree hunk 播种/零重叠回退整文件/untracked 列出无符号诚实/空变更面/非 git 仓诚实错/--base 并集/缺 facts.db）+播种 3（--paths 显式跳过 git/结构 label 剔除/hunk cap 退整文件）+BFS 4（inbound hop+depth clamp 上下界/MIN hop 跨种子/direction 三态+IMPORTS 边类型过滤+非法方向拒/saturation cap 触顶）+建议测试 1（种子+impacted 双命中+关闭）+模块 1（top-2+溢出 (other)）+CLI 2（全参接线）+MCP over the wire 1（paths 调用+空参非 git 仓 error JSON 诚实）+TOOL_NAMES 锁。
+- **tsa 实证**（探针 probe_146_impact.py/probe_146_impact2.py）：改 `_ast_cache_index_mixin.py` 加注释行 → changed 2（含 untracked `.codebase-memory/` 诚实列出）/seeds 24（该文件全部符号——追加尾行与既有区间零重叠触发整文件回退，宽松哲学符合预期）/impacted 266 callers/suggested_tests **49 测试文件 176 测试**含预期 `tests/unit/test_ast_cache_index_project.py`（3 测试：serial_parallel_agree/auto_workers_start_at_64/explicit_worker_counts）+`test_call_graph_built_signal.py` 17 测试 top1；回滚后 changed 仅剩 untracked 目录/seeds 空/impacted 0/suggested 空——空变更面诚实。
+- **文档**：契约 §3 CLI+MCP impact 两行、README CLI 用法行+三十件+计数 1462/1523/2985+pre-push、交接 #146、本节收口。
+- **快测**：全量快速层 **1462 绿**（+18=1444+18 精确）。
+
+**遗留**：无——轮子学习批次六收口。剩余候选：#7 子进程 CPU 优先级（观察改进项）、#8 验证器自检。

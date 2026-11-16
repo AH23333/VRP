@@ -23,6 +23,7 @@ TOOL_NAMES = {
     "nav_path",
     "seams",
     "coverage",
+    "impact",
     "query_facts",
     "curate_submit",
     "curate_slices",

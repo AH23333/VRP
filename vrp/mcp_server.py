@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import nav, s6_transact
 from . import coverage as coverage_mod
+from . import impact as impact_mod
 from . import dbpath
 from . import curate as curate_mod
 from . import etl as etl_mod
@@ -143,6 +144,12 @@ def build_server(repo: Path) -> "MCPServer":
 
     def coverage(paths: list[str] | None = None, kinds: list[str] | None = None) -> str:
         return _dumps(coverage_mod.check_coverage(repo, paths=paths, kinds=kinds))
+
+    def impact(base: str | None = None, paths: list[str] | None = None, depth: int = 2,
+               direction: str = "inbound", tests: bool = True) -> str:
+        return _dumps(impact_mod.impact_report(
+            repo, base=base, paths=paths, depth=depth, direction=direction, tests=tests,
+        ))
 
     def curate_submit(kind: str, payload_json: str) -> str:
         con = _open_facts_rw(repo)
@@ -341,6 +348,17 @@ def build_server(repo: Path) -> "MCPServer":
         "each with a recommended_action; kinds: optional kind filter); "
         "no paths = gap inventory summary by kind; "
         "no_recorded_issue is not proof of completeness - clean means no recorded gap",
+    )
+    server.add_tool(
+        _guard(impact),
+        name="impact",
+        description="Change impact + suggested tests (#146, CBM detect_changes/test_impact; read-only): "
+        "diff the current worktree (or a base ref) -> seed symbols by hunk-range overlap -> "
+        "multi-source BFS blast radius over CALLS/CALL_REFERENCE "
+        "(inbound callers default, depth cap 15, row cap 5000 - saturated means lower bounds) "
+        "-> suggest tests via test_linkage consumption; "
+        "explicit paths skip git and seed directly; "
+        "suggested is NOT sufficient - run the full suite for gates",
     )
     server.add_tool(
         _guard(curate_submit),

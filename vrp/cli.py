@@ -17,6 +17,7 @@ from . import nav as nav_mod
 from . import propose as propose_mod
 from . import traces as traces_mod
 from . import coverage as coverage_mod
+from . import impact as impact_mod
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
 from . import auto_curate
 from . import session as session_mod
@@ -424,6 +425,20 @@ def cmd_coverage(args) -> int:
     return 0
 
 
+def cmd_impact(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = impact_mod.impact_report(
+        repo,
+        base=args.base,
+        paths=args.paths,
+        depth=args.depth,
+        direction=args.direction,
+        tests=args.tests,
+    )
+    _print_json(result)
+    return 0
+
+
 def cmd_remap(args) -> int:
     repo = _repo_arg(args.repo)
     facts_path = repo / ".vrp" / "facts.db"
@@ -787,6 +802,23 @@ def build_parser() -> argparse.ArgumentParser:
                    help="path to verify (repeatable, cap 128; exact + ancestor match, per-path status)")
     p.add_argument("--kind", dest="kinds", action="append", help="kind filter (repeatable; e.g. parse_partial)")
     p.set_defaults(func=cmd_coverage)
+
+    p = sub.add_parser(
+        "impact",
+        help="#146: change impact + suggested tests (CBM detect_changes/test_impact; read-only): "
+        "worktree diff -> hunk-overlap seeding -> multi-source BFS blast radius "
+        "-> test_linkage consumption (suggested != sufficient)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--base", help="compare against a base ref (merge-base..HEAD union worktree; default: worktree vs HEAD)")
+    p.add_argument("--path", dest="paths", action="append",
+                   help="explicit changed paths (repeatable; skips git diff - CI/debug seeding)")
+    p.add_argument("--depth", type=int, default=2, help="BFS hop cap (default 2, clamped to 15)")
+    p.add_argument("--direction", choices=["inbound", "outbound", "both"], default="inbound",
+                   help="inbound=callers blast radius (default), outbound=dependencies, both=union")
+    p.add_argument("--no-tests", dest="tests", action="store_false",
+                   help="skip suggested-tests lookup (test_linkage consumption)")
+    p.set_defaults(func=cmd_impact)
 
     p = sub.add_parser(
         "refresh",
