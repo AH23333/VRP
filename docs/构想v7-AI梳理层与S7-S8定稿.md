@@ -848,3 +848,43 @@ unwind 的 slices 是**代码库分区**（partition：每 id 恰属一片，sea
 - **快测**：全量快速层 **1474 绿**（+12=1462+12 精确）；docs_drift 守卫先行拦截 README/交接计数滞后一次（守卫照常工作）后同批更新转绿。
 
 **遗留**：无——轮子学习批次七收口。剩余候选：#8 验证器自检。
+
+## 19. #148 批次：验证器自检（2026-11-16，学 TSA RFC-0028 gate `--self-check` 治理——已收口）
+
+### 19.0 实况
+
+- **学点出处**：TSA `tests/governance/test_gate_self_checks.py`（RFC-0028 §3.2 落地）——①有 live surface 的 gate 必须带自检，gate 停止监视时自检失败；②**静默 `return 0` 不算自检**——成功路径必须报告它检查的 surface（"Requiring output keeps a silent `return 0` from passing as a self-check"）；③自检必须被真正运行它的层触达（governance 测试真跑——"A `--self-check` flag that nothing invokes... is the same defect shape"）；④cwd 不变性——两 gate 曾按 caller cwd 解析 watch base，从 scripts/ 扫描空集报干净退 0（真实缺陷）；⑤codemap-sync `--self-check` 语义：静态提取器必须**精确**重现权威枚举——"A `count > 0` check is not sufficient — a tree whose only match is a stale docstring mention passes it while the detector is dead"。辅证 unwind 01b comparator self-check（翻字节证明比较器能抓差异——"prove the checker can fail"）与 TSA codemap-sync 事故记实（"the gate itself died... while every test stayed green"）。
+- **VRP 守卫 census**：AST 扫描守卫族 13 文件（anyall/cli/docs_drift/exception_msg/git/io/module_scope/payload/sql/sqlite_boundary/subprocess/timing/write），**全部 `assert not violations` 零违规断言=fail-silent 形态**。两类死守卫形态无防：**形态 A 扫描面空**（`VRP.glob("*.py")` 若目录定位坏/模式坏→零文件→循环零次→violations 空→静默绿）；**形态 B 检测器死**（AST 匹配逻辑坏/正则过期→零违规→静默绿）。历史实证：R-AD 批 R-X 链式守卫盲区（内联链式可见、变量中转不可见，守卫全绿但有盲区）= TSA codemap-sync 同型教训。
+- **fail-loud / fail-silent 判定准则**：fail-loud 守卫断言形态"解析值必须等于 X"——解析失败/匹配不到→断言失败→红（天然自检，如 docs_drift 计数守卫、TOOL_NAMES 锁）；fail-silent 守卫断言形态"violations 必须空"——检测器死→绿。**只有 fail-silent 守卫需要罐头自证**；fail-loud 豁免记实。
+- **可注入性确认**：13 守卫全部经模块级目录常量定位扫描根（`VRP`/`VRP_DIR`/`VRP_ROOT`/`TESTS_ROOT`/`ROOT`/`CLI_PATH`），monkeypatch 常量→tmp 树即可注入罐头违例，守卫源码零改动。
+
+### 19.1 设计
+
+新建 `tests/test_guard_selfcheck.py`（governance meta-guard，TSA tests/governance 同位）：
+
+1. **登记表**：fail-silent AST 守卫模块显式清单（13 项：模块名+常量名+罐头违例源码串）。新增 fail-silent 守卫按惯例登记（README/交接纪律；显式清单而非自动发现——名字模式自动发现误报面大，渐进收紧务实）。
+2. **罐头红面注入（canary）**：每守卫至少一个已知阳性样本——罐头源码串**从批历史真实红面取材**（`any("abc")` 遮蔽/str 直收、`subprocess.run` 无 timeout、`shell=True` 散站、`datetime.now()` 无 tz、模块级 dict 直突、payload 形态违例等）；流程=monkeypatch 守卫模块级目录常量→tmp 树写入罐头违例 `.py`→**直调守卫测试函数本体**→`pytest.raises(AssertionError)` 必红——**同源保证**：罐头测的就是守卫本体（不是检测逻辑副本），TSA "exact set equality" 哲学。
+3. **surface 活体断言**：meta-guard 复算真实扫描面断言非空+下限锁（`vrp/*.py` 数 ≥ 下限，防 glob 模式/目录定位退化到空集）。
+4. **cwd 不变性**：`os.chdir(tmp)` 后直调守卫函数仍绿（守卫 `Path(__file__)` 定位免疫 TSA cwd 缺陷形态）——性质锁定。
+5. **fail-loud 豁免记实**：docs_drift 计数族/TOOL_NAMES 锁天然自检，不进罐头清单——豁免理由记实在登记表注释。
+
+### 19.2 测试实证计划
+
+- 罐头注入参数化 13 守卫 × ≥1 阳性 ≈ 15-20 条（部分守卫多面各一罐头：subprocess 四面/anyall 两面/sql 多面）；surface 非空+下限锁 1-2 条；cwd 不变 1 条；登记表完整性（登记模块全部可导入+常量在位）1 条。预估 +20 上下。
+- 红面自证：本批建立后，罐头测试自身即守卫的红面（meta-guard 抓"守卫全绿但检测器死"形态——R-AD 盲区复现即红）。
+
+### 19.3 红线
+
+- 守卫本体零改动（只 monkeypatch 模块级常量；个别守卫常量形态确需微调例外单列记实）；零第三方依赖（pytest monkeypatch/ast/tmp_path 全内建）。
+- 罐头阳性=批历史真实红面形态（不造 unrealistic 形态）；同源铁律（罐头直调守卫函数本体）。
+- fail-silent 判定准则为登记门槛（fail-loud 豁免须记实理由）；CLI/MCP 零新面（纯测试层批次）。
+
+### 19.4 实施记实（收口）
+
+- **实施**：`tests/test_guard_selfcheck.py` 新建（governance meta-guard，31 测试）：①**罐头红面注入参数化 29 Canary**——`Canary` dataclass（module/func/patch/raw_patch/files），每 fail-silent 守卫一条：monkeypatch 守卫模块级扫描常量（`VRP_DIR`/`VRP`/`TESTS_ROOT`/`VRP_ROOT`/`ROOT`/`CLI_PATH` 六形态；docs_drift 面额外 raw_patch `README` 字符串）→ tmp 树写入罐头违例（批历史真实红面取材：anyall str 直收/遮蔽、CLI 裸 print/裸 dumps、docs Face B 双集合漂移/Face C 未列文档、CJK raise、裸 SystemExit、git 缺四 pin、text 缺 encoding、open 缺 encoding、docstring `\z` SyntaxWarning、模块级 set/dict 直突、链式/变量中转型 loads、SQL 四面（f-string URI/拼接/%/未审计内插）、subprocess 四面（缺 timeout/Popen text 缺 encoding/shell=True 散站/run 散站）、time.sleep/BOM/naive 墙钟、write_text 缺 newline/裸 dumps）→ **直调守卫函数本体** → `pytest.raises(AssertionError)` 必红。②**surface 活体断言**（vrp/ ≥40、tests/ ≥100、cli.py 在位——防 glob/目录定位退化到空集）。③**cwd 不变性锁**（chdir tmp 后直调三代表形态守卫仍绿——`Path(__file__)` 定位免疫 TSA cwd 缺陷）。
+- **fail-loud 豁免清单记实**（meta-guard 模块 docstring）：cbm_name 词汇（len==8）、sqlite_boundary 两 AST 守卫（in names）、docs_drift Face A/D/E（regex 解析失败即红）、TOOL_NAMES 锁、各守卫文件内行为测试。
+- **Face 级精化**（设计稿后实施时细查）：docs_drift 非整文件豁免——Face B（gate 码双集合相等，双空==绿）与 Face C（docs rglob 空循环绿）是 fail-silent 需罐头；Face A/D/E fail-loud 豁免——按守卫函数粒度登记（六函数中 B/C 进罐头、A/D/E 豁免）。
+- **红面自证实验**（守卫的守卫自身自证）：临时弄死 test_anyall_census 检测器（`_FUNCS` 改不存在名）→ 对应罐头测试**精确红**（检测器死→罐头抓到）→ 还原后全绿——meta-guard 能抓"守卫全绿但检测器死"形态（R-AD 盲区复现即红）。
+- **罐头首版 1 红修正记实**：Face C 罐头 README 文本含 "unmentioned" 一词——守卫 `doc.stem in README` 子串命中自豁免（守卫正确、罐头自己打自己）；罐头 README 改不含文件名词后转绿——罐头构造必须避开守卫的子串匹配面。
+- **测试**：+31（29 Canary+surface 1+cwd 1）；全量快速层 **1505 绿**（1474+31 精确）；docs_drift 守卫先行拦截 README/交接计数滞后一次（守卫照常工作）后同批更新转绿。
+- **文档**：README 计数 1505/1523/3028+pre-push、交接 #148、本节收口。契约零改（无命令面变化）。
