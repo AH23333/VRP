@@ -22,6 +22,7 @@ from . import doclint as doclint_mod
 from . import doctor as doctor_mod
 from . import explain as explain_mod
 from . import perf as perf_mod
+from . import relnotes as relnotes_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -256,6 +257,21 @@ def cmd_perf(args) -> int:
         _print_json(result)
     else:
         _print_text(perf_mod.render_text(result))
+    return 0
+
+
+def cmd_relnotes(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = relnotes_mod.build_notes(
+        repo,
+        args.from_ref,
+        to_ref=args.to,
+        version=args.version,
+    )
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(result["markdown"])
     return 0
 
 
@@ -886,6 +902,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_perf)
+
+    p = sub.add_parser(
+        "relnotes",
+        help="K11: release-notes draft generator - commit-range '#NNN:'"
+        " subjects x handover-entry cross-check (drift warnings), numbers"
+        " live-verified at generation time (pytest-collect via doclint,"
+        " s7 glob language count - no snapshot numbers, #153 lesson);"
+        " prints a markdown draft for human review; date-injectable so"
+        " same input = byte-identical draft",
+    )
+    p.add_argument("repo")
+    p.add_argument("--from", dest="from_ref", required=True, help="starting ref/tag (exclusive)")
+    p.add_argument("--to", dest="to", default="HEAD", help="ending ref (default HEAD)")
+    p.add_argument("--version", default=None, help="version header (e.g. v0.1.3)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_relnotes)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
