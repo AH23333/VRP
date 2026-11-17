@@ -57,8 +57,13 @@ def test_cli_prints_are_step_helpers_or_stderr() -> None:
     """print() outside the two helpers must target stderr."""
     tree = _tree()
     helper_lines: set[int] = set()
+    # T10：_print_text（assess 人读面）入 helper 集合——统一 stdout 出口纪律不变
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name in ("_print_step", "_print_json"):
+        if isinstance(node, ast.FunctionDef) and node.name in (
+            "_print_step",
+            "_print_json",
+            "_print_text",
+        ):
             helper_lines.update(range(node.lineno, node.end_lineno + 1))
     violations = []
     for node in ast.walk(tree):

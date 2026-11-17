@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import __version__
 from . import dbpath
+from . import assess as assess_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
 from . import nav as nav_mod
@@ -34,6 +35,16 @@ def cmd_precheck(args) -> int:
     repo = _repo_arg(args.repo)
     result = s0_precheck.precheck(repo)
     _print_json(result)
+    return 0
+
+
+def cmd_assess(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = assess_mod.assess(repo)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(assess_mod.render_text(result))
     return 0
 
 
@@ -588,6 +599,12 @@ def _print_json(payload: dict) -> None:
     print(_dumps(payload))
 
 
+def _print_text(text: str) -> None:
+    # T10 assess 人读面：非 JSON 输出的统一 stdout 出口（print-surface 纪律
+    # 同 _print_json/_print_step——test_cli_census 守卫 helper 集合含本函数）
+    print(text)
+
+
 def _print_step(title: str, payload: dict) -> None:
     print(f"== {title} ==")
     _print_json(payload)
@@ -601,6 +618,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("precheck", help="S0: git snapshot + language census + command discovery")
     p.add_argument("repo")
     p.set_defaults(func=cmd_precheck)
+
+    p = sub.add_parser(
+        "assess",
+        help="T10: pre-adoption assessment (read-only; git snapshot + census + s7/mutate engine"
+        " capability matrix from live engine constants + content-repo probe + risk hints)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_assess)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
