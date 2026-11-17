@@ -13,6 +13,7 @@ from . import __version__
 from . import dbpath
 from . import assess as assess_mod
 from . import graphsci as graphsci_mod
+from . import feedback as feedback_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
 from . import nav as nav_mod
@@ -56,6 +57,24 @@ def cmd_graph(args) -> int:
         _print_json(result)
     else:
         _print_text(graphsci_mod.render_text(result))
+    return 0
+
+
+def cmd_findings(args) -> int:
+    repo = _repo_arg(args.repo)
+    if args.dismiss is not None:
+        con, _ = _open_facts_rw(repo)
+        try:
+            result = feedback_mod.dismiss_finding(con, args.dismiss, args.note or "")
+        finally:
+            con.close()
+        _print_json(result)
+        return 0
+    result = feedback_mod.run_findings(repo, args.limit)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(feedback_mod.render_text(result))
     return 0
 
 
@@ -647,6 +666,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_graph)
+
+    p = sub.add_parser(
+        "findings",
+        help="S7: feedback-loop finding ranking (decisions dismiss history downweights"
+        " a kind by 0.5^n - downweight reorders, never deletes); --dismiss records"
+        " the gesture (decisions table, findings row untouched)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--limit", type=int, default=feedback_mod.DEFAULT_LIMIT, help="max findings shown (summary.total stays true)")
+    p.add_argument("--dismiss", type=int, help="dismiss a finding by id (feedback gesture; downweights its kind)")
+    p.add_argument("--note", help="optional decision note recorded with --dismiss")
+    p.set_defaults(func=cmd_findings)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")

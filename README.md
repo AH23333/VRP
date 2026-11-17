@@ -76,6 +76,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `precheck` | git 快照/语言普查/命令发现 |
 | `assess` | T10 迁移前评估（只读，构想v12）：git 快照+census+引擎能力矩阵（扩展名→s7 引擎映射，后缀集合从各引擎模块常量实时取用——单一事实源）+mutate 引擎面（s2_mutate_run 常量同源）+内容仓探针+风险提示（混仓 not-enforceable/非 git/脏树/.h 双引擎归属/大仓/无引擎覆盖）；verdict `run`/`skip`；纯只读不落 `.vrp/`；`--json` 机器读 |
 | `graph` | R1 网络科学指标（只读，构想v12）：CALLS/CALL_REFERENCE 加权调用图（桩滤除：空 file_path 与 `<...>`/`>...` 合成桩家族，v_hotspots 同口径）→ 确定性 PageRank（dangling mass 均匀回注）+LPA 社区检测（无向邻接+fid 排序异步更新+字典序平局——无随机数，收敛即稳定）+active structure 模块 Jaccard 对账（"AI 梳理 vs 图论社区"交叉验证，分歧即发现）；诚实局限：LPA 无模块度保护（输出 lpa_rounds/社区数供人判读）；ro_connect 不写库；`--json` 机器读 |
+| `findings` | S7 反馈环降权（构想v12 亮点）：finding 排序视图（基础序=id 序）+`--dismiss <id>` 反馈手势（decisions 表留痕 kind='finding'/decision='dismiss'，findings 行零改动）——按 kind 类聚合历史 dismiss，weight=0.5^类次数 调序；**红线：降权不删除**（finding 永远在列表，只调序+留痕原因）；`--limit` 截断展示（summary.total 恒真）；只读排序 ro_connect/写手势走 freshness 硬拒；`--json` 机器读 |
 | `index` / `status` | CBM 索引（缓存）/ 状态查询 |
 | `etl` | CBM → facts.db 五级证据路由 |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
@@ -116,9 +117,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1530 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1541 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3053 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3064 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -127,7 +128,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3053 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1530 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1541 例全绿才放行（~4-8min）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
