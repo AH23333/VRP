@@ -110,3 +110,21 @@ def test_name_override_aliases_parse_identically() -> None:
         assert by_long.cbm_name == "proj-x", f"{sub}: --cbm-name broke"
         assert by_short.cbm_name == "proj-x", f"{sub}: --name alias broke"
         assert not hasattr(by_long, "name"), f"{sub}: stale 'name' dest lingers"
+
+
+def test_all_subparser_help_renders() -> None:
+    """主表+每子命令 help 全渲染——字面 % 必转义（argparse _expand_help 按
+    %-格式化展开直接 ValueError；#165 profile/#170 perf 两度实录，锁全部
+    子命令防第三度）。"""
+    import argparse
+
+    parser = cli.build_parser()
+    parser.format_help()
+    sub_actions = [
+        a for a in parser._actions if isinstance(a, argparse._SubParsersAction)
+    ]
+    assert sub_actions, "no subparsers found on build_parser()"
+    choices = sub_actions[0].choices
+    assert len(choices) >= 2
+    for name, sub in choices.items():
+        sub.format_help()

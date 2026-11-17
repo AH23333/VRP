@@ -7,6 +7,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import __version__
@@ -20,6 +21,7 @@ from . import profile as profile_mod
 from . import doclint as doclint_mod
 from . import doctor as doctor_mod
 from . import explain as explain_mod
+from . import perf as perf_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -190,7 +192,10 @@ def cmd_run(args) -> int:
     repo = _repo_arg(args.repo)
     name = args.cbm_name or repo.name
 
+    # J10：四阶段 monotonic 计时——run 结束自动落档 .vrp/perf.jsonl（零额外命令）。
+    t0 = time.monotonic()
     pre = s0_precheck.precheck(repo)
+    t_precheck = time.monotonic() - t0
     _print_step("S0 precheck", {"name": pre["name"], "repo": pre["repo"], "commands": pre["commands"]})
 
     # P-2：内容仓库（课件/素材站类）对代码分析不适用——跳过 S1/S1.5/xcheck
@@ -212,16 +217,45 @@ def cmd_run(args) -> int:
         )
         return 0
 
+    t1 = time.monotonic()
     idx = s1_cbm.index_repository(repo, name, reindex=args.reindex)
+    t_index = time.monotonic() - t1
     _print_step("S1 cbm index", idx)
 
+    t2 = time.monotonic()
     etl_result = etl_mod.run_etl(repo, name)
+    t_etl = time.monotonic() - t2
     _print_step("S1.5 etl", etl_result)
 
+    t3 = time.monotonic()
     xc = xcheck.run_xcheck(repo, repo / ".vrp" / "facts.db", reindex=False)
+    t_xcheck = time.monotonic() - t3
     _print_step("S1 xcheck", xc)
 
+    stages = {
+        "precheck": t_precheck,
+        "cbm_index": t_index,
+        "etl": t_etl,
+        "xcheck": t_xcheck,
+    }
+    stages["total"] = sum(stages.values())
+    perf_mod.record_run(
+        repo,
+        stages,
+        git_head=(pre.get("git") or {}).get("head"),
+        meta={"reindex": bool(args.reindex)},
+    )
     _print_step("facts.db", {"facts_db": str(repo / ".vrp" / "facts.db")})
+    return 0
+
+
+def cmd_perf(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = perf_mod.run_perf(repo)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(perf_mod.render_text(result))
     return 0
 
 
@@ -840,6 +874,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("code", nargs="?", default=None, help="code or prefix to look up (e.g. G4, SLICE_MISSING_EDGE, P9)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_explain)
+
+    p = sub.add_parser(
+        "perf",
+        help="J10: pipeline performance regression tracking - 'vrp run'"
+        " auto-records per-stage timings (precheck/cbm_index/etl/xcheck)"
+        " to .vrp/perf.jsonl; this reports last-vs-previous per-stage delta;"
+        " regression flag = double gate (+25%% AND +1.0s, small-base noise"
+        " immune); single-sample honest note; rc always 0 (report, not gate)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_perf)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
