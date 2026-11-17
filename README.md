@@ -90,6 +90,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `profile` | R4 仓库数字画像（构想v12 甜点，census 统计深化，纯 stdlib）：三面分布 Gini（入度/出度/文件符号数）+集中度 top1%/top10% 累计占比（**幂律拟合的诚实替代**——不做 CSN 拟合，note 字段明示）+边密度（n<=1 诚实 0.0）+扇入扇出枢纽 top5（(count DESC, fid) 纯确定）；只读查询面（ro_connect 行零改动）；确定性无时间戳；`--json` 机器读 |
 | `doclint` | P23 活文档防漂移（构想v11 亮点首推，自家 test_docs_drift 守卫产品化，原创无轮子）：markdown 内 `<!-- doclint {...} -->` 声明式标记（HTML 注释内嵌 JSON，渲染不可见）声明可证伪数字断言，真值源（glob/recount/pytest-collect 三种只读源）重算对账——**文档说谎检测器**；rc=1 on drift；零写入只读面 |
 | `doctor` | I4 工具链环境自诊断（构想v11 甜点，npm doctor/rustup doctor 形态）：聚合各适配器已有 find_* 发现函数（单一事实源，不重写探测逻辑）分两层报告——core（python/git/node/CBM，缺失 rc=1 阻断管道）+ engine（21 引擎外链+scc，缺失只报能力降级不判红）；git/node 廉价 --version 探针（run_tree 15s），python 报 sys 实况，其余只报定位路径（版本钉位归 bootstrap.py，doctor 不做第二真值源）；无 repo 参数，只读 |
+| `explain` | I5 错误码人话速查（构想v11 甜点，cargo explain 形态）：三族码全文检索——gate 闸门码（单源直引 s6_transact.RULE_CODES，G0-G6 含 G4 五信号）/curate 收据拒码 SLICE_*/STRUCT_*/FILE_*（AST 抽取 curate/auto_curate 源码全串常量，新码落源即入表不建第二登记处，守卫双向锁人话覆盖）/P 病理码（直引 render.PATHOLOGY_LEGEND 零复制）；无参三族总览，前缀匹配大小写不敏感，无命中 rc=1；无 repo 参数，只读 |
 | `index` / `status` | CBM 索引（缓存）/ 状态查询 |
 | `etl` | CBM → facts.db 五级证据路由 |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
@@ -130,9 +131,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1625 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1639 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3148 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3162 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -141,7 +142,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3148 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1625 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1639 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

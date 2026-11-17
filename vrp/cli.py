@@ -19,6 +19,7 @@ from . import grouping as grouping_mod
 from . import profile as profile_mod
 from . import doclint as doclint_mod
 from . import doctor as doctor_mod
+from . import explain as explain_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -147,6 +148,15 @@ def cmd_doctor(args) -> int:
     else:
         _print_text(doctor_mod.render_text(result))
     return doctor_mod.doctor_rc(result)
+
+
+def cmd_explain(args) -> int:
+    result = explain_mod.run_explain(getattr(args, "code", None))
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(explain_mod.render_text(result))
+    return explain_mod.explain_rc(result)
 
 
 def cmd_index(args) -> int:
@@ -817,6 +827,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser(
+        "explain",
+        help="I5: error-code lookup - gate/G0-G6 transact gate codes"
+        " (single-sourced from s6_transact.RULE_CODES), curate rejection"
+        " codes SLICE_*/STRUCT_*/FILE_* (AST-extracted from source - no"
+        " second registry), pathology P-codes (render.PATHOLOGY_LEGEND);"
+        " no arg = family overview; prefix match case-insensitive; rc=1"
+        " on no match; read-only, no repo arg",
+    )
+    p.add_argument("code", nargs="?", default=None, help="code or prefix to look up (e.g. G4, SLICE_MISSING_EDGE, P9)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_explain)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
