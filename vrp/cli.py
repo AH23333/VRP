@@ -23,6 +23,7 @@ from . import doctor as doctor_mod
 from . import explain as explain_mod
 from . import perf as perf_mod
 from . import relnotes as relnotes_mod
+from . import smoke as smoke_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -273,6 +274,19 @@ def cmd_relnotes(args) -> int:
     else:
         _print_text(result["markdown"])
     return 0
+
+
+def cmd_smoke(args) -> int:
+    result = smoke_mod.run_smoke(
+        getattr(args, "root", None),
+        only=list(args.only) if args.only else None,
+        skip_run=args.skip_run,
+    )
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(smoke_mod.render_text(result))
+    return smoke_mod.smoke_rc(result)
 
 
 def cmd_s2(args) -> int:
@@ -918,6 +932,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", default=None, help="version header (e.g. v0.1.3)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_relnotes)
+
+    p = sub.add_parser(
+        "smoke",
+        help="K12: cross-repo release smoke - auto-discovers verify/ repos"
+        " (dirs with .git - no registry), runs the full S0->xcheck chain"
+        " per repo, aggregates symbols/edges/findings counts;"
+        " content-repo skip = pass (P-2 semantics); --skip-run = counts +"
+        " M4 freshness check only (stale = fail); rc=1 on any fail",
+    )
+    p.add_argument("root", nargs="?", default=None, help="vrp checkout root (default: this package's parent)")
+    p.add_argument("--only", action="append", default=None, help="restrict to named verify repo (repeatable)")
+    p.add_argument("--skip-run", dest="skip_run", action="store_true", help="read existing facts.db + freshness check only")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_smoke)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
