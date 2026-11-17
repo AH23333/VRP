@@ -6,6 +6,11 @@
 - **辅用户：vibe 开发者（人类）**——两条消费线分开：AI 消费深层数据（facts.db/MCP），vibe 开发者消费 report/chain 用户产物（AI 梳理职责/层规则/病理体检报告），目标是「理解项目、判断梳理意见、做决定」
 - 纯 Python 标准库（≥3.11，零第三方运行时依赖），全管道 CLI 子进程化、可审计可重放
 
+<!-- doclint {"id": "readme-quick-count", "claim": "快速层 (\\d+) 例", "source": {"kind": "pytest-collect", "component": "quick"}} -->
+<!-- doclint {"id": "readme-deep-count", "claim": "深度层 (\\d+) 例", "source": {"kind": "pytest-collect", "component": "deep"}} -->
+<!-- doclint {"id": "readme-total-count", "claim": "全量 (\\d+) 例", "source": {"kind": "pytest-collect", "component": "total"}} -->
+<!-- doclint {"id": "readme-astgrep-rules", "claim": "ast-grep (\\d+) 规则", "source": {"kind": "glob", "pattern": "vrp/rules/s2/*.yml"}} -->
+
 ## 管道一览
 
 ```
@@ -82,7 +87,8 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `cochange` | R2 co-change 隐式耦合边（构想v12 亮点，挖掘+呈现一体）：`git log --no-merges --name-only` 共现挖掘（code-maat/Tornhill temporal coupling，公式开放：support/confidence(a→b)=support/changes(a)）→ 独立 `co_changes` 表（file_a<file_b 字典序 PK，路径键跨 etl 稳定，无时间戳列——同 HEAD 字节级同产物）；幂等 DELETE+INSERT 全量替换；OWNED 跨 etl 存续（git 历史不变不重挖）；`--min-support`/`--min-confidence` 只过滤展示面（表存全量对，默认 3/0.3）；阈值后幸存数诚实计数；叙事定位：CALLS 显式依赖 vs co_changes 隐式耦合——两图分歧即发现；CBM history_coupling 链路零动；`--json` 机器读 |
 | `review` | T9 PR review 格式输出（构想v12 甜点，学 reviewdog 行锚定+GitHub Review Comments API 载荷）：SARIF→review comments 本地转换器——一条 result 一条 comment（path/line/side=RIGHT/body，1:1 不聚合——聚合是 S5 立项面），落 `.vrp/report/review-comments.json` 供人贴（**零服务端**：贴不贴贴几条由人定，`gh api .../comments` 载荷形状）；缺 location 诚实跳过计数；`--sarif` 换源/`--limit` 只截断写出面（summary 恒真）；确定性——重跑字节级同产物（无时间戳）；`--json` 机器读 |
 | `groups` | S5 finding 同根因聚合（构想v12 甜点，Sentry fingerprint 语义）：指纹=根因符号集——锚定对 (anchor,related) **无序归一**（互环 a→b/b→a 与克隆族同键），无 fid 回退 (file_path,start_line) 键；group_id=sha256[:12] 跨 etl 稳定；**归组不删行**（只读查询面，红线同 S7 降权不删除）；排序 (-members, group_id) 纯确定；member_ids cap 10（summary 记 cap 恒真）；`--limit` 截断展示 summary 恒真；确定性无时间戳；S6 评分/dossier 聚合呈现接入各自立项；`--json` 机器读 |
-| `profile` | R4 仓库数字画像（构想v12 甜点，census 统计深化，纯 stdlib）：三面分布 Gini（入度/出度/文件符号数）+集中度 top1%/top10% 累计占比（**幂律拟合的诚实替代**——不做 CSN 拟合，note 字段明示）+边密度（n<=1 诚实 0.0）+扇入扇出枢纽 top5（(count DESC, fid) 纯确定）；只读查询面（ro_connect 行零改动）；确定性无时间戳；`--json` 机器读 |
+| `profile` | R4 仓库数字画像（构想v12 甜点，census 统计深化，纯 stdlib）：三面分布 Gini（入度/出度/文件符号数）+集中度 top1%/top10% 累计占比（**幂律拟合的诚实替代**
+| `doclint` | P23 活文档防漂移（构想v11 亮点首推，自家 test_docs_drift 守卫产品化，原创无轮子）：markdown 内 `<!-- doclint {...} -->` 声明式标记（HTML 注释内嵌 JSON，渲染不可见）声明可证伪数字断言，真值源（glob/recount/pytest-collect 三种只读源）重算对账——**文档说谎检测器**；rc=1 on drift；零写入只读面 |——不做 CSN 拟合，note 字段明示）+边密度（n<=1 诚实 0.0）+扇入扇出枢纽 top5（(count DESC, fid) 纯确定）；只读查询面（ro_connect 行零改动）；确定性无时间戳；`--json` 机器读 |
 | `index` / `status` | CBM 索引（缓存）/ 状态查询 |
 | `etl` | CBM → facts.db 五级证据路由 |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
@@ -123,9 +129,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1593 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1611 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3116 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3134 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -134,7 +140,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3116 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1593 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1611 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
