@@ -16,6 +16,7 @@ from . import graphsci as graphsci_mod
 from . import feedback as feedback_mod
 from . import cochange as cochange_mod
 from . import grouping as grouping_mod
+from . import profile as profile_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -114,6 +115,16 @@ def cmd_groups(args) -> int:
         _print_json(result)
     else:
         _print_text(grouping_mod.render_text(result))
+    return 0
+
+
+def cmd_profile(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = profile_mod.run_profile(repo)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(profile_mod.render_text(result))
     return 0
 
 
@@ -754,6 +765,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.add_argument("--limit", type=int, default=grouping_mod.DEFAULT_LIMIT, help="max groups shown (summary stays true)")
     p.set_defaults(func=cmd_groups)
+
+    p = sub.add_parser(
+        "profile",
+        help="R4: repo descriptive statistics (gini of in/out degree and"
+        " file-symbol distributions, top1%%/top10%% concentration as the honest"
+        " power-law proxy, edge density, fan-in/out hubs; read-only)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_profile)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
