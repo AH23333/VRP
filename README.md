@@ -29,6 +29,8 @@ pip install -e .                       # 纯标准库，无第三方依赖
 $env:CBM_CACHE_DIR = "D:\cbm-cache"    # CBM 缓存目录（必须显式设置）
 ```
 
+零安装试用（U13）：`python -m vrp.build_pyz` 确定性构建单文件 `dist/vrp.pyz`（同源字节级同 pyz；自解压+re-exec——sha256 键控解压缓存 `~/.vrp/pyz/`（`VRP_PYZ_CACHE` 可覆写），仓内 13 处 `__file__` 资源点零改动、单代码路径），`python vrp.pyz --help` 即用（Python ≥3.11，无需 pip install；配合 Release 分发可做）。
+
 ### 环境自举（work/ 工具沙箱重建）
 
 外部工具全部钉版本收录在 `bootstrap.py`（纯标准库）：六个 npm 沙箱
@@ -118,9 +120,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1555 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1561 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3078 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3084 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -129,7 +131,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3078 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1555 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1561 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
