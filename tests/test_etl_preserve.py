@@ -150,4 +150,5 @@ def test_owned_tables_constant():
         "structure",
         "decisions",
         "fid_ledger",
+        "co_changes",
     }

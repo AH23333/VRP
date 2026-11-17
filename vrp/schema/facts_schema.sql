@@ -214,6 +214,26 @@ CREATE TABLE IF NOT EXISTS baseline (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- #161 R2：co-change 隐式耦合边（学 code-maat/Tornhill temporal coupling，
+-- 公式全开放）。自研 git log 共现挖掘（--no-merges --name-only），与
+-- history_coupling 不混写（语义不同源：CBM 黑盒路由 vs 自研透明——CBM
+-- 链路零动）。行规范 file_a < file_b 字典序；文件路径键非 fid（路径跨
+-- etl 稳定 = runtime_calls qn 键同哲学）；无时间戳列——数据自带 commit
+-- 时间（first/last_co_change），同 HEAD 挖掘两次字节级同产物（复现性
+-- 红线）。跨 etl 经 OWNED_TABLES 快照回灌存续（git 历史跨 etl 不变）。
+CREATE TABLE IF NOT EXISTS co_changes (
+    file_a TEXT NOT NULL,
+    file_b TEXT NOT NULL,
+    support INTEGER NOT NULL,
+    changes_a INTEGER NOT NULL,
+    changes_b INTEGER NOT NULL,
+    confidence_ab REAL NOT NULL,
+    confidence_ba REAL NOT NULL,
+    first_co_change TEXT NOT NULL,
+    last_co_change TEXT NOT NULL,
+    PRIMARY KEY (file_a, file_b)
+);
+
 DROP VIEW IF EXISTS v_hotspots;
 -- P-3（跨项目实测 archify 案例）：fan_in_same_file = 同文件内 fan-in 边数；
 -- fan_in_same_file_pct = 其占 fan_in 比例。CBM 对跨文件同名符号（浏览器全局桩

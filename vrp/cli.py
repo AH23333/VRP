@@ -14,6 +14,7 @@ from . import dbpath
 from . import assess as assess_mod
 from . import graphsci as graphsci_mod
 from . import feedback as feedback_mod
+from . import cochange as cochange_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
 from . import nav as nav_mod
@@ -75,6 +76,21 @@ def cmd_findings(args) -> int:
         _print_json(result)
     else:
         _print_text(feedback_mod.render_text(result))
+    return 0
+
+
+def cmd_cochange(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        etl_mod.ensure_schema(con)
+        result = cochange_mod.run_cochange(repo, con, args.min_support, args.min_confidence)
+    finally:
+        con.close()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(cochange_mod.render_text(result))
     return 0
 
 
@@ -679,6 +695,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dismiss", type=int, help="dismiss a finding by id (feedback gesture; downweights its kind)")
     p.add_argument("--note", help="optional decision note recorded with --dismiss")
     p.set_defaults(func=cmd_findings)
+
+    p = sub.add_parser(
+        "cochange",
+        help="R2: mine implicit co-change coupling from git history (--no-merges"
+        " co-occurrence; formulas open: support/confidence per Tornhill temporal"
+        " coupling) into co_changes (idempotent DELETE+INSERT full replace,"
+        " OWNED across etl); thresholds filter the display, the table keeps all pairs",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--min-support", type=int, default=cochange_mod.DEFAULT_MIN_SUPPORT, help="display filter: min co-occurrence count (>= boundary, default 3)")
+    p.add_argument("--min-confidence", type=float, default=cochange_mod.DEFAULT_MIN_CONFIDENCE, help="display filter: min confidence in either direction (>= boundary, default 0.3)")
+    p.set_defaults(func=cmd_cochange)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")

@@ -86,6 +86,7 @@ OWNED_TABLES = (
     "structure",
     "decisions",
     "fid_ledger",
+    "co_changes",
 )
 
 
