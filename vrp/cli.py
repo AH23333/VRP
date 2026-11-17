@@ -15,6 +15,7 @@ from . import assess as assess_mod
 from . import graphsci as graphsci_mod
 from . import feedback as feedback_mod
 from . import cochange as cochange_mod
+from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
 from . import nav as nav_mod
@@ -91,6 +92,17 @@ def cmd_cochange(args) -> int:
         _print_json(result)
     else:
         _print_text(cochange_mod.render_text(result))
+    return 0
+
+
+def cmd_review(args) -> int:
+    repo = _repo_arg(args.repo)
+    sarif = Path(args.sarif).resolve() if args.sarif else None
+    result = review_mod.run_review(repo, sarif_path=sarif, limit=args.limit)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(review_mod.render_text(result))
     return 0
 
 
@@ -708,6 +720,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-support", type=int, default=cochange_mod.DEFAULT_MIN_SUPPORT, help="display filter: min co-occurrence count (>= boundary, default 3)")
     p.add_argument("--min-confidence", type=float, default=cochange_mod.DEFAULT_MIN_CONFIDENCE, help="display filter: min confidence in either direction (>= boundary, default 0.3)")
     p.set_defaults(func=cmd_cochange)
+
+    p = sub.add_parser(
+        "review",
+        help="T9: SARIF -> GitHub review comments JSON (local artifact"
+        " .vrp/report/review-comments.json, zero server-side; one result ="
+        " one comment, side RIGHT, line-anchored)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--sarif", help="SARIF path (default <repo>/.vrp/report/findings.sarif)")
+    p.add_argument("--limit", type=int, help="max comments written (summary stays true)")
+    p.set_defaults(func=cmd_review)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")

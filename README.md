@@ -80,6 +80,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `graph` | R1 网络科学指标（只读，构想v12）：CALLS/CALL_REFERENCE 加权调用图（桩滤除：空 file_path 与 `<...>`/`>...` 合成桩家族，v_hotspots 同口径）→ 确定性 PageRank（dangling mass 均匀回注）+LPA 社区检测（无向邻接+fid 排序异步更新+字典序平局——无随机数，收敛即稳定）+active structure 模块 Jaccard 对账（"AI 梳理 vs 图论社区"交叉验证，分歧即发现）；诚实局限：LPA 无模块度保护（输出 lpa_rounds/社区数供人判读）；ro_connect 不写库；`--json` 机器读 |
 | `findings` | S7 反馈环降权（构想v12 亮点）：finding 排序视图（基础序=id 序）+`--dismiss <id>` 反馈手势（decisions 表留痕 kind='finding'/decision='dismiss'，findings 行零改动）——按 kind 类聚合历史 dismiss，weight=0.5^类次数 调序；**红线：降权不删除**（finding 永远在列表，只调序+留痕原因）；`--limit` 截断展示（summary.total 恒真）；只读排序 ro_connect/写手势走 freshness 硬拒；`--json` 机器读 |
 | `cochange` | R2 co-change 隐式耦合边（构想v12 亮点，挖掘+呈现一体）：`git log --no-merges --name-only` 共现挖掘（code-maat/Tornhill temporal coupling，公式开放：support/confidence(a→b)=support/changes(a)）→ 独立 `co_changes` 表（file_a<file_b 字典序 PK，路径键跨 etl 稳定，无时间戳列——同 HEAD 字节级同产物）；幂等 DELETE+INSERT 全量替换；OWNED 跨 etl 存续（git 历史不变不重挖）；`--min-support`/`--min-confidence` 只过滤展示面（表存全量对，默认 3/0.3）；阈值后幸存数诚实计数；叙事定位：CALLS 显式依赖 vs co_changes 隐式耦合——两图分歧即发现；CBM history_coupling 链路零动；`--json` 机器读 |
+| `review` | T9 PR review 格式输出（构想v12 甜点，学 reviewdog 行锚定+GitHub Review Comments API 载荷）：SARIF→review comments 本地转换器——一条 result 一条 comment（path/line/side=RIGHT/body，1:1 不聚合——聚合是 S5 立项面），落 `.vrp/report/review-comments.json` 供人贴（**零服务端**：贴不贴贴几条由人定，`gh api .../comments` 载荷形状）；缺 location 诚实跳过计数；`--sarif` 换源/`--limit` 只截断写出面（summary 恒真）；确定性——重跑字节级同产物（无时间戳）；`--json` 机器读 |
 | `index` / `status` | CBM 索引（缓存）/ 状态查询 |
 | `etl` | CBM → facts.db 五级证据路由 |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
@@ -120,9 +121,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1561 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1571 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3084 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3094 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -131,7 +132,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3084 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1561 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1571 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
