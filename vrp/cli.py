@@ -18,6 +18,7 @@ from . import cochange as cochange_mod
 from . import grouping as grouping_mod
 from . import profile as profile_mod
 from . import doclint as doclint_mod
+from . import doctor as doctor_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -137,6 +138,15 @@ def cmd_doclint(args) -> int:
     else:
         _print_text(doclint_mod.render_text(result))
     return 0 if result["summary"]["drift"] == 0 else 1
+
+
+def cmd_doctor(args) -> int:
+    result = doctor_mod.run_doctor()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(doctor_mod.render_text(result))
+    return doctor_mod.doctor_rc(result)
 
 
 def cmd_index(args) -> int:
@@ -796,6 +806,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_doclint)
+
+    p = sub.add_parser(
+        "doctor",
+        help="I4: toolchain environment self-diagnosis - aggregates the"
+        " per-adapter find_* discovery (single source of truth) into"
+        " core (python/git/node/CBM, rc=1 if missing) vs engine tiers"
+        " (21-engine externals + scc, missing = degraded capability only);"
+        " git/node get a cheap --version probe; read-only, no repo arg",
+    )
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
