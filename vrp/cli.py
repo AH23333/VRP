@@ -15,6 +15,7 @@ from . import assess as assess_mod
 from . import graphsci as graphsci_mod
 from . import feedback as feedback_mod
 from . import cochange as cochange_mod
+from . import grouping as grouping_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -103,6 +104,16 @@ def cmd_review(args) -> int:
         _print_json(result)
     else:
         _print_text(review_mod.render_text(result))
+    return 0
+
+
+def cmd_groups(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = grouping_mod.run_groups(repo, args.limit)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(grouping_mod.render_text(result))
     return 0
 
 
@@ -732,6 +743,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sarif", help="SARIF path (default <repo>/.vrp/report/findings.sarif)")
     p.add_argument("--limit", type=int, help="max comments written (summary stays true)")
     p.set_defaults(func=cmd_review)
+
+    p = sub.add_parser(
+        "groups",
+        help="S5: group findings by root-cause fingerprint (Sentry grouping"
+        " semantics; unordered fid pair normalized - cycles a->b/b->a and"
+        " clone families share one key; grouping never deletes, read-only)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--limit", type=int, default=grouping_mod.DEFAULT_LIMIT, help="max groups shown (summary stays true)")
+    p.set_defaults(func=cmd_groups)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
