@@ -12,6 +12,7 @@ from pathlib import Path
 from . import __version__
 from . import dbpath
 from . import assess as assess_mod
+from . import graphsci as graphsci_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
 from . import nav as nav_mod
@@ -45,6 +46,16 @@ def cmd_assess(args) -> int:
         _print_json(result)
     else:
         _print_text(assess_mod.render_text(result))
+    return 0
+
+
+def cmd_graph(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = graphsci_mod.run_graph(repo)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(graphsci_mod.render_text(result))
     return 0
 
 
@@ -627,6 +638,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_assess)
+
+    p = sub.add_parser(
+        "graph",
+        help="R1: network-science view (deterministic PageRank + LPA communities on the"
+        " CALLS/CALL_REFERENCE graph) and reconciliation vs active structure modules",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_graph)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
