@@ -25,6 +25,7 @@ from . import perf as perf_mod
 from . import relnotes as relnotes_mod
 from . import smoke as smoke_mod
 from . import gc as gc_mod
+from . import flakes as flakes_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -301,6 +302,16 @@ def cmd_gc(args) -> int:
     else:
         _print_text(gc_mod.render_text(result))
     return gc_mod.gc_rc(result)
+
+
+def cmd_flakes(args) -> int:
+    result = {"entries": flakes_mod.registry()}
+    rc = flakes_mod.flakes_rc()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(flakes_mod.render_text())
+    return rc
 
 
 def cmd_s2(args) -> int:
@@ -976,6 +987,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yes", action="store_true", help="confirm: actually delete GC candidates")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_gc)
+
+    p = sub.add_parser(
+        "flakes",
+        help="L15: flake registry - recurrence tracking, shake-king list"
+        " (count>=2 = isolation candidates), record-don't-mask"
+        " (pytest-rerunfailures NOT adopted); first observation goes to"
+        " handover prose, recurrence enters this registry; validate()"
+        " drift-guards active entries (renamed/deleted test = red);"
+        " fd0d7db misjudgment precedent: recurrence -> find root cause"
+        " first, confirmed defect gets fixed not registered",
+    )
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_flakes)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")
