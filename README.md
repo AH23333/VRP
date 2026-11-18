@@ -138,9 +138,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1717 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1719 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3240 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3242 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -149,7 +149,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3240 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1717 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1719 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
@@ -169,6 +169,8 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《构想v11-拓展性候选与轮子调研II.md》——拓展性发散清单第二批（未立项，与 v10 正交）：25 项候选（安全合规/CLI 工程/增量性能/发布工程/数据治理/多代理协作/语言深化/契约互操作/活文档防漂移/可解释性）逐项轮子调研+优先级总表（亮点 P23 活文档防漂移/甜点十一项/硬核四项）
 - 《构想v12-拓展性候选与轮子调研III.md》——拓展性发散清单第三批（未立项，与前两批正交）：28 项候选（分析科学/管道智能化/消费者特化输出/部署分发/Schema 演进/定位对照/极端规模/交互探索/运营健康）逐项轮子调研+三批 71 项全景+跨批依赖链（亮点 R1 网络科学×propose 对账/S7 反馈环降权/R2 co-change 隐式耦合边）
 - 《竞品对照矩阵.md》——W20：与 SonarQube/CodeScene/deptrac/import-linter 定位对照（只引对家公开声明，不贬损，欢迎 PR 修正）
+- 《glossary.md》——Q24：术语表（Diátaxis reference 面；fid/remap/drift/verdict/evidence chain/OWNED_TABLES 等散落概念一站式，详处指针锚点锁 test_glossary 守卫）
+- 《理论出处.md》——W21：概念↔经典书/论文映射（glossary 姊妹篇理论维度；Clean Architecture/POSA/Martin 度量论文/变异测试 1978/克隆检测 1995/ACID 1983 等，无出处原创面诚实标注）
 - 《vendored-上游跟踪规范.md》——Z26：外部组件上游跟踪 SOP（季度检查+升级评估清单+钉位表，离线手动 dependabot）
 - 《第三方许可登记.md》——Z27：in-repo vendored/work 沙箱/pip 钉版本三段 license 全清单+兼容性结论（本地实查+上游 LICENSE 抓取，时点 2026-11-17）
 - 《致谢与轮子来源.md》——Z28：管道在用/测试基建/形态参照/理论经典全清单致谢+轮子学习方法论（学形态不引依赖/三判定/探针先行/红面自证/宁缺勿错）公开呈现
