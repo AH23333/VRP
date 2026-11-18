@@ -22,7 +22,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dbpath
+from . import dbpath, scoring
 
 FINDING_DECISION_KIND = "finding"
 DISMISS_DECISION = "dismiss"
@@ -83,12 +83,17 @@ def _class_dismiss_counts(con: sqlite3.Connection) -> dict[str, int]:
 
 
 def rank_findings(con: sqlite3.Connection) -> dict:
-    """反馈环排序视图：weight=0.5^类 dismiss 次数；排序 (类次数升序, id 升序)。
+    """反馈环排序视图：weight=0.5^类 dismiss 次数；排序
+    (类次数升序, score 降序, id 升序)——基础序自 S6 落地起接评分
+    （#159 预告"基础序=id 序（S6 评分落地后接入）"），零分量 fixture
+    （无边/无重复锚）score 全 0 自然退化回 id 序。
 
     只读；decisions 里 kind='finding' 但 target_id 非数字（手改库）经
     CAST 归 0 后 JOIN 不中任何 findings 行，安全忽略。
     """
     counts = _class_dismiss_counts(con)
+    scored = scoring.score_findings(con, dict(scoring.DEFAULT_WEIGHTS))
+    scores = {e["id"]: (e["score"], e["components"]) for e in scored["findings"]}
     entries: list[dict] = []
     kinds: set[str] = set()
     for fid_, pathology, kind, source, anchor, path, start, end in con.execute(
@@ -97,6 +102,7 @@ def rank_findings(con: sqlite3.Connection) -> dict:
     ).fetchall():
         kinds.add(kind)
         n = counts.get(kind, 0)
+        score, components = scores.get(fid_, (0.0, {"impact": 0.0, "evidence": 0.0, "span": 0.0}))
         entries.append(
             {
                 "id": fid_,
@@ -109,18 +115,21 @@ def rank_findings(con: sqlite3.Connection) -> dict:
                 "end_line": end,
                 "weight": round(DOWNWEIGHT ** n, 4),
                 "class_dismissals": n,
+                "score": score,
+                "components": components,
                 "reason": (
                     f"downweighted: {n} dismissal(s) on kind '{kind}'" if n else ""
                 ),
             }
         )
-    entries.sort(key=lambda e: (e["class_dismissals"], e["id"]))
+    entries.sort(key=lambda e: (e["class_dismissals"], -e["score"], e["id"]))
     summary = {
         "total": len(entries),
         "kinds": len(kinds),
         "dismiss_decisions": sum(counts.values()),
         "dismissed_kinds": {k: counts[k] for k in sorted(counts)},
         "downweight_factor": DOWNWEIGHT,
+        "base_order": "s6 score desc, tie id asc (zero-component fixtures degrade to id order)",
         "red_line": "downweight reorders, never deletes",
     }
     return {"summary": summary, "findings": entries}
@@ -169,6 +178,6 @@ def render_text(result: dict) -> str:
         if e["start_line"]:
             loc += f":{e['start_line']}"
         lines.append(
-            f"  #{e['id']:<6} {e['weight']:.4f}  {e['pathology']}/{e['kind']}  {loc}"
+            f"  #{e['id']:<6} {e['weight']:.4f}  score {e['score']:7.4f}  {e['pathology']}/{e['kind']}  {loc}"
         )
     return "\n".join(lines)

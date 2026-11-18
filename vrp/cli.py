@@ -28,6 +28,7 @@ from . import gc as gc_mod
 from . import flakes as flakes_mod
 from . import langmatrix as langmatrix_mod
 from . import secrets as secrets_mod
+from . import scoring as scoring_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -116,6 +117,17 @@ def cmd_review(args) -> int:
         _print_json(result)
     else:
         _print_text(review_mod.render_text(result))
+    return 0
+
+
+def cmd_score(args) -> int:
+    repo = _repo_arg(args.repo)
+    weights = scoring_mod.parse_weights(args.weights)
+    result = scoring_mod.run_score(repo, args.limit, weights)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(scoring_mod.render_text(result))
     return 0
 
 
@@ -894,6 +906,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sarif", help="SARIF path (default <repo>/.vrp/report/findings.sarif)")
     p.add_argument("--limit", type=int, help="max comments written (summary stays true)")
     p.set_defaults(func=cmd_review)
+
+    p = sub.add_parser(
+        "score",
+        help="S6: finding priority scoring (formula open and explainable -"
+        " every entry ships its components; score = w*impact + w*evidence"
+        " - w*span where impact=log1p(anchor in-degree), evidence=log1p(distinct"
+        " kinds on the same anchor), span=log1p(affected lines) as the repair"
+        " cost proxy; weights configurable via --weights JSON, read-only)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--limit", type=int, default=scoring_mod.DEFAULT_LIMIT, help="max findings shown (summary.total stays true)")
+    p.add_argument("--weights", help='JSON object overriding default weights, e.g. \'{"impact": 2.0}\' (keys: impact, evidence, span)')
+    p.set_defaults(func=cmd_score)
 
     p = sub.add_parser(
         "groups",
