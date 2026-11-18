@@ -27,6 +27,7 @@ from . import smoke as smoke_mod
 from . import gc as gc_mod
 from . import flakes as flakes_mod
 from . import langmatrix as langmatrix_mod
+from . import secrets as secrets_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -322,6 +323,15 @@ def cmd_langmatrix(args) -> int:
     else:
         _print_text(langmatrix_mod.render_text())
     return langmatrix_mod.matrix_rc()
+
+
+def cmd_secrets(args) -> int:
+    result = secrets_mod.run_secrets(Path(args.repo), history=args.history)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(secrets_mod.render_text(result))
+    return secrets_mod.secrets_rc(result)
 
 
 def cmd_s2(args) -> int:
@@ -1025,6 +1035,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_langmatrix)
+
+    p = sub.add_parser(
+        "secrets",
+        help="H1: standalone secrets scan (gitleaks shape; detector single-"
+        "source from render_chain - zero detection-logic copies, trufflehog"
+        " live-verification NOT done - detect only): worktree walk"
+        " (IGNORE_DIRS pruned, binary/oversize skips counted) + optional"
+        " --history full-blob scan via streaming cat-file --batch (secrets"
+        " in deleted files still found; oversize blobs skipped+counted);"
+        " read-only stdout report (SECRETS.local.md manifest stays in the"
+        " render chain); rc=1 on hits (CI-usable, gitleaks semantics)",
+    )
+    p.add_argument("repo", help="repository path to scan")
+    p.add_argument("--history", action="store_true", help="also scan all git history blobs (slow face, explicit opt-in)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_secrets)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")

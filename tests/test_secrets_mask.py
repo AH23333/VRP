@@ -111,6 +111,21 @@ def test_mask_benign_untouched():
     assert hits == []
 
 
+def test_mask_long_line_linear():
+    """量词上界纪律回归（#176 faulthandler 实录）：无界 scheme `*` 在 2MB
+    单行（minified/生成物形态）每起点贪吃全行再回溯，O(n²)≈4e12 步假挂；
+    有界 {0,15}/{…,4096} 后单遍线性。宽松墙钟 30s 只作挂→红转换（实际 <1s）。"""
+    import time
+    t0 = time.time()
+    bomb = "a" * (2 * 1024 * 1024)
+    out, hits = render_chain.mask_source_lines([bomb])
+    assert out == [bomb] and hits == []
+    eyj = "eyJ" + "a" * (2 * 1024 * 1024)  # jwt 无上界 {10,} 同型隐患面
+    _, hits = render_chain.mask_source_lines([eyj])
+    assert hits == []
+    assert time.time() - t0 < 30
+
+
 def test_mask_deterministic():
     lines = [f"k = {AWS_KEY}", "plain", "-----BEGIN PRIVATE KEY-----", "secret-body"]
     a = render_chain.mask_source_lines(lines)

@@ -1233,13 +1233,18 @@ _SECRET_INLINE: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     ("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("openai-key", re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_\-]{20,255}\b")),
     ("jwt", re.compile(
-        r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}\b")),
+        r"\beyJ[A-Za-z0-9_\-]{10,4096}\.[A-Za-z0-9_\-]{10,4096}\.[A-Za-z0-9_\-]{5,4096}\b")),
 )
 # URL 凭据：userinfo 段收紧为 RFC 3986 用户名常见字符（排除 > < \ 等——
 # tsa 实证误报：`"<http://example.com>\n<mailto:test@…>"` 中裸 URL+mailto
-# 组合曾把 mailto: 后段误当密码掩蔽，交接 #141）
+# 组合曾把 mailto: 后段误当密码掩蔽，交接 #141）。
+# 量词上界纪律（#176 faulthandler 实录）：scheme 段无界 `*` 在长单行
+# （2MB minified/生成物单行）每起点贪吃全行再回溯找 ://，O(n²)≈4e12 步
+# 假挂——scheme 有界 {0,15}（现实 scheme ≤11 字符 mongodb+srv），jwt 三段
+# 同理有界 {…,4096}（现实 JWT 段 <4KB）；有界化后单遍线性，现实输入
+# 匹配语义不变。
 _URL_CRED = re.compile(
-    r"([a-z][a-z0-9+.\-]*://[A-Za-z0-9._%+\-]{1,64}:)([^/\s@]{3,255})(@)")
+    r"([a-z][a-z0-9+.\-]{0,15}://[A-Za-z0-9._%+\-]{1,64}:)([^/\s@]{3,255})(@)")
 _PK_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 _PK_END = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
 

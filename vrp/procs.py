@@ -34,6 +34,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 BELOW_NORMAL_PRIORITY_CLASS = 0x00004000  # Win32 CreateProcess dwCreationFlags 优先级类位（API 文档值）
@@ -167,3 +168,62 @@ def run_tree(
             "stdout": out or "",
             "stderr": (err or "") + f"\ntimed out after {timeout}s (process tree killed)",
         }
+
+
+def stream_lines(
+    cmd: list[str],
+    cwd: Path | str | None = None,
+    input_text: str | None = None,
+    timeout: int = 3600,
+):
+    """流式行通道（H1 secrets 历史面）：stdout 逐行 yield——大体量输出
+    禁止 run_tree 全量捕获（git cat-file --batch 全 blob 流可超内存）。
+
+    - input_text 一次性写 stdin 后关闭（须有界——oid 清单级体量）；
+      input_text=None 时 stdin=DEVNULL
+    - stderr=DEVNULL（读线程缺位下 PIPE 会写满死锁；流式场景错误面
+      由调用方先行枚举校验承载——secrets 先 --batch-check 过滤 oid）
+    - timeout 看门计时器整窗计时到点杀树（迭代慢=消费方处理慢也计入）
+    - 生成器耗尽/close/异常时 finally 回收进程（kill_tree+wait）；
+      Windows 低优先级同 run_tree 纪律
+    """
+    argv = cmd
+    kwargs: dict = {}
+    if sys.platform != "win32":
+        kwargs["start_new_session"] = True
+        argv = [*low_priority_argv_prefix(), *cmd]
+    else:
+        kwargs["creationflags"] = low_priority_creationflags()
+    proc = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        **kwargs,
+    )
+    timer = threading.Timer(timeout, kill_tree, args=(proc,))
+    timer.daemon = True
+    timer.start()
+    try:
+        if input_text is not None:
+            try:
+                proc.stdin.write(input_text)
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+        for line in proc.stdout:
+            yield line
+        proc.stdout.close()
+        proc.wait(timeout=30)
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            kill_tree(proc)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                pass
