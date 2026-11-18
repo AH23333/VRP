@@ -116,7 +116,9 @@ def _enumerate_blobs(repo: Path, blob_cap: int) -> tuple[dict[str, int], dict[st
     )
     oid_size: dict[str, int] = {}
     skipped = 0
+    lines_seen = 0
     for line in check_stream:
+        lines_seen += 1
         parts = line.split()
         if len(parts) >= 3 and parts[1] == "blob":
             oid, size = parts[0], int(parts[2])
@@ -125,11 +127,24 @@ def _enumerate_blobs(repo: Path, blob_cap: int) -> tuple[dict[str, int], dict[st
                     skipped += 1
                     continue
                 oid_size[oid] = size
+    # 完整性对账（#178 自检实录：看门杀树后 135/2948 行静默漏扫——比死锁
+    # 更糟的诚实性缺陷）：batch-check 每 oid 恰一行（含 missing 行），行数
+    # 对不上=流被截断/协议漂移，必须诚实红而非静默部分结果
+    if lines_seen != len(oid_path):
+        raise RuntimeError(
+            f"cat-file --batch-check stream truncated: {lines_seen}/{len(oid_path)} lines"
+        )
     return oid_size, oid_path, skipped
 
 
 def scan_history(repo: Path, blob_cap: int = BLOB_CAP, timeout: int = 3600) -> dict:
-    """历史面：全 blob 流式扫描（已删文件的密钥仍可发现——本面价值）。"""
+    """历史面：全 blob 流式扫描（已删文件的密钥仍可发现——本面价值）。
+
+    按 blob 批量喂 mask_source_lines（#178 自检修：原逐行喂 `_scan_lines(
+    [line])` 每行重置私钥块状态机——历史面私钥 body 从未检出（worktree 面
+    6957 body vs 历史面只报 header 的语义分叉实录）；批量喂后块状态机在
+    blob 内正常运转，与 worktree 面同语义，且省 180 万次逐行调用开销）。
+    """
     repo = Path(repo)
     oid_size, oid_path, skipped_large = _enumerate_blobs(repo, blob_cap)
     hits: list[dict] = []
@@ -138,30 +153,38 @@ def scan_history(repo: Path, blob_cap: int = BLOB_CAP, timeout: int = 3600) -> d
     ordered = sorted(oid_size)  # 确定性：oid 升序喂入
     input_text = "\n".join(ordered) + "\n"
     headers_seen = 0
+    scanned_blobs = 0
     current_oid: str | None = None
     current_path: str | None = None
-    line_no = 0
+    blob_lines: list[str] = []
     expected = iter(ordered)
     next_oid = next(expected, None)
     stream = procs.stream_lines(
         ["git", "cat-file", "--batch"], cwd=repo, input_text=input_text, timeout=timeout
     )
+
+    def _flush_blob() -> None:
+        nonlocal scanned_blobs
+        if current_oid is None or not blob_lines:
+            return
+        scanned_blobs += 1
+        for hit in _scan_lines(blob_lines):
+            hits.append({"blob": current_oid, "path": current_path, **hit})
+
     for line in stream:
         stripped = line.rstrip("\n")
         if next_oid is not None and stripped == f"{next_oid} blob {oid_size[next_oid]}":
             headers_seen += 1
+            _flush_blob()
             current_oid = next_oid
             current_path = oid_path.get(current_oid)
-            line_no = 0
+            blob_lines = []
             next_oid = next(expected, None)
             continue
         if current_oid is None:
             continue  # 头前噪声（理论不达）
-        line_no += 1
-        for hit in _scan_lines([stripped]):
-            hits.append(
-                {"blob": current_oid, "path": current_path, "line": line_no, **hit}
-            )
+        blob_lines.append(stripped)
+    _flush_blob()
     if headers_seen != len(ordered):
         raise RuntimeError(
             f"cat-file stream desync: expected {len(ordered)} blob headers, saw {headers_seen}"
@@ -169,7 +192,7 @@ def scan_history(repo: Path, blob_cap: int = BLOB_CAP, timeout: int = 3600) -> d
     hits.sort(key=lambda h: (h["path"] or "", h["blob"], h["line"], h["type"]))
     return {
         "blobs": len(ordered),
-        "scanned_blobs": len(ordered),
+        "scanned_blobs": scanned_blobs,
         "skipped_large": skipped_large,
         "hits": hits,
     }
@@ -193,6 +216,37 @@ def secrets_rc(result: dict) -> int:
     return 1 if result["total_hits"] else 0
 
 
+def _append_hit_lines(lines: list[str], hits: list[dict], locate) -> None:
+    """命中清单渲染（#178 自检修）：连续 private-key-body 折叠区间×N——
+    BEGIN 无 END 的偏保守状态机会把整文件尾标成 body（渲染面"宁多掩蔽"
+    正确，扫描报告面逐行打印=信噪比炸弹：CBM 仓 test_pipeline.c 一行断言
+    字符串放大成 6957 连续命中）。只折叠**同位连续** run；其余逐条。
+    JSON 事实面（--json hits）不折叠全量保留。"""
+    i = 0
+    while i < len(hits):
+        h = hits[i]
+        key = locate(h)
+        if h["type"] != "private-key-body":
+            lines.append(f"    [hit] {key}:{h['line']}  {h['type']}  {h['preview']}…")
+            i += 1
+            continue
+        start = end = h["line"]
+        while (
+            i + 1 < len(hits)
+            and hits[i + 1]["type"] == "private-key-body"
+            and locate(hits[i + 1]) == key
+            and hits[i + 1]["line"] == end + 1
+        ):
+            end += 1
+            i += 1
+        count = end - start + 1
+        if count == 1:
+            lines.append(f"    [hit] {key}:{start}  private-key-body  {h['preview']}…")
+        else:
+            lines.append(f"    [hit] {key}:{start}-{end}  private-key-body  ×{count}")
+        i += 1
+
+
 def render_text(result: dict) -> str:
     lines = [f"vrp secrets - 密钥扫描（检测器单源 render_chain，只检测不验证）"]
     worktree = result["worktree"]
@@ -201,8 +255,7 @@ def render_text(result: dict) -> str:
         f"  跳过 binary={worktree['skipped_binary']} large={worktree['skipped_large']}"
         f"  命中 {len(worktree['hits'])}"
     )
-    for hit in worktree["hits"]:
-        lines.append(f"    [hit] {hit['file']}:{hit['line']}  {hit['type']}  {hit['preview']}…")
+    _append_hit_lines(lines, worktree["hits"], lambda h: h["file"])
     history = result["history"]
     if history is not None:
         lines.append(
@@ -210,8 +263,10 @@ def render_text(result: dict) -> str:
             f"  跳过 large={history['skipped_large']}"
             f"  命中 {len(history['hits'])}"
         )
-        for hit in history["hits"]:
-            where = hit["path"] or f"blob:{hit['blob'][:12]}"
-            lines.append(f"    [hit] {where}:{hit['line']}  {hit['type']}  {hit['preview']}…")
+        _append_hit_lines(
+            lines,
+            history["hits"],
+            lambda h: h["path"] or f"blob:{h['blob'][:12]}",
+        )
     lines.append(f"  summary: total_hits={result['total_hits']}  rc={'1' if result['total_hits'] else '0'}")
     return "\n".join(lines)

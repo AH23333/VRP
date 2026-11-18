@@ -179,11 +179,17 @@ def stream_lines(
     """流式行通道（H1 secrets 历史面）：stdout 逐行 yield——大体量输出
     禁止 run_tree 全量捕获（git cat-file --batch 全 blob 流可超内存）。
 
-    - input_text 一次性写 stdin 后关闭（须有界——oid 清单级体量）；
-      input_text=None 时 stdin=DEVNULL
+    - input_text 经**写线程**异步喂 stdin 后关闭（#178 自检实录：同步
+      "先写完再读"在真仓死锁——2948 oid×41B=120KB stdin 超管道缓冲，
+      子进程 stdout 8KB 满阻塞→停读 stdin→写端阻塞，双管道互锁，600s
+      看门杀树才解；fixture 仓 oid 数小永不触发=dogfood 盲区。写线程
+      与主线程读并行，双管道永不互锁）；input_text=None 时 stdin=DEVNULL
     - stderr=DEVNULL（读线程缺位下 PIPE 会写满死锁；流式场景错误面
       由调用方先行枚举校验承载——secrets 先 --batch-check 过滤 oid）
     - timeout 看门计时器整窗计时到点杀树（迭代慢=消费方处理慢也计入）
+    - 耗尽路径 rc 诚实红：正常耗尽后 returncode!=0（看门杀/崩溃）→
+      RuntimeError——流可能被截断，静默部分结果比死锁更糟（#178：
+      被杀后 135/2948 行静默漏扫实录）
     - 生成器耗尽/close/异常时 finally 回收进程（kill_tree+wait）；
       Windows 低优先级同 run_tree 纪律
     """
@@ -208,17 +214,27 @@ def stream_lines(
     timer = threading.Timer(timeout, kill_tree, args=(proc,))
     timer.daemon = True
     timer.start()
-    try:
-        if input_text is not None:
+    writer: threading.Thread | None = None
+    if input_text is not None:
+        def _feed() -> None:
             try:
                 proc.stdin.write(input_text)
                 proc.stdin.close()
             except (BrokenPipeError, OSError):
                 pass
+        writer = threading.Thread(target=_feed, daemon=True)
+        writer.start()
+    try:
         for line in proc.stdout:
             yield line
         proc.stdout.close()
         proc.wait(timeout=30)
+        rc = proc.poll()
+        if rc != 0:
+            raise RuntimeError(
+                f"stream command {' '.join(cmd)} exited rc={rc}"
+                " (watchdog kill or crash; output may be truncated)"
+            )
     finally:
         timer.cancel()
         if proc.poll() is None:
@@ -227,3 +243,5 @@ def stream_lines(
                 proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 pass
+        if writer is not None:
+            writer.join(timeout=5)

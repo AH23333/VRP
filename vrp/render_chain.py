@@ -1247,6 +1247,15 @@ _URL_CRED = re.compile(
     r"([a-z][a-z0-9+.\-]{0,15}://[A-Za-z0-9._%+\-]{1,64}:)([^/\s@]{3,255})(@)")
 _PK_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 _PK_END = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
+# 锚预筛快扫（#178 自检实录）：历史面 73.7MB/180 万行逐行 10 正则=1800 万次
+# re 调用 459s——绝大多数行不含任何检测锚。本正则是**保守超集**：每型
+# 命中必含对应锚子串（aws→AKIA/ASIA…url→://…PK→PRIVATE KEY），无锚行
+# 直接跳过全部检测正则（1 次 search 换 10 次，~10x）。**改 _SECRET_INLINE/
+# _URL_CRED/_PK_* 必须同步本锚集**——漏检由全谱样张锁兜底（test_secrets_mask
+# test_mask_inline_patterns 九型+URL+PK 全谱，预筛漏掉哪型哪型样张红）。
+_ANCHOR_SCAN = re.compile(
+    r"AKIA|ASIA|gh[pousr]_|github_pat_|glpat-|xox[abprs]-|AIza|sk-|eyJ|://|PRIVATE KEY"
+)
 
 
 def _mask_inline(line: str) -> tuple[str, list[dict]]:
@@ -1290,6 +1299,9 @@ def mask_source_lines(lines: list[str]) -> tuple[list[str], list[dict]]:
                 continue
             hits.append({"line": i, "type": "private-key-body", "preview": line[:4]})
             out.append(f"[VRP-MASKED:private-key-body:{line[:4]}…]")
+            continue
+        if not _ANCHOR_SCAN.search(line):
+            out.append(line)  # 无任何检测锚——快路径跳过全部检测正则（#178）
             continue
         if _PK_BEGIN.search(line):
             in_key_block = True
