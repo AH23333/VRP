@@ -24,6 +24,7 @@ from . import explain as explain_mod
 from . import perf as perf_mod
 from . import relnotes as relnotes_mod
 from . import smoke as smoke_mod
+from . import gc as gc_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -287,6 +288,19 @@ def cmd_smoke(args) -> int:
     else:
         _print_text(smoke_mod.render_text(result))
     return smoke_mod.smoke_rc(result)
+
+
+def cmd_gc(args) -> int:
+    result = gc_mod.run_gc(
+        getattr(args, "cache_dir", None),
+        yes=args.yes,
+        dry_run=args.dry_run,
+    )
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(gc_mod.render_text(result))
+    return gc_mod.gc_rc(result)
 
 
 def cmd_s2(args) -> int:
@@ -946,6 +960,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-run", dest="skip_run", action="store_true", help="read existing facts.db + freshness check only")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_smoke)
+
+    p = sub.add_parser(
+        "gc",
+        help="L14: CBM cache GC (npm cache clean shape) - audit all cached"
+        " dbs (provenance via store_meta/vrp_repo_path, repo liveness check,"
+        " size/nodes); repo-missing = the only auto GC candidate"
+        " (unknown-source/unreadable reported but never auto-collected,"
+        " #77 lesson); --dry-run lists would-delete + would-free bytes;"
+        " --yes actually deletes (db + -wal/-shm sidecars, per-file failures"
+        " -> rc=1)",
+    )
+    p.add_argument("--cache-dir", dest="cache_dir", default=None, help="CBM cache dir (default: s1_cbm.cache_dir())")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true", help="list what --yes would delete, no disk changes")
+    p.add_argument("--yes", action="store_true", help="confirm: actually delete GC candidates")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_gc)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")

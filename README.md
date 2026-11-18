@@ -94,6 +94,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `perf` | J10 管道性能回归追踪（构想v11 甜点，rustc perf tracker 思想）：`vrp run` 四阶段（precheck/cbm_index/etl/xcheck）monotonic 计时自动落档 `.vrp/perf.jsonl`（零额外命令记录）；`vrp perf` 报 last vs previous 逐阶段 delta，回归旗标双门=相对门 +25% 且绝对门 +1.0s（小基数噪声免疫）；单样本对比 noise note 明示（hyperfine 会取 N 轮中位）；rc 恒 0（报告面不是门面）；只读查询面 |
 | `relnotes` | K11 release notes 半自动生成（构想v11 甜点，changesets 累积模型）：commit 域 `#NNN:` subject × 交接文档条目交叉核对（commit 有码交接无条目=漂移警告）；**实时核码 #153 教训落实**——测试计数调 doclint pytest-collect 活数、执法语言 glob 活数、commit 数 git 活数，不信摘要快照；产出 markdown 草稿 stdout 人审后贴 release（半自动边界明示）；date 注入同输入字节级同草稿 |
 | `smoke` | K12 跨仓冒烟一键化（构想v11 甜点，发布纪律脚本化——v0.1.2 是手工跑的）：verify/ 含 .git 子目录自动发现（无注册表，新验证仓落目录即入面）逐仓全链 S0→S1→S1.5→xcheck+symbols/edges/findings 计数汇总；content-repo skip=pass（P-2 语义）；阶段异常/零符号/facts 缺失诚实 FAIL 带详情；`--skip-run` 快面=freshness（M4 陈旧=FAIL）+计数；`--only` 锁名（发布面：双主力仓）；rc=1 on any FAIL |
+| `gc` | L14 CBM 缓存 GC（构想v11 甜点，npm cache clean 治理形态，三段式）：默认审计=cache_dir()/*.db 逐库溯源（store_meta/vrp_repo_path 章 H3 单源复用）+仓存活核对+体量/节点数；`repo-missing`（章指向已不存在目录）=唯一自动候选；unknown-source（无章旧库）/unreadable（无 db_uid 非法库）报告不自动收（#77 盲删教训）；`--dry-run` 列 would_delete（含 -wal/-shm 边车）+would_free_bytes；`--yes` 真删（失败逐件记录 rc=1）；dogfood 真仓 62 库审出 4 候选 11MB 已清 |
 | `index` / `status` | CBM 索引（缓存）/ 状态查询 |
 | `etl` | CBM → facts.db 五级证据路由 |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
@@ -134,9 +135,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1677 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1686 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3200 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3209 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -145,7 +146,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3200 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1677 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1686 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
