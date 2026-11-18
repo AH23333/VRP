@@ -85,6 +85,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `graph` | R1 网络科学指标（只读，构想v12）：CALLS/CALL_REFERENCE 加权调用图（桩滤除：空 file_path 与 `<...>`/`>...` 合成桩家族，v_hotspots 同口径）→ 确定性 PageRank（dangling mass 均匀回注）+LPA 社区检测（无向邻接+fid 排序异步更新+字典序平局——无随机数，收敛即稳定）+active structure 模块 Jaccard 对账（"AI 梳理 vs 图论社区"交叉验证，分歧即发现）；诚实局限：LPA 无模块度保护（输出 lpa_rounds/社区数供人判读）；ro_connect 不写库；`--json` 机器读 |
 | `findings` | S7 反馈环降权（构想v12 亮点）：finding 排序视图（**基础序=S6 评分降序**（#179 接入），零分量 fixture 自然退化 id 序）+`--dismiss <id>` 反馈手势（decisions 表留痕 kind='finding'/decision='dismiss'，findings 行零改动）——按 kind 类聚合历史 dismiss，weight=0.5^类次数 调序；排序 (类 dismiss 次数升序, score 降序, id 升序)；**红线：降权不删除**（finding 永远在列表，只调序+留痕原因）；`--limit` 截断展示（summary.total 恒真）；只读排序 ro_connect/写手势走 freshness 硬拒；`--json` 机器读 |
 | `score` | S6 finding 优先级评分（构想v12 甜点偏后，学 SonarQube 评分维度、造开放公式不学黑盒）：score = w·impact + w·evidence − w·span——impact=log1p(锚入度)（edges dst 计数，v_hotspots 入向信号同源）、evidence=log1p(同锚独立 kind 数−1)（**第二类信号起才是交叉佐证**，DISTINCT kind 防同类重复抬高）、span=log1p(修复行面) 成本在分母取负号；每条 finding 输出全部分量明细（components 人可手算复验——公式开放可解释红线）；默认权重 {impact 1.0, evidence 0.5, span 0.25} 可 `--weights` JSON 覆盖（未知键诚实拒绝）；聚合单遍预取零 N+1（25 万边大仓一次 GROUP BY）；排序 (−score, id) 平局 id 纯确定；只读 ro_connect；`--limit` 截断 summary.total 恒真；`--json` 机器读 |
+| `complexity` | R3 复杂度度量族 v1 py/ts（构想v12 甜点偏后，py/ts 先行验证形态）：圈复杂度 CC 学 radon（1+决策点，嵌套函数独立成条复杂度归自己）+认知复杂度学 SonarQube 白皮书简化口径（嵌套惩罚 (1+depth)/elif-else 平级 +1/逻辑运算符每个 +1/直接递归 +1——docstring 即声明）；MI/Halstead **诚实不做**（SEI 公式需 Halstead 全统计，先攒案例宁缺勿错）；py=stdlib ast、ts=沙箱 typescript 真 AST（`_TS_SCAN_SRC` JS 扫描器内嵌模块常量（build_pyz 启动器先例）+临时 .mjs+node，沙箱缺 typescript 诚实降级 unavailable，py 面照常）；CC>10 告警线（radon/lizard 惯例）exceeds 列表；argv 150/批分批（WinError 206 实录）；只读纯文件面**不碰 facts.db**（pathology 面/ETL 接入待形态验证后立项）；`--cc-threshold`/`--limit` 展示面（summary 恒真）；`--json` 机器读 |
 | `cochange` | R2 co-change 隐式耦合边（构想v12 亮点，挖掘+呈现一体）：`git log --no-merges --name-only` 共现挖掘（code-maat/Tornhill temporal coupling，公式开放：support/confidence(a→b)=support/changes(a)）→ 独立 `co_changes` 表（file_a<file_b 字典序 PK，路径键跨 etl 稳定，无时间戳列——同 HEAD 字节级同产物）；幂等 DELETE+INSERT 全量替换；OWNED 跨 etl 存续（git 历史不变不重挖）；`--min-support`/`--min-confidence` 只过滤展示面（表存全量对，默认 3/0.3）；阈值后幸存数诚实计数；叙事定位：CALLS 显式依赖 vs co_changes 隐式耦合——两图分歧即发现；CBM history_coupling 链路零动；`--json` 机器读 |
 | `review` | T9 PR review 格式输出（构想v12 甜点，学 reviewdog 行锚定+GitHub Review Comments API 载荷）：SARIF→review comments 本地转换器——一条 result 一条 comment（path/line/side=RIGHT/body，1:1 不聚合——聚合是 S5 立项面），落 `.vrp/report/review-comments.json` 供人贴（**零服务端**：贴不贴贴几条由人定，`gh api .../comments` 载荷形状）；缺 location 诚实跳过计数；`--sarif` 换源/`--limit` 只截断写出面（summary 恒真）；确定性——重跑字节级同产物（无时间戳）；`--json` 机器读 |
 | `groups` | S5 finding 同根因聚合（构想v12 甜点，Sentry fingerprint 语义）：指纹=根因符号集——锚定对 (anchor,related) **无序归一**（互环 a→b/b→a 与克隆族同键），无 fid 回退 (file_path,start_line) 键；group_id=sha256[:12] 跨 etl 稳定；**归组不删行**（只读查询面，红线同 S7 降权不删除）；排序 (-members, group_id) 纯确定；member_ids cap 10（summary 记 cap 恒真）；`--limit` 截断展示 summary 恒真；确定性无时间戳；S6 评分/dossier 聚合呈现接入各自立项；`--json` 机器读 |
@@ -139,9 +140,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1740 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1755 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3263 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3278 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -150,7 +151,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3263 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1740 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1755 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

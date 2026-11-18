@@ -29,6 +29,7 @@ from . import flakes as flakes_mod
 from . import langmatrix as langmatrix_mod
 from . import secrets as secrets_mod
 from . import scoring as scoring_mod
+from . import complexity as complexity_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -128,6 +129,16 @@ def cmd_score(args) -> int:
         _print_json(result)
     else:
         _print_text(scoring_mod.render_text(result))
+    return 0
+
+
+def cmd_complexity(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = complexity_mod.run_complexity(repo, args.cc_threshold, args.limit)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(complexity_mod.render_text(result))
     return 0
 
 
@@ -920,6 +931,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=scoring_mod.DEFAULT_LIMIT, help="max findings shown (summary.total stays true)")
     p.add_argument("--weights", help='JSON object overriding default weights, e.g. \'{"impact": 2.0}\' (keys: impact, evidence, span)')
     p.set_defaults(func=cmd_score)
+
+    p = sub.add_parser(
+        "complexity",
+        help="R3: complexity metrics v1 py/ts (CC per radon + cognitive"
+        " complexity per SonarQube whitepaper simplified - nesting penalty,"
+        " flat elif/else, per-operator logic, direct recursion; MI/Halstead"
+        " honestly not done; py=stdlib ast, ts=sandbox typescript real AST"
+        " with honest unavailable degrade; read-only, no facts.db)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--cc-threshold", type=int, default=complexity_mod.CC_THRESHOLD, help="CC alarm line (default 10, radon/lizard convention)")
+    p.add_argument("--limit", type=int, default=complexity_mod.DEFAULT_LIMIT, help="max functions shown (summary stays true)")
+    p.set_defaults(func=cmd_complexity)
 
     p = sub.add_parser(
         "groups",
