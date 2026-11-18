@@ -26,6 +26,7 @@ from . import relnotes as relnotes_mod
 from . import smoke as smoke_mod
 from . import gc as gc_mod
 from . import flakes as flakes_mod
+from . import langmatrix as langmatrix_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -312,6 +313,15 @@ def cmd_flakes(args) -> int:
     else:
         _print_text(flakes_mod.render_text())
     return rc
+
+
+def cmd_langmatrix(args) -> int:
+    result = {"rows": langmatrix_mod.matrix(), "summary": langmatrix_mod.face_summary()}
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(langmatrix_mod.render_text())
+    return langmatrix_mod.matrix_rc()
 
 
 def cmd_s2(args) -> int:
@@ -1000,6 +1010,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_flakes)
+
+    p = sub.add_parser(
+        "langmatrix",
+        help="N18: language capability matrix - rows = 21 s7 engine langs"
+        " (assess single source) + ext-recognized no-engine langs"
+        " (C++/GDScript - the indexed-but-not-enforced honesty rows);"
+        " columns = per-language faces each derived live from its owning"
+        " module (#153 discipline, zero hardcoded language lists):"
+        " astgrep rule-id prefix counts / mutate engine ext-constant map"
+        " / deadcode-p4 adapter gates / testsig self-build exts;"
+        " language-agnostic faces (jscpd/S3/S5/dossier) noted, not"
+        " per-row; rc always 0 (gaps are backlog, not errors)",
+    )
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_langmatrix)
 
     p = sub.add_parser("index", help="S1: CBM index_repository")
     p.add_argument("repo")

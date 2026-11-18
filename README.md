@@ -96,6 +96,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `smoke` | K12 跨仓冒烟一键化（构想v11 甜点，发布纪律脚本化——v0.1.2 是手工跑的）：verify/ 含 .git 子目录自动发现（无注册表，新验证仓落目录即入面）逐仓全链 S0→S1→S1.5→xcheck+symbols/edges/findings 计数汇总；content-repo skip=pass（P-2 语义）；阶段异常/零符号/facts 缺失诚实 FAIL 带详情；`--skip-run` 快面=freshness（M4 陈旧=FAIL）+计数；`--only` 锁名（发布面：双主力仓）；rc=1 on any FAIL |
 | `gc` | L14 CBM 缓存 GC（构想v11 甜点，npm cache clean 治理形态，三段式）：默认审计=cache_dir()/*.db 逐库溯源（store_meta/vrp_repo_path 章 H3 单源复用）+仓存活核对+体量/节点数；`repo-missing`（章指向已不存在目录）=唯一自动候选；unknown-source（无章旧库）/unreadable（无 db_uid 非法库）报告不自动收（#77 盲删教训）；`--dry-run` 列 would_delete（含 -wal/-shm 边车）+would_free_bytes；`--yes` 真删（失败逐件记录 rc=1）；dogfood 真仓 62 库审出 4 候选 11MB 已清 |
 | `flakes` | L15 flake 登记表（构想v11 甜点，GitHub flaky bot 形态借鉴；pytest-rerunfailures **不引入**——重试即掩盖，只记录不掩盖）：首观测记交接 prose 不进表，复发进表 count+1；count>=2=抖王名单→隔离候选；validate() 漂移守卫（active 条目测试文件+函数必须在树，改名未同步=红 rc=1）；判例入册：fd0d7db rawpack 过断言"复发优先找根因，定案缺陷修不进表"+testsig rust 环境瞬态"单跑绿不修只记档"+#170 push"门禁红先查环境负载勿急修代码" |
+| `langmatrix` | N18 语言能力矩阵（构想v11 甜点，tree-sitter README 语言支持表形态，#153 纪律全量落实——**每格实时核码生成零硬编码语言清单**）：行=21 s7 引擎语言（assess 单源）∪ indexed-only 诚实行（GDScript——认知无引擎 #124 先例）；列=五逐语言面各从属主模块派生：astgrep 规则 yml language 字段→EXT_LANGUAGES 反查→引擎后缀交集归行（js 规则归 ts 行 9 规则不失踪）/mutate 三引擎（mutmut/stryker/cargo-mutants）/deadcode-p4（knip/vulture 门控镜像+锚点锁）/testsig 自建面；js→ts、C++→c 归并注记；语言无关面（jscpd/S3/S5/dossier）注记不入逐语言列；rc 恒 0（缺口是待办非错误）；缺口清单即补齐 backlog（astgrep 19 语言/mutate 18/deadcode 19） |
 | `index` / `status` | CBM 索引（缓存）/ 状态查询 |
 | `etl` | CBM → facts.db 五级证据路由 |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
@@ -136,9 +137,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1695 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1705 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3218 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3228 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -147,7 +148,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3218 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1695 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1705 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
