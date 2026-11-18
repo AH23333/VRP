@@ -30,6 +30,7 @@ from . import langmatrix as langmatrix_mod
 from . import secrets as secrets_mod
 from . import scoring as scoring_mod
 from . import complexity as complexity_mod
+from . import pitfall as pitfall_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -139,6 +140,16 @@ def cmd_complexity(args) -> int:
         _print_json(result)
     else:
         _print_text(complexity_mod.render_text(result))
+    return 0
+
+
+def cmd_pitindex(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = pitfall_mod.run_pitindex(repo)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(pitfall_mod.render_text(result))
     return 0
 
 
@@ -945,6 +956,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cc-threshold", type=int, default=complexity_mod.CC_THRESHOLD, help="CC alarm line (default 10, radon/lizard convention)")
     p.add_argument("--limit", type=int, default=complexity_mod.DEFAULT_LIMIT, help="max functions shown (summary stays true)")
     p.set_defaults(func=cmd_complexity)
+
+    p = sub.add_parser(
+        "pitindex",
+        help="F16: pitfall->test anti-recurrence index - parse"
+        " docs/踩坑历史.md numbered entries, extract test_* tokens as"
+        " locking refs, verify against pytest collection; GAPS (pitfall"
+        " without a locking test) are info, DRIFT (cited test no longer"
+        " exists) is a red face; report-only, rc=0",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_pitindex)
 
     p = sub.add_parser(
         "groups",
