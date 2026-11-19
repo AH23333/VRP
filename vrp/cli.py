@@ -31,6 +31,7 @@ from . import secrets as secrets_mod
 from . import scoring as scoring_mod
 from . import complexity as complexity_mod
 from . import pitfall as pitfall_mod
+from . import dossier_diff as dossier_diff_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -150,6 +151,15 @@ def cmd_pitindex(args) -> int:
         _print_json(result)
     else:
         _print_text(pitfall_mod.render_text(result))
+    return 0
+
+
+def cmd_dossier_diff(args) -> int:
+    result = dossier_diff_mod.run_dossier_diff(args.old, args.new)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(dossier_diff_mod.render_text(result))
     return 0
 
 
@@ -968,6 +978,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_pitindex)
+
+    p = sub.add_parser(
+        "dossier-diff",
+        help="A2: dossier diff report - recursive reconciliation of two"
+        " dossier.json runs -> added/removed/changed list (release notes"
+        " material); list alignment by identity key (fid/symbol/path...) so"
+        " a prepend does not fake a whole-column changed; generated_at"
+        " excluded (timestamp noise); pure stdlib, no deepdiff",
+    )
+    p.add_argument("old", help="previous dossier.json path")
+    p.add_argument("new", help="current dossier.json path")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_dossier_diff)
 
     p = sub.add_parser(
         "groups",
