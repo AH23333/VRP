@@ -88,6 +88,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `complexity` | R3 复杂度度量族 v1 py/ts（构想v12 甜点偏后，py/ts 先行验证形态）：圈复杂度 CC 学 radon（1+决策点，嵌套函数独立成条复杂度归自己）+认知复杂度学 SonarQube 白皮书简化口径（嵌套惩罚 (1+depth)/elif-else 平级 +1/逻辑运算符每个 +1/直接递归 +1——docstring 即声明）；MI/Halstead **诚实不做**（SEI 公式需 Halstead 全统计，先攒案例宁缺勿错）；py=stdlib ast、ts=沙箱 typescript 真 AST（`_TS_SCAN_SRC` JS 扫描器内嵌模块常量（build_pyz 启动器先例）+临时 .mjs+node，沙箱缺 typescript 诚实降级 unavailable，py 面照常）；CC>10 告警线（radon/lizard 惯例）exceeds 列表；argv 150/批分批（WinError 206 实录）；只读纯文件面**不碰 facts.db**（pathology 面/ETL 接入待形态验证后立项）；`--cc-threshold`/`--limit` 展示面（summary 恒真）；`--json` 机器读 |
 | `pitindex` | F16 坑→测试防复发索引（构想v10 甜点，#148 自检方法论延伸）：解析 docs/踩坑历史.md 编号条目提取 `test_*` 锁定引用，对 pytest 收集面自动生成"坑→锁定测试"反查表——**GAP**（坑无测试锁=防复发缺口，待办信息）/ **DRIFT**（引用的测试已不存在=失锚红面）分开呈现；锁定判定双面：测试名（参数化 `[case]` 前缀归并）∪ 测试文件 stem（模块级引用）；路径提及（`/` 前缀、`.py` 后缀）排除——首跑 dogfood 8 条外仓路径提及假阳性辨伪实录；收集面 `-m ''` 覆盖 `-m 'not deep'`（坑 token 含深层测试）；报告面 rc 恒 0（缺口是信息不是错误）；确定性不写文件；`--json` 机器读 |
 | `dossier-diff` | A2 dossier diff 报告（构想v10 甜点，release notes 自动素材——v0.1.2 手工做的活）：两份 dossier.json 递归 dict/list 对账 → 新增/消除/变化清单（ADDED/REMOVED/CHANGED 分组呈现）；**列表身份键对齐**（dossier 列表多为带身份键 dict 数组——hotspots symbol/dup_clusters fid 等，按身份键偏好序 id/fid/name/symbol/path/... 对齐，头插病理只报 added 不产生整列假 changed，键冲突取首不猜）；无公共身份键回退逐位对齐；`generated_at` 时间戳排除（纯噪音）；deepdiff **不引入**（dict 递归对账纯 stdlib，jd/json-diff 输出形态参照）；坏 JSON/非对象顶层诚实退出；报告面 rc 恒 0；纯函数零 IO 副作用不写文件；`--json` 机器读 |
+| `scaffold` | D10 strangler scaffold 生成器（构想v10 甜点，propose 的自然延伸——从"提议"到"可执行的迁移计划"；Martin Fowler strangler-fig 模式权威，hygen/plop 模板引擎形态参照，**造**：string.Template 纯 stdlib 渲染，Python 先行 21 引擎后批）：读 `.vrp/proposals/structure-proposal.json`（fid join facts.db）产出三样到 `.vrp/scaffold/`——①模块骨架 `<safe_id>/__init__.py`（docstring 直引 [PROPOSED] name/responsibility+迁移 TODO 符号清单 name/label/来源文件）②re-export shim 模板 `shims/<old>__to__<safe_id>.py`（Function/Class 模块级可导出面，Method 随 Class 走诚实排除；同旧文件多模块认领=每对一 shim）③`MIGRATION.md` 迁移序=Fowler **先边缘后核心**（跨模块边数（SLICE_EDGE_TYPES 单一权威）升序，平局 module_id 字典序）+逐模块检查单；**不碰用户源文件**（shim 是模板，采纳=人移文件）；module_id 含 `/`/括号→包名安全形；`--proposal`/`--out`/`--json`；确定性无时间戳；`--json` 机器读 |
 | `cochange` | R2 co-change 隐式耦合边（构想v12 亮点，挖掘+呈现一体）：`git log --no-merges --name-only` 共现挖掘（code-maat/Tornhill temporal coupling，公式开放：support/confidence(a→b)=support/changes(a)）→ 独立 `co_changes` 表（file_a<file_b 字典序 PK，路径键跨 etl 稳定，无时间戳列——同 HEAD 字节级同产物）；幂等 DELETE+INSERT 全量替换；OWNED 跨 etl 存续（git 历史不变不重挖）；`--min-support`/`--min-confidence` 只过滤展示面（表存全量对，默认 3/0.3）；阈值后幸存数诚实计数；叙事定位：CALLS 显式依赖 vs co_changes 隐式耦合——两图分歧即发现；CBM history_coupling 链路零动；`--json` 机器读 |
 | `review` | T9 PR review 格式输出（构想v12 甜点，学 reviewdog 行锚定+GitHub Review Comments API 载荷）：SARIF→review comments 本地转换器——一条 result 一条 comment（path/line/side=RIGHT/body，1:1 不聚合——聚合是 S5 立项面），落 `.vrp/report/review-comments.json` 供人贴（**零服务端**：贴不贴贴几条由人定，`gh api .../comments` 载荷形状）；缺 location 诚实跳过计数；`--sarif` 换源/`--limit` 只截断写出面（summary 恒真）；确定性——重跑字节级同产物（无时间戳）；`--json` 机器读 |
 | `groups` | S5 finding 同根因聚合（构想v12 甜点，Sentry fingerprint 语义）：指纹=根因符号集——锚定对 (anchor,related) **无序归一**（互环 a→b/b→a 与克隆族同键），无 fid 回退 (file_path,start_line) 键；group_id=sha256[:12] 跨 etl 稳定；**归组不删行**（只读查询面，红线同 S7 降权不删除）；排序 (-members, group_id) 纯确定；member_ids cap 10（summary 记 cap 恒真）；`--limit` 截断展示 summary 恒真；确定性无时间戳；S6 评分/dossier 聚合呈现接入各自立项；`--json` 机器读 |
@@ -142,9 +143,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1788 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1802 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3311 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3325 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -153,7 +154,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3311 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1788 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1802 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

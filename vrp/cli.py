@@ -32,6 +32,7 @@ from . import scoring as scoring_mod
 from . import complexity as complexity_mod
 from . import pitfall as pitfall_mod
 from . import dossier_diff as dossier_diff_mod
+from . import scaffold as scaffold_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -160,6 +161,15 @@ def cmd_dossier_diff(args) -> int:
         _print_json(result)
     else:
         _print_text(dossier_diff_mod.render_text(result))
+    return 0
+
+
+def cmd_scaffold(args) -> int:
+    result = scaffold_mod.run_scaffold(args.repo, args.proposal, args.out)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(scaffold_mod.render_text(result))
     return 0
 
 
@@ -991,6 +1001,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("new", help="current dossier.json path")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_dossier_diff)
+
+    p = sub.add_parser(
+        "scaffold",
+        help="D10: strangler scaffold generator (propose's natural extension;"
+        " Martin Fowler strangler-fig - migration order edge-before-core by"
+        " cross-module edge count; Python first, other engines later):"
+        " module skeletons + re-export shim templates + MIGRATION.md from"
+        " .vrp/proposals/structure-proposal.json into .vrp/scaffold/;"
+        " never touches user source files (adoption is manual)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--proposal", help="proposal path (default: <repo>/.vrp/proposals/structure-proposal.json)")
+    p.add_argument("--out", help="output directory (default: <repo>/.vrp/scaffold)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_scaffold)
 
     p = sub.add_parser(
         "groups",
