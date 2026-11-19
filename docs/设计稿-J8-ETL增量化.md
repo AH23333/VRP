@@ -6,11 +6,11 @@
 
 ## 1. 现状与增量（诚实盘点）
 
-`run_etl` 现行全量流程（etl.py:74）：OWNED 表全量快照 → tmp 库全新建 schema → OWNED 回灌 → **全 CBM nodes 重读+全符号重铸 fid+全边重路由**（含 usage_hints/history_coupling/test_linkage/findings similar_to 级联面）→ coverage/file_hashes 复制 → 噪音检测 → curate F2 revalidate → 原子 `os.replace`（H2 崩溃安全）。
+`run_etl` 现行全量流程（etl.py:203）：OWNED 表全量快照 → tmp 库全新建 schema → OWNED 回灌 → **全 CBM nodes 重读+全符号重铸 fid+全边重路由**（含 usage_hints/history_coupling/test_linkage/findings similar_to 级联面）→ coverage/file_hashes 复制 → 噪音检测 → curate F2 revalidate → 原子 `os.replace`（H2 崩溃安全）。
 
 已有底座比构想v11 写作时所以为的更厚：
 
-- **`_ContentHasher` per-run 文件行缓存**（etl.py:31）：同文件多符号只读一次盘——每 etl 每文件恰一次 I/O 已是地板；
+- **`_ContentHasher` per-run 文件行缓存**（etl.py:29）：同文件多符号只读一次盘——每 etl 每含符号文件恰一次 I/O 已是地板（无符号文件全量路径本就不读——etl_file_state 检测范围对齐 CBM 文件集，不扩面）；
 - **`file_hashes` 表每轮从 CBM 全量复制**（etl.py:474）：全文件 sha256 现成落库——**变更检测的原料已在**，缺的只是跨轮比对；
 - **fid_ledger OWNED 存续**（F1 身份记忆）+ **meta 溯源面**（cbm_db_uid/cbm_mutation_gen/cbm_version，#144）——CBM 侧漂移信号已落档；
 - **freshness 闸门**（check_facts_freshness）+ **M1 replaced 级联** + **2026-11-03 事务边界裁定**——级联与事务语义有先例可依。
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS etl_file_state (
 );
 ```
 
-- **`wt_hash` = 工作树全文件 sha256 @ etl 时点**——不是 CBM `file_hashes` 的转存。理由：CBM 索引可能滞后工作树（index 后又改文件未 reindex），信任 CBM 哈希会开"增量≠全量"语义缺口——全量路径对这种文件会以**当前工作树内容**算 definition_hash（etl.py:54 语义），增量携带旧行则会错过。自持久快照按检测时点实读工作树，**按构造精确**；
+- **`wt_hash` = 工作树全文件 sha256 @ etl 时点**——不是 CBM `file_hashes` 的转存。理由：CBM 索引可能滞后工作树（index 后又改文件未 reindex），信任 CBM 哈希会开"增量≠全量"语义缺口——全量路径对这种文件会以**当前工作树内容**算 definition_hash（etl.py:48 语义），增量携带旧行则会错过。自持久快照按检测时点实读工作树，**按构造精确**；
 - 每文件读一次+sha256（与现行全量 `_ContentHasher` 每文件一次 I/O 同地板，不新增量级成本）；
 - 无时间戳列——复现性红线（fid_ledger first_seen_at 是状态表先例，本表连状态时间戳都不需要）。
 
