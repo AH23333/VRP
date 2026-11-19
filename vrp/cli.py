@@ -33,6 +33,7 @@ from . import complexity as complexity_mod
 from . import pitfall as pitfall_mod
 from . import dossier_diff as dossier_diff_mod
 from . import scaffold as scaffold_mod
+from . import tour as tour_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
@@ -170,6 +171,15 @@ def cmd_scaffold(args) -> int:
         _print_json(result)
     else:
         _print_text(scaffold_mod.render_text(result))
+    return 0
+
+
+def cmd_tour(args) -> int:
+    result = tour_mod.run_tour(args.repo)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(tour_mod.render_text(result))
     return 0
 
 
@@ -1016,6 +1026,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", help="output directory (default: <repo>/.vrp/scaffold)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_scaffold)
+
+    p = sub.add_parser(
+        "tour",
+        help="T11: newcomer code tour from curated structure (curate consumer"
+        " surface; VS Code Code Tour + Diataxis tutorial as form references;"
+        " output product, not an operation protocol): per-module one-line"
+        " curated responsibility + suggested reading order (layer topo -"
+        " depended-on foundations first, then ascending symbol count -"
+        " small modules first); top files + representative symbols as"
+        " concrete anchors",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_tour)
 
     p = sub.add_parser(
         "groups",
