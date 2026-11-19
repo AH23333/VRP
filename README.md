@@ -185,6 +185,7 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《契约/梳理工件契约.md》——梳理工件（slices/structure）schema 唯一权威格式说明（AI 生产方必读，配置 skills/vrp-curation/ 生产指南）
 - 《交接文档.md》——接手即读（环境/E2E 基准数字/代码地图/下一步）
 - 《踩坑历史.md》——实测坑与纪律
+- 《SARIF-CI消费指南.md》——G17 出圈：外部项目 CI 消费 vrp SARIF 指南（GitHub Actions upload-sarif 样例/字段对照表/两层截断诚实链（vrp cap 2000+propertyBag 总数标注 × GitHub 5000 上限）/跨仓 dogfood 实测（lusiem 1064 全量 507KB、tree-sitter-analyzer 15741→2000 截断 979KB）/GitLab 通用 CI 提示；零服务端红线不动——上传动作归消费方）
 - 构想 v1-v6——历史方案，只读
 
 ## 平台
