@@ -187,6 +187,16 @@ CREATE TABLE IF NOT EXISTS structure (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- #189 M16：curate 三方合并的覆盖前快照（学 git merge base/ours/theirs）。
+-- ingest 覆盖前把将被顶掉的旧行搬入本表（key=`slice:<slice_id>`/`structure`），
+-- 每次覆盖刷新；base[k]=「最近一次被 ingest 覆盖前的样子」=与最近入库梳理的
+-- 对比基线（非严格 git LCA——误报只偏保守方向，永不静默丢变更）。
+-- 跨 etl 经 OWNED_TABLES 快照回灌存续（与 slices/structure 同生命周期）。
+CREATE TABLE IF NOT EXISTS curate_base (
+    key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS decisions (
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,

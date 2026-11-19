@@ -231,8 +231,22 @@ def _validate_structure(con: sqlite3.Connection, raw: object) -> list[dict]:
 # ------------------------------------------------------------------- ingest
 
 
+def _snapshot_base(con: sqlite3.Connection, key: str, payload_json: str) -> None:
+    """M16：ingest 覆盖前快照——将被顶掉的旧行搬入 curate_base（每次覆盖刷新）。
+
+    base[k]=「最近一次被 ingest 覆盖前的样子」，是 curate-merge 三方合并的
+    对比基线（非严格 git LCA，见设计稿-M16 §2）。调用方保证事务边界。
+    """
+    con.execute("INSERT OR REPLACE INTO curate_base (key, payload_json) VALUES (?, ?)", (key, payload_json))
+
+
 def _ingest_slices(con: sqlite3.Connection, items: list[dict]) -> int:
     for raw in items:
+        prev = con.execute(
+            "SELECT payload_json FROM slices WHERE slice_id = ?", (raw["slice_id"],)
+        ).fetchone()
+        if prev is not None:
+            _snapshot_base(con, f"slice:{raw['slice_id']}", prev[0])
         con.execute("DELETE FROM slices WHERE slice_id = ?", (raw["slice_id"],))
         con.execute(
             "INSERT INTO slices (slice_id, name, summary, payload_json, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)",
@@ -243,6 +257,11 @@ def _ingest_slices(con: sqlite3.Connection, items: list[dict]) -> int:
 
 
 def _ingest_structure(con: sqlite3.Connection, raw: dict) -> None:
+    prev = con.execute(
+        "SELECT payload_json FROM structure WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if prev is not None:
+        _snapshot_base(con, "structure", prev[0])
     con.execute("DELETE FROM structure")
     con.execute(
         "INSERT INTO structure (payload_json, status, created_at) VALUES (?, 'active', ?)",

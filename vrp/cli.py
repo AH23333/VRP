@@ -37,6 +37,7 @@ from . import tour as tour_mod
 from . import review as review_mod
 from . import etl as etl_mod
 from . import curate as curate_mod
+from . import curate_merge as curate_merge_mod
 from . import nav as nav_mod
 from . import propose as propose_mod
 from . import traces as traces_mod
@@ -668,6 +669,21 @@ def cmd_curate(args) -> int:
     return 1 if any(f.get("status") == "rejected" for f in result.get("files", [])) else 0
 
 
+def cmd_curate_merge(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        result = curate_merge_mod.run_curate_merge(repo, con, Path(args.theirs))
+    finally:
+        con.close()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(curate_merge_mod.render_text(result))
+    # rc=1 = 有冲突待人工裁决（零静默丢信号，CI 可拦）
+    return 1 if result["slices"]["conflict"] or result["structure"]["action"] == "conflict" else 0
+
+
 def cmd_drift(args) -> int:
     repo = _repo_arg(args.repo)
     facts_path = repo / ".vrp" / "facts.db"
@@ -1040,6 +1056,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_tour)
+
+    p = sub.add_parser(
+        "curate-merge",
+        help="M16: curate artifact three-way merge (git merge base/ours/theirs"
+        " semantics; OT conflict classification: non-conflicts auto-merge,"
+        " conflicts marked for human adjudication): merge an external agent's"
+        " curate payload (a directory with slices.json/structure.json, or a"
+        " single JSON file) into facts.db; ours=active artifacts, base="
+        " curate_base pre-overwrite snapshots (auto-maintained by ingest);"
+        " conflicts recorded in decisions (kind=curate_merge) with ours kept"
+        " - nothing is silently lost; rc=1 when conflicts await adjudication",
+    )
+    p.add_argument("repo")
+    p.add_argument("--theirs", required=True, help="their payload: directory (slices.json/structure.json) or single JSON file")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_curate_merge)
 
     p = sub.add_parser(
         "groups",

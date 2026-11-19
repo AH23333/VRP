@@ -84,6 +84,7 @@ OWNED_TABLES = (
     "runtime_calls",
     "slices",
     "structure",
+    "curate_base",
     "decisions",
     "fid_ledger",
     "co_changes",

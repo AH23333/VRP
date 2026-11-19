@@ -148,6 +148,7 @@ def test_owned_tables_constant():
         "runtime_calls",
         "slices",
         "structure",
+        "curate_base",
         "decisions",
         "fid_ledger",
         "co_changes",
