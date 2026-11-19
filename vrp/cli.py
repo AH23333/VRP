@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -43,6 +44,7 @@ from . import propose as propose_mod
 from . import traces as traces_mod
 from . import coverage as coverage_mod
 from . import impact as impact_mod
+from . import procs
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
 from . import auto_curate
 from . import session as session_mod
@@ -399,19 +401,43 @@ def cmd_secrets(args) -> int:
     return secrets_mod.secrets_rc(result)
 
 
+def _s2_workers() -> int:
+    """J9 D3：VRP_S2_WORKERS 逃生门——未设/非整数=0（自动=引擎数 4）；
+    1=串行回退（诡异环境/复现调试；VRP_ 命名族同 VRP_CHILD_PRIORITY）。"""
+    raw = os.environ.get("VRP_S2_WORKERS", "")
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
+
+
 def cmd_s2(args) -> int:
     repo = _repo_arg(args.repo)
     facts_path = repo / ".vrp" / "facts.db"
     if not facts_path.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
-    con = sqlite3.connect(facts_path)
-    try:
-        result = s2_astgrep.scan(con, repo)
-        dead = s2_deadcode.scan(con)
-        p4 = s2_p4.scan(con, repo)
-        p2 = s2_jscpd.scan(con, repo)
-    finally:
-        con.close()
+
+    # J9 引擎级四并发（设计稿-J9 D1/D2）：四引擎读写面零交叉（各 findings
+    # source+各 ledger category），每引擎线程自建连接（timeout=30 显式
+    # busy——实际 commit 窗口毫秒级，30s 是病态余量）；引擎序固定
+    # astgrep→deadcode→p4→jscpd，结果同序装配，输出与串行恒等（D6）。
+    def _task(scan):
+        def _run():
+            con = sqlite3.connect(facts_path, timeout=30)
+            try:
+                return scan(con)
+            finally:
+                con.close()
+
+        return _run
+
+    thunks = [
+        _task(lambda con: s2_astgrep.scan(con, repo)),
+        _task(lambda con: s2_deadcode.scan(con)),
+        _task(lambda con: s2_p4.scan(con, repo)),
+        _task(lambda con: s2_jscpd.scan(con, repo)),
+    ]
+    result, dead, p4, p2 = procs.run_thunks(thunks, _s2_workers() or None)
     result["dead_code_candidates"] = dead["total"]
     result["p4"] = p4
     result["p2"] = p2

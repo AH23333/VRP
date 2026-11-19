@@ -35,6 +35,7 @@ import signal
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 BELOW_NORMAL_PRIORITY_CLASS = 0x00004000  # Win32 CreateProcess dwCreationFlags 优先级类位（API 文档值）
@@ -245,3 +246,31 @@ def stream_lines(
                 pass
         if writer is not None:
             writer.join(timeout=5)
+
+
+def run_thunks(thunks: list, max_workers: int | None = None) -> list:
+    """定界线程池扇出（J9 引擎级四并发；S2 各病理引擎互相独立——读写面
+    零交叉是设计稿 §1 实核的结构性前提）。
+
+    线程池而非进程池（设计稿 D2）：并行实体本就是各引擎 spawn 的子进程
+    （ast-grep/jscpd/vulture/knip），父侧线程只在 communicate 等待——GIL
+    释放即真并行；ProcessPoolExecutor 需 pickle 面纯增复杂度零增并行度。
+
+    契约（设计稿 D4）：
+    - 全任务跑完不抢跑取消——取消使失败复现面噪声化；
+    - 结果按提交序返回（与串行装配恒等）；
+    - 异常按任务序抛首个——与串行首错同引擎同消息同 traceback 面
+      （with 退出时 shutdown(wait=True) 保证已抛异常时未触任务仍跑完，
+      不留半途孤儿线程）；
+    - max_workers=None 自动=任务数；<=1 串行直跑（零线程开销+全同序）。
+    """
+    if not thunks:
+        return []
+    workers = len(thunks) if max_workers is None else max_workers
+    if workers <= 1:
+        return [t() for t in thunks]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(t) for t in thunks]
+        # 逐序 result()：先到序先取——首个失败任务序的异常被抛出时，
+        # 更高序任务已在池中跑完或随 with 退出等完，永不裸奔。
+        return [f.result() for f in futures]
