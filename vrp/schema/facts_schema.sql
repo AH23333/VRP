@@ -56,6 +56,15 @@ CREATE TABLE IF NOT EXISTS file_hashes (
     hash TEXT NOT NULL
 );
 
+-- J8: ETL 增量化——自持久工作树快照（etl 时点全文件 sha256，非 CBM
+-- file_hashes 转存：CBM 索引可能滞后工作树，D2）。文件级变更检测的
+-- 唯一依据；每次 etl（全量/增量两路同构）整体重写，属 ETL 派生状态，
+-- 不入 OWNED_TABLES。无时间戳（确定性红线）。
+CREATE TABLE IF NOT EXISTS etl_file_state (
+    file_path TEXT PRIMARY KEY,
+    wt_hash TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS history_coupling (
     src_fid TEXT NOT NULL,
     dst_fid TEXT NOT NULL,

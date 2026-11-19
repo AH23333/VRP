@@ -27,7 +27,8 @@ VRP = Path(__file__).resolve().parents[1] / "vrp"
 # JS 嵌入（\\uXXXX 与原文在 JS 字符串语义等价）或载荷 ASCII 按构造。
 BARE_DUMPS_ALLOWLIST = {
     ("render_chain.py", "inject_chrome"),  # JS var 嵌入：ensure_ascii 两态 JS 解析同值
-    ("etl.py", "_etl_edges"),  # {"jaccard": float, "same_file": bool} ASCII 按构造
+    ("etl.py", "_etl_edges"),  # 历史内联站点（已收敛 _similar_to_payload，条目留档防倒退）
+    ("etl.py", "_similar_to_payload"),  # {"jaccard": float, "same_file": bool} ASCII 按构造（J8 起全量/增量共用）
     ("s2_jscpd.py", "cross_check"),  # {"tool"/"agreed"/"lines"/"side"} ASCII 按构造
 }
 

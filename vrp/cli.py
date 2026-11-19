@@ -243,7 +243,7 @@ def cmd_index(args) -> int:
 def cmd_etl(args) -> int:
     repo = _repo_arg(args.repo)
     name = args.cbm_name or repo.name
-    result = etl_mod.run_etl(repo, name)
+    result = etl_mod.run_etl(repo, name, full=args.full)
     printable = {k: v for k, v in result.items()}
     _print_json(printable)
     return 0
@@ -1239,6 +1239,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("etl", help="S1.5: CBM SQLite -> facts.db")
     p.add_argument("repo")
     p.add_argument("--cbm-name", "--name", dest="cbm_name", help="CBM project name override (if indexed under a different name)")
+    p.add_argument("--full", action="store_true", help="J8: force full rebuild (skip the incremental patch path)")
     p.set_defaults(func=cmd_etl)
 
     p = sub.add_parser("xcheck", help="S1: code-atlas cross-validation -> discrepancy_ledger")

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from . import __version__
@@ -27,36 +28,45 @@ def _norm(path: str | None) -> str:
 
 
 class _ContentHasher:
+    """J8：每文件恰一次盘 I/O（字节缓存双消费）——definition_hash 解码取行，
+    wt_hash 整文件 sha256（etl_file_state 检测源，D2）。"""
+
     def __init__(self, repo: Path):
         self._repo = repo
-        self._lines: dict[str, list[str] | None] = {}
+        self._bytes: dict[str, bytes | None] = {}
 
-    def _load(self, rel: str) -> list[str] | None:
-        if rel in self._lines:
-            return self._lines[rel]
-        lines: list[str] | None = None
+    def _load(self, rel: str) -> bytes | None:
+        if rel in self._bytes:
+            return self._bytes[rel]
+        data: bytes | None = None
         try:
             full = self._repo / rel
             if full.is_file():
-                text = full.read_text(encoding="utf-8", errors="replace")
-                lines = text.splitlines()
+                data = full.read_bytes()
         except OSError:
-            lines = None
-        self._lines[rel] = lines
-        return lines
+            data = None
+        self._bytes[rel] = data
+        return data
 
     def definition_hash(self, rel: str, start_line, end_line) -> str:
         if not rel or not start_line or not end_line:
             return ""
-        lines = self._load(rel)
-        if not lines:
+        data = self._load(rel)
+        if not data:
             return ""
+        lines = data.decode("utf-8", errors="replace").splitlines()
         start = max(int(start_line) - 1, 0)
         end = min(int(end_line), len(lines))
         if start >= end:
             return ""
         chunk = "\n".join(lines[start:end])
         return hashlib.sha256(chunk.encode("utf-8", errors="replace")).hexdigest()
+
+    def wt_hash(self, rel: str) -> str:
+        data = self._load(rel)
+        if not data:
+            return ""
+        return hashlib.sha256(data).hexdigest()
 
 
 def cast_fid(project: str, qualified_name: str, content_hash: str) -> str:
@@ -201,7 +211,7 @@ def restore_owned(dst: sqlite3.Connection, snap: dict[str, tuple[list[str], list
     return warnings
 
 
-def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
+def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None, full: bool = False) -> dict:
     repo = repo.resolve()
     db_path = s1_cbm.find_cbm_db(cbm_name, str(repo))
     if db_path is None:
@@ -214,6 +224,26 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
     store_meta = s1_cbm.read_store_meta(db_path)
     out_db = out_db or (repo / ".vrp" / "facts.db")
     out_db.parent.mkdir(parents=True, exist_ok=True)
+
+    # J8：默认先试增量（D5 默认自动）——增量是优化，永不改语义：闸门未过
+    # （FullFallback）或增量内部任何异常都自动回落下面的全量重建；
+    # full=True（CLI --full 逃生舱）跳过增量尝试。
+    fallback = ""
+    if not full and out_db.exists():
+        from . import etl_incremental
+
+        try:
+            return etl_incremental.run(repo, db_path, out_db, project, store_meta)
+        except etl_incremental.FullFallback as reason:
+            fallback = str(reason)
+        except Exception as reason:  # noqa: BLE001 - D5 合同：增量内部异常回落全量
+            fallback = f"internal error: {reason}"
+    elif full:
+        pass
+    else:
+        fallback = "no existing facts.db"
+
+    t0 = time.perf_counter()
     snap = snapshot_owned(out_db)
     # Build the new database in a same-directory temp file and only swap it
     # over the old one after a successful commit, so a mid-run failure leaves
@@ -228,14 +258,23 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
         src = s1_cbm.connect_ro(db_path)
         hasher = _ContentHasher(repo)
 
-        stats: dict[str, int] = {}
+        stats: dict[str, object] = {"mode": "full"}
+        if fallback:
+            stats["incremental_fallback"] = fallback[:200]
         if restore_warnings:
             stats["restore_warnings"] = "; ".join(restore_warnings)
         try:
+            t = time.perf_counter()
             fid_by_id, file_by_id, replaced = _etl_symbols(dst, src, hasher, project, repo)
+            stats["t_symbols_s"] = round(time.perf_counter() - t, 3)
             stats["symbols"] = len(fid_by_id)
+            t = time.perf_counter()
             stats.update(_etl_edges(dst, src, project, fid_by_id, file_by_id, replaced))
+            stats["t_edges_s"] = round(time.perf_counter() - t, 3)
+            t = time.perf_counter()
             stats.update(_etl_coverage(dst, src, project))
+            stats["file_state"] = write_file_state(dst, hasher, src, project)
+            stats["t_coverage_s"] = round(time.perf_counter() - t, 3)
             # P-1: 产物噪音提示（在 tmp 库上计算，落盘在 os.replace 之后）
             noise = detect_artifact_noise(dst)
             stats["artifact_hints"] = len(noise["hints"])
@@ -247,6 +286,7 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
             revalidated = curate_mod._revalidate_ingested(dst)
             stats["curate_stale_slices"] = len(revalidated["slices"])
             stats["curate_stale_structure"] = 1 if revalidated["structure"] else 0
+            stats["t_total_s"] = round(time.perf_counter() - t0, 3)
             _write_meta(dst, project, store_meta, repo, stats)
             dst.commit()
         finally:
@@ -269,6 +309,29 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None) -> dict:
 
     stats["facts_db"] = str(out_db)
     return stats
+
+
+def cbm_file_set(src: sqlite3.Connection, project: str) -> set[str]:
+    """J8：CBM 当前文件集（归一化路径）——检测范围对齐 CBM 文件面，不扩面。"""
+    return {_norm(r[0]) for r in src.execute("SELECT rel_path FROM file_hashes WHERE project = ?", (project,))}
+
+
+def write_file_state(dst: sqlite3.Connection, hasher: _ContentHasher, src: sqlite3.Connection, project: str) -> int:
+    """J8：etl_file_state 整体重写（全量/增量两路同构，行集等价由构造保证）。
+
+    wt_hash=工作树实读（D2 自持久快照），非 CBM file_hashes 转存——CBM
+    索引可能滞后工作树，信任它会开"增量≠全量"语义缺口。无时间戳。
+    """
+    rows = []
+    for path in sorted(cbm_file_set(src, project)):
+        rows.append((path, hasher.wt_hash(path)))
+    dst.execute("DELETE FROM etl_file_state")
+    dst.executemany("INSERT OR REPLACE INTO etl_file_state (file_path, wt_hash) VALUES (?,?)", rows)
+    return len(rows)
+
+
+def _similar_to_payload(props: dict) -> str:
+    return json.dumps({"jaccard": props.get("jaccard"), "same_file": props.get("same_file")})
 
 
 def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _ContentHasher, project: str, repo: Path):
@@ -380,7 +443,7 @@ def _etl_edges(
         table, level = ev.route_edge(etype, props.get("strategy"), props.get("confidence"))
 
         if table == "findings_p2":
-            payload = json.dumps({"jaccard": props.get("jaccard"), "same_file": props.get("same_file")})
+            payload = _similar_to_payload(props)
             findings_rows.append((src_fid, dst_fid, payload))
         elif table == "history_coupling":
             history_rows.append((src_fid, dst_fid, props_raw))
