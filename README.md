@@ -181,6 +181,8 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《第三方许可登记.md》——Z27：in-repo vendored/work 沙箱/pip 钉版本三段 license 全清单+兼容性结论（本地实查+上游 LICENSE 抓取，时点 2026-11-17）
 - 《致谢与轮子来源.md》——Z28：管道在用/测试基建/形态参照/理论经典全清单致谢+轮子学习方法论（学形态不引依赖/三判定/探针先行/红面自证/宁缺勿错）公开呈现
 - 《设计稿-R2-co-change隐式耦合边.md》——R2 立项设计稿：co_changes 表/OWNED 存续/git log 挖掘/幂等重算/阈值与决策点 D1-D4（待批准实施）
+- 《设计稿-J8-ETL增量化.md》——J8 立项设计稿：etl_file_state 工作树快照检测/fid 不变式（文件字节不变⇒fid 不变⇒行携带）/级联面精确枚举/交叉边 qn 锚/行集对拍等价判据/cbm 版本漂移强制全量/决策点 D1-D6（待批准实施）
+- 《设计稿-M16-curate工件三方合并.md》——M16 立项设计稿：curate_base 覆盖前快照表（OWNED）/slices 按 slice_id 六分支三方/structure 字段级（modules by module_id+layers by name+校验兜底）/冲突 decisions 留痕保 ours/决策点 D1-D6（待批准实施）
 - 《渲染层方案.md》——archify 渲染层方案
 - 《跨项目实测报告-2026-11-10.md》——跨项目实测
 - 《契约/事务契约.md》——事务 schema/G 码对照/生产指南（AI 生产方必读）
