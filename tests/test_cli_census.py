@@ -46,7 +46,7 @@ def test_cbm_name_flag_vocabulary_closed() -> None:
         opts = {a.value for a in node.args if isinstance(a, ast.Constant)}
         if opts & names:
             sites.append((node.lineno, opts, {k.arg for k in node.keywords}))
-    assert len(sites) == 8, f"expected 8 name-override sites, got {len(sites)}"
+    assert len(sites) == 9, f"expected 9 name-override sites, got {len(sites)}"
     for lineno, opts, kws in sites:
         assert opts == names, f"line {lineno}: incomplete alias set {sorted(opts)}"
         assert "dest" in kws, f"line {lineno}: dest must be explicit"
@@ -102,6 +102,7 @@ def test_name_override_aliases_parse_identically() -> None:
     parser = cli.build_parser()
     subs = [
         "index", "etl", "run", "freeze", "dossier", "transact", "transact-batch", "refresh",
+        "timeline",
     ]
     for sub in subs:
         argv_tail = [str(Path("t") / "tx.json")] if sub in ("transact", "transact-batch") else []

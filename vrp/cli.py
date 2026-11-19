@@ -17,6 +17,7 @@ from . import assess as assess_mod
 from . import graphsci as graphsci_mod
 from . import feedback as feedback_mod
 from . import cochange as cochange_mod
+from . import timeline as timeline_mod
 from . import grouping as grouping_mod
 from . import profile as profile_mod
 from . import doclint as doclint_mod
@@ -114,6 +115,15 @@ def cmd_cochange(args) -> int:
         _print_json(result)
     else:
         _print_text(cochange_mod.render_text(result))
+    return 0
+
+
+def cmd_timeline(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = timeline_mod.run_timeline(
+        repo, samples=args.samples, cbm_name=getattr(args, "cbm_name", None)
+    )
+    _print_text(timeline_mod.render_text(result))
     return 0
 
 
@@ -988,6 +998,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-support", type=int, default=cochange_mod.DEFAULT_MIN_SUPPORT, help="display filter: min co-occurrence count (>= boundary, default 3)")
     p.add_argument("--min-confidence", type=float, default=cochange_mod.DEFAULT_MIN_CONFIDENCE, help="display filter: min confidence in either direction (>= boundary, default 0.3)")
     p.set_defaults(func=cmd_cochange)
+
+    p = sub.add_parser(
+        "timeline",
+        help="A1: git history sampled replay -> rot timeline"
+        " (.vrp/timeline.json, detached worktree serial advance,"
+        " J8 incremental ETL chain)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--samples", type=int, default=timeline_mod.DEFAULT_SAMPLES, help="sample count (first+last commit always included, default 20)")
+    p.add_argument("--cbm-name", "--name", dest="cbm_name", help="CBM project name override (default repo dir name; timeline uses dedicated vrp-timeline-* cache db)")
+    p.set_defaults(func=cmd_timeline)
 
     p = sub.add_parser(
         "review",

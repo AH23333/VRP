@@ -92,6 +92,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `tour` | T11 代码导览报告（构想v12 甜点，curate 消费面新增导览模板——curated 数据已有叙事模板不同，与 v10-E14 skill 区分：输出产物非操作协议；VS Code Code Tour 步骤化+Diátaxis tutorial 教学序形态参照）：面向新人的模块导览——每模块一句话职责（curated `structure` active 载荷 name/responsibility 人写语义单源直引，active 优先于最新非 active）+建议阅读顺序（**教学序=由浅入深**：层拓扑序（`layers[].may_depend_on` 方向——被依赖地基先读，Kahn+字典序 tie-break，环残余字典序尾附防御呈现）→层内符号数升序（小模块先读）平局 module_id 字典序）+具体锚点（符号数/主要文件 top3 按符号数降序/代表符号 top5）；structure 缺失诚实退出（先跑 curate）；Step N 步骤化正文人读呈现；只读零写入确定性无时间戳；`--json` 机器读 |
 | `curate-merge` | M16 curate 工件三方合并（学 git merge base/ours/theirs 语义权威；OT 冲突分类参照：非冲突自动合、冲突留人工）：两代理各自梳理同一仓的冲突检测+合并——theirs=外来产物（.vrp/ai 形态目录或单文件，复用 curate 输入面）、ours=库 active 面、base=新表 `curate_base` 覆盖前快照（ingest 自动维护，OWNED 存续；「最近一次被覆盖前的样子」非严格 LCA，误报只偏保守）；slices 按 slice_id 六分支三方、structure 字段级三方（modules by module_id/layers by name 并集+合并后全量校验兜底不过整体降级冲突）；冲突=decisions 留痕（kind=curate_merge，同冲突重跑幂等）+库保 ours 不写（**零静默丢**核心保证）；坏载荷先全量校验零写入即拒（R-B 同语义）；合并后 F2 复验照跑；rc=1=有冲突待裁决；`--theirs` 必填、`--json` 机器读 |
 | `cochange` | R2 co-change 隐式耦合边（构想v12 亮点，挖掘+呈现一体）：`git log --no-merges --name-only` 共现挖掘（code-maat/Tornhill temporal coupling，公式开放：support/confidence(a→b)=support/changes(a)）→ 独立 `co_changes` 表（file_a<file_b 字典序 PK，路径键跨 etl 稳定，无时间戳列——同 HEAD 字节级同产物）；幂等 DELETE+INSERT 全量替换；OWNED 跨 etl 存续（git 历史不变不重挖）；`--min-support`/`--min-confidence` 只过滤展示面（表存全量对，默认 3/0.3）；阈值后幸存数诚实计数；叙事定位：CALLS 显式依赖 vs co_changes 隐式耦合——两图分歧即发现；CBM history_coupling 链路零动；`--json` 机器读 |
+| `timeline` | A1 架构腐化时间线（构想v10 中期硬核，"这个仓库哪天开始烂的"——学 Tornhill hotspot=chg×complexity 度量定义+造回放调度）：`git log --no-merges` stride 采样（默认 `--samples 20`，恒含首尾 commit，溢出丢尾前点保端点）→ 单 detached worktree 串行推进（系统 temp，finally remove+prune——用户工作树零接触红线）→ 每样本 CBM 索引（专用名 `vrp-timeline-<name>` 不碰主缓存库，运行毕删除）→ J8 增量 ETL 链（链式 facts.db 相邻样本 content-hash 命中跳过重解析，#190 是成本前提）→ 步间度量十字段（files/loc/symbols/edges/edge_density/dead_code_candidates/births/deaths（fid 集差分，样本1 births=全部）/scc_count（edges file→file 投影迭代 Tarjan size>1，自环不算）/hotspot_top10（chg×cc，Python-only 缺席记档））→ `.vrp/timeline.json` 确定性静态件（git 历史+参数的确定函数，固定键序无 wall-clock 字段——同仓同参数字节级复现）+ 转折点文本叙事（死代码/环数/耦合最大正向跳变附 commit 对与日期）；错误契约：非 git 仓/无 commit 响亮 RuntimeError（静默空曲线是说谎）、单样本失败中止全回放不跳样本（跳样本=曲线缺口说谎，增量链断不可续）、<2 样本单点输出+明示；loc 缓存键 (path, wt_hash) 相邻样本零重读；`--cbm-name` 覆盖 |
 | `review` | T9 PR review 格式输出（构想v12 甜点，学 reviewdog 行锚定+GitHub Review Comments API 载荷）：SARIF→review comments 本地转换器——一条 result 一条 comment（path/line/side=RIGHT/body，1:1 不聚合——聚合是 S5 立项面），落 `.vrp/report/review-comments.json` 供人贴（**零服务端**：贴不贴贴几条由人定，`gh api .../comments` 载荷形状）；缺 location 诚实跳过计数；`--sarif` 换源/`--limit` 只截断写出面（summary 恒真）；确定性——重跑字节级同产物（无时间戳）；`--json` 机器读 |
 | `groups` | S5 finding 同根因聚合（构想v12 甜点，Sentry fingerprint 语义）：指纹=根因符号集——锚定对 (anchor,related) **无序归一**（互环 a→b/b→a 与克隆族同键），无 fid 回退 (file_path,start_line) 键；group_id=sha256[:12] 跨 etl 稳定；**归组不删行**（只读查询面，红线同 S7 降权不删除）；排序 (-members, group_id) 纯确定；member_ids cap 10（summary 记 cap 恒真）；`--limit` 截断展示 summary 恒真；确定性无时间戳；S6 评分/dossier 聚合呈现接入各自立项；`--json` 机器读 |
 | `profile` | R4 仓库数字画像（构想v12 甜点，census 统计深化，纯 stdlib）：三面分布 Gini（入度/出度/文件符号数）+集中度 top1%/top10% 累计占比（**幂律拟合的诚实替代**——不做 CSN 拟合，note 字段明示）+边密度（n<=1 诚实 0.0）+扇入扇出枢纽 top5（(count DESC, fid) 纯确定）；只读查询面（ro_connect 行零改动）；确定性无时间戳；`--json` 机器读 |
@@ -145,9 +146,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1879 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1893 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3402 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3416 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -156,7 +157,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3402 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1879 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1893 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
