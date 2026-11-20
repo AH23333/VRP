@@ -30,6 +30,10 @@ def _build_db(path: Path):
         " VALUES ('pytest run', 'pkg.a', 'pkg.b', 3)"
     )
     con.execute(
+        "INSERT INTO test_coverage (label, file_path, executed_lines_json, missing_lines_json)"
+        " VALUES ('pytest run', 'src/x.py', '[10, 11]', '[12]')"
+    )
+    con.execute(
         "INSERT INTO fid_ledger (fid, project, qualified_name, file_path, first_seen_at)"
         " VALUES ('f-old', 'p', 'pkg.old', 'pkg/x.py', '2026-11-06T00:00:00Z')"
     )
@@ -48,6 +52,7 @@ def test_snapshot_and_restore_roundtrip(tmp_path):
     assert len(snap["gate_results"][1]) == 1
     assert len(snap["runtime_evidence"][1]) == 1
     assert len(snap["runtime_calls"][1]) == 1  # #144 B 件：qn 键运行时调用证据跨 etl 存续
+    assert len(snap["test_coverage"][1]) == 1  # B4：file_path 键测试覆盖证据跨 etl 存续
     rt_cols, rt_rows = snap["runtime_evidence"]
     assert rt_rows[0][rt_cols.index("callee_key")] == "test"
     assert len(snap["findings_kept"][1]) == 1
@@ -72,6 +77,10 @@ def test_snapshot_and_restore_roundtrip(tmp_path):
         "SELECT label, caller_qn, callee_qn, count FROM runtime_calls"
     ).fetchall()
     assert rc == [("pytest run", "pkg.a", "pkg.b", 3)]
+    tc = fresh.execute(
+        "SELECT label, file_path, executed_lines_json, missing_lines_json FROM test_coverage"
+    ).fetchall()
+    assert tc == [("pytest run", "src/x.py", "[10, 11]", "[12]")]
     ledger = fresh.execute(
         "SELECT fid, project, qualified_name, file_path, first_seen_at FROM fid_ledger"
     ).fetchall()
@@ -153,4 +162,5 @@ def test_owned_tables_constant():
         "fid_ledger",
         "co_changes",
         "drift_history",
+        "test_coverage",
     }

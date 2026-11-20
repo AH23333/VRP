@@ -71,6 +71,7 @@ vrp propose <repo>                     # 重组切片提议（#143，学 unwind 
 vrp traces <repo> --file f.json [--label L]  # 运行时调用证据导入（#144，学 CBM ingest_traces）：观测调用路径/裸对（qn 键，reindex-proof）→ facts.db runtime_calls 独立表（不并入静态 facts，CALLS 边/视图零动）；per label 整批替换（CBM "whole runs age out together"）；收据带对账三分类（agreed/observed_only=静态漏报信号/static_only=死代码佐证）；写入经 _open_facts_rw（M4 硬闸）
 vrp coverage <repo> [--path P ...] [--kind K ...]  # 索引完备性核验面（#145，只读，学 CBM check_index_coverage）：引用 graph 文件前先核验——--path 逐路径 status 六态（unusable/partial/unresolved_calls/skipped/excluded/no_recorded_issue）+recommended_action（exact+祖先目录匹配，cap 128）；无 --path=coverage_gaps 盘点（kind 分布+样本）；no_recorded_issue 非完备证明（clean means no recorded gap）
 vrp impact <repo> [--base B] [--path P ...] [--depth N] [--direction D] [--no-tests]  # 变更影响+建议测试查询面（#146，只读，学 CBM detect_changes/test_impact）：默认 worktree 相对 HEAD diff hunk 行区间重叠播种（--base=merge-base..HEAD∪worktree；--path=显式播种跳过 git；零重叠/hunk cap 超限回退整文件播种——绝不静默欠播种）→ 多源 BFS 影响面（CALLS/CALL_REFERENCE，depth clamp 15，行 cap 5000 触顶 saturated 诚实）→ 建议测试（test_linkage 消费按测试文件聚合）；suggested ≠ sufficient——建议面非 gate 面，全量测试由消费方决定
+vrp testcov <repo> --file coverage.json [--label L]  # 测试覆盖对账（B4，#203，traces #144 独立表+对账模式第三次复用；学 coverage.py JSON 出口+diff-cover 行区间映射）：导入外部 coverage.py JSON 报告（pytest --cov 生产者外部——VRP 只记录外部观测零依赖红线）→ test_coverage 独立表（file_path 键跨 etl 稳定，per label 整批替换，OWNED 存续）+ test_linkage 静态关联 vs 实际行覆盖对账收据——符号执行判定=body 区间 (start_line, end_line] 命中 executed/missing（def 声明行不计——coverage.py 对未调用函数恒报 def 行 executed，import 执行非测试执行）；五桶：linked_and_covered/linked_not_covered_measured（**「静态说有测试但从不执行」假关联现形**，B4 核心动机）/linked_not_covered_unmeasured（范围信号弱桶不混）/linked_undetermined（单行符号诚实未定）/covered_not_linked（静态漏关联假阴性面）+linked_unresolved 悬挂锚计数；unresolved_files=覆盖文件不在 facts 诚实上报；class 符号 import 体执行记档（Function 语义最准）；写入经 _open_facts_rw（M4 硬闸）
 vrp enforce <repo>                      # S7 架构执法：curate 入库的 structure 按语言路由执行（.py→import-linter；.ts/.js→dependency-cruiser；.go→go list 原生导入图；.rs→内置 use 解析器；.java→内置 package/import 解析器；.cs→内置 namespace/using 解析器；.kt→内置 package/import 解析器；.c/.cc/.cpp→内置 #include 解析器；.php→内置 namespace/use 解析器；.scala→内置 package/import 解析器；.rb→内置 module/require 解析器；.dart→内置 import 解析器；.swift→内置 Package.swift target 解析器；.zig→内置 @import 解析器；.lua→内置 require 解析器；.m/.mm→内置 #import 解析器），违例落 P9 findings
 vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SARIF+Mermaid+archify html+fusion.html 融合报告（构想v9 V-2：六风格单页总览——仪表盘/叙事/结构图/下钻/双引擎对账/数据切片，vendored ECharts 零外链，chain 同批联动行级跳转 #L{n}，主题令牌与 chain 同源三预设）；R7' 多级颗粒度——archify 图链成功出 chain/（替代 L1/L2），否则 L1 模块页+L2 符号页；archify 缺失降级不阻塞；用户产物信息架构——How to read/Project overview（AI 梳理职责+层规则）/Pathology checkup（P 码人话体检）/Deep data 折叠（AI 材料归拢）；报告产物密钥卫生——chain 源码页命中高置信密钥探测器（云 token/JWT/私钥块/URL 凭据）渲染层掩蔽 [VRP-MASKED:type:preview…]（行数不变 #L 锚点保持），命中清单落 .vrp/SECRETS.local.md 本地勿提交；finding 影响面——切片行锚定符号调用图 BFS 直达/传递可达（dc/dx/uc/xc+top 调用方/被调名单），BFS 帽截断下界诚实注记，无锚行注记不可算））
 vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 facts.db 快照 → 计数 diff + 双 L0 图并排 + verdict 时间线
@@ -146,9 +147,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1997 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 2013 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1525 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3522 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3538 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -157,7 +158,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3522 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1997 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2013 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
@@ -199,6 +200,7 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《交接文档.md》——接手即读（环境/E2E 基准数字/代码地图/下一步）
 - 《踩坑历史.md》——实测坑与纪律
 - 《Checklist-并发归并确定性.md》——BB5 新并行代码点必过审查项（归并点显式排序/输出与串行恒等/优先复用 run_thunks/写面零交叉/过 census）+ CGC as_completed 完成序泄漏参照事故锚点 + 现有并行面审计表；census 守卫 tests/test_parallel_merge_census.py
+- 《设计稿-B4-测试覆盖对账.md》——批⑤设计稿（用户授权自批 2026-11-21，实施 #203）：外部 coverage.py JSON 导入（生产者外部零依赖红线）→ test_coverage 表（file_path 键 OWNED 存续/per-label 整批替换）→ test_linkage 静态关联 vs 实际行覆盖五桶对账（body 区间 def 行排除——import 执行非测试执行；linked_not_covered_measured=「静态说有测试但从不执行」假关联强信号）/unresolved_files 诚实上报/决策点 D1-D5
 - 《SARIF-CI消费指南.md》——G17 出圈：外部项目 CI 消费 vrp SARIF 指南（GitHub Actions upload-sarif 样例/字段对照表/两层截断诚实链（vrp cap 2000+propertyBag 总数标注 × GitHub 5000 上限）/跨仓 dogfood 实测（lusiem 1064 全量 507KB、tree-sitter-analyzer 15741→2000 截断 979KB）/GitLab 通用 CI 提示；零服务端红线不动——上传动作归消费方）
 - 构想 v1-v6——历史方案，只读
 

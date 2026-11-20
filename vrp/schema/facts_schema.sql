@@ -267,6 +267,25 @@ CREATE TABLE IF NOT EXISTS drift_history (
     payload_json TEXT NOT NULL DEFAULT '{}'
 );
 
+-- 批⑤ B4：测试覆盖对账（#203；traces #144 独立表+对账分类模式第三次复用）。
+-- 外部 coverage.py JSON 报告导入（pytest --cov 生产者外部，零依赖红线）；
+-- file_path 键（路径跨 etl 稳定 = co_changes/runtime_calls qn 键同哲学）；
+-- per label 整批替换（同 label 重导入 = DELETE 后 INSERT，traces 同型）；
+-- 跨 etl 经 OWNED_TABLES 快照回灌存续。行数组 sorted-set 序列化（字节
+-- 确定）；created_at 导入时刻——facts.db 本身非字节复现面（drift_history
+-- 先例，红线绑下游产物）。观测证据独立表，不并入静态 facts（test_linkage
+-- 零动——静态分析本体红线）。
+CREATE TABLE IF NOT EXISTS test_coverage (
+    id INTEGER PRIMARY KEY,
+    label TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    executed_lines_json TEXT NOT NULL,
+    missing_lines_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_test_coverage_label ON test_coverage(label);
+CREATE INDEX IF NOT EXISTS idx_test_coverage_file ON test_coverage(file_path);
+
 DROP VIEW IF EXISTS v_hotspots;
 -- P-3（跨项目实测 archify 案例）：fan_in_same_file = 同文件内 fan-in 边数；
 -- fan_in_same_file_pct = 其占 fan_in 比例。CBM 对跨文件同名符号（浏览器全局桩

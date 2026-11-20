@@ -44,6 +44,7 @@ from . import nav as nav_mod
 from . import propose as propose_mod
 from . import traces as traces_mod
 from . import coverage as coverage_mod
+from . import testcov as testcov_mod
 from . import impact as impact_mod
 from . import procs
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
@@ -770,6 +771,17 @@ def cmd_traces(args) -> int:
     return 0 if result.get("ok") else 1
 
 
+def cmd_testcov(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        result = testcov_mod.ingest_testcov(con, Path(args.file), label=args.label)
+    finally:
+        con.close()
+    _print_json(result)
+    return 0 if result.get("ok") else 1
+
+
 def cmd_coverage(args) -> int:
     repo = _repo_arg(args.repo)
     result = coverage_mod.check_coverage(repo, paths=args.paths, kinds=args.kinds)
@@ -1474,6 +1486,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--file", required=True, help="traces JSON file ({traces: [path|caller/callee], label})")
     p.add_argument("--label", help="run label override (default: file 'label' field or 'unlabeled')")
     p.set_defaults(func=cmd_traces)
+
+    p = sub.add_parser(
+        "testcov",
+        help="B4: ingest coverage.py JSON report (pytest --cov external producer, zero-dep)"
+        " -> test_coverage (file-path-keyed OWNED table, per-label whole-run replace)"
+        " + test_linkage-vs-coverage reconciliation (def-line excluded;"
+        " linked_not_covered_measured = 'statically linked but never executed' false-linkage signal)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--file", required=True, help="coverage JSON file ({files: {path: {executed_lines, missing_lines}}})")
+    p.add_argument("--label", help="run label (default 'unlabeled')")
+    p.set_defaults(func=cmd_testcov)
 
     p = sub.add_parser(
         "coverage",

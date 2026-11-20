@@ -99,6 +99,7 @@ OWNED_TABLES = (
     "fid_ledger",
     "co_changes",
     "drift_history",
+    "test_coverage",
 )
 
 
