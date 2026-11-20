@@ -180,6 +180,7 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《构想v13-参照调研优化候选.md》——参照调研提炼批（未立项，AA/BB 双字母新系列，A-Z 已耗尽）：9 项候选（AA 组 MCP 消费面：单强工具+成功形状错误/自适应输出预算/GCF 压缩编码；BB 组事实质量面：调用边置信度分层/死代码置信度三级/Golden 审计矩阵/ETL 健康面/确定性排序 checklist/A/B 防侧信道）每项带参照仓事故锚点
 - 《优先级总表-44项重排.md》——剩余 44 项（35 旧+9 v13）全盘排期定稿（2026-11-19）：重排判据五条/主推执行序九批（首两批 BB2 死代码置信度+AA1/AA2 MCP 消费面）/穿插甜点池九项/触发驱动池 21 项各带触发条件/依赖链更新（J8/A1/D10 已解锁项）——排期≠批准，主序批仍走设计稿→批准→实施
 - 《设计稿-AA1AA2-MCP消费面改造.md》——批②设计稿（D1-D8 全批 2026-11-20，实施 #199）：MCP 工具面 30→10 分族收敛（vrp_query 17 类型单强查询工具/CGC 四参律/写路径动词独立）+isError 面归零（_guard 拓至 Exception，与 codegraph 真故障-isError 分歧记档）+五层输出预算（24K 硬顶+JSON 感知确定性收缩/静态限额中央表+env 覆盖/progress_handler 超时 10×实测律/输入上界 1MiB-10K）；参照源码 file:line 逐行重读记实
+- 《设计稿-C7-混仓分治执法.md》——批③设计稿：混仓 not-enforceable→分治执法——写面互斥解法（wrapper 单次清场+引擎 write_findings/replace 机械参数，"分"已隐式存在于 derive 按语言过滤）/LANG_RUNNERS 表驱动路由（单语言路径字节级不变）/跨语言边 CBM edges 模块对聚合只上报不判（Bazel/Nx 双轨制参照，诚实差距记档）/状态聚合 partial+languages 明细/决策点 D1-D8（待批准实施）
 - 《竞品对照矩阵.md》——W20：与 SonarQube/CodeScene/deptrac/import-linter 定位对照（只引对家公开声明，不贬损，欢迎 PR 修正）
 - 《glossary.md》——Q24：术语表（Diátaxis reference 面；fid/remap/drift/verdict/evidence chain/OWNED_TABLES 等散落概念一站式，详处指针锚点锁 test_glossary 守卫）
 - 《理论出处.md》——W21：概念↔经典书/论文映射（glossary 姊妹篇理论维度；Clean Architecture/POSA/Martin 度量论文/变异测试 1978/克隆检测 1995/ACID 1983 等，无出处原创面诚实标注）
