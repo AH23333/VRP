@@ -285,6 +285,10 @@ JOIN edges b ON b.src_fid = a.dst_fid AND b.dst_fid = a.src_fid
 WHERE a.src_fid < a.dst_fid
 GROUP BY a.src_fid, a.dst_fid;
 
+-- BB2 (#197): candidate universe is structural-only (synthetic/test trees stay
+-- out); name-level false-positive classes (dunder / test hook / entry-point
+-- name) are NOT excluded here — they surface as low confidence + reason via
+-- s2_deadcode.classify (whole-word match, CGC #1332 substring incident lock).
 DROP VIEW IF EXISTS v_dead_code;
 CREATE VIEW v_dead_code AS
 WITH cand AS (
@@ -298,12 +302,7 @@ WITH cand AS (
 )
 SELECT c.fid, c.qualified_name, c.label, c.file_path, c.name, c.start_line, c.end_line
 FROM cand c
-WHERE c.name NOT IN ('main', 'run', 'app', 'index', 'setup', 'teardown', 'handler', 'cli')
-  AND LOWER(c.name) != 'test'
-  AND c.name NOT GLOB 'test_*'
-  AND c.name NOT GLOB '*_test'
-  AND c.name NOT GLOB '__*__'
-  AND NOT (c.norm GLOB 'test_*' OR c.norm GLOB '*/test_*')
+WHERE NOT (c.norm GLOB 'test_*' OR c.norm GLOB '*/test_*')
   AND c.norm NOT GLOB '*_test.go'
   AND c.norm NOT GLOB '*_test.py'
   AND c.norm NOT GLOB '*_test.rs'

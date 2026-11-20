@@ -106,7 +106,8 @@ def test_dead_code_view(con):
     assert [r["qualified_name"] for r in rows] == ["mod.c"]
 
 
-def test_dead_code_entry_name_excluded(con):
+def test_dead_code_entry_name_low_confidence(con):
+    """BB2 (#197)：入口名/测试钩子名不再静默排除——以 low 置信度呈现。"""
     con.execute(
         "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, content_hash)"
         " VALUES ('fm','p','mod.main','Function','main','src/main.ts','hash-m')"
@@ -116,9 +117,12 @@ def test_dead_code_entry_name_excluded(con):
         " VALUES ('ft','p','mod.test_helper','Function','test_helper','src/util.ts','hash-t')"
     )
     con.commit()
-    names = [r["qualified_name"] for r in s5_dossier.dead_code(con)]
-    assert "mod.main" not in names
-    assert "mod.test_helper" not in names
+    rows = s5_dossier.dead_code(con)
+    by_qn = {r["qualified_name"]: r for r in rows}
+    assert by_qn["mod.main"]["confidence"] == "low"
+    assert "entry-point" in by_qn["mod.main"]["reason"]
+    assert by_qn["mod.test_helper"]["confidence"] == "low"
+    assert "test" in by_qn["mod.test_helper"]["reason"]
 
 
 def test_dup_clusters(con):

@@ -27,11 +27,12 @@ def _seed(con):
 
 
 def test_is_candidate():
+    """BB2 (#197)：is_candidate=结构性 universe——名字级类放行给 classify 分层。"""
     assert is_candidate("helper", "src/mod.py")
-    assert not is_candidate("main", "src/mod.py")
-    assert not is_candidate("__init__", "src/mod.py")
+    assert is_candidate("main", "src/mod.py")
+    assert is_candidate("__init__", "src/mod.py")
+    assert is_candidate("test_helper", "src/mod.py")
     assert not is_candidate("do_work", "tests/test_x.py")
-    assert not is_candidate("test_helper", "src/mod.py")
     assert not is_candidate("helper", "tests/helper_test.py")
     assert not is_candidate("helper", "<synthetic>")
     assert not is_candidate("", "src/mod.py")
@@ -42,7 +43,7 @@ def test_dead_code_candidates(facts_db):
     _seed(facts_db)
     cands = dead_code_candidates(facts_db)
     fids = {c[0] for c in cands}
-    assert fids == {"fid-live"}
+    assert fids == {"fid-live", "fid-main", "fid-dunder"}
     live = next(c for c in cands if c[0] == "fid-live")
     assert live[1] == "mod.live"
     assert live[3] == "src/mod.py"
@@ -89,15 +90,19 @@ def test_scan_writes_findings(facts_db):
     before = facts_db.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
     assert before == 0
     result = scan(facts_db)
-    assert result == {"total": 1}
+    assert result == {"total": 3, "by_confidence": {"high": 1, "medium": 0, "low": 2}}
     rows = facts_db.execute(
         "SELECT pathology, kind, source, anchor_fid, file_path FROM findings WHERE source = ?",
         (FINDINGS_SOURCE,),
     ).fetchall()
-    assert rows == [("P4", "dead-code-candidate", FINDINGS_SOURCE, "fid-live", "src/mod.py")]
+    assert rows == [
+        ("P4", "dead-code-candidate", FINDINGS_SOURCE, "fid-live", "src/mod.py"),
+        ("P4", "dead-code-candidate", FINDINGS_SOURCE, "fid-main", "src/mod.py"),
+        ("P4", "dead-code-candidate", FINDINGS_SOURCE, "fid-dunder", "src/mod.py"),
+    ]
     again = scan(facts_db)
-    assert again == {"total": 1}
+    assert again == result
     count = facts_db.execute(
         "SELECT COUNT(*) FROM findings WHERE source = ?", (FINDINGS_SOURCE,)
     ).fetchone()[0]
-    assert count == 1
+    assert count == 3

@@ -110,7 +110,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `etl` | CBM → facts.db 五级证据路由（J8 文件粒度增量默认自动，`--full` 强制全量） |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
 | `run` | S0→S1→ETL→xcheck 一发 |
-| `s2` | 病理检测：ast-grep 9 规则 + 死代码 + knip/vulture + jscpd |
+| `s2` | 病理检测：ast-grep 9 规则 + 死代码（BB2 置信度三级 low/medium/high+reason——五类误报源整词匹配分层非静默丢弃，CGC CONTAINS 事故锁）+ knip/vulture + jscpd |
 | `mutate-plan` / `mutate-run` | 变异预算采样 / 变异执行（mutmut·Stryker·cargo-mutants） |
 | `validate` / `gate` | 锚定+覆盖率校验 / AI claim 证据闸门 |
 | `freeze` | 基线命令执行 + graph 快照 + 变更预筛 |
@@ -146,9 +146,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 1893 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 1925 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1523 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3416 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3448 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -157,7 +157,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3416 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1893 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 1925 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

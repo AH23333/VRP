@@ -112,7 +112,16 @@ def mutual_cycles(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
 def dead_code(con: sqlite3.Connection, limit: int = 50) -> list[dict]:
     rows = _rows(con, "SELECT qualified_name, label, file_path, name FROM v_dead_code", None)
     filtered = [r for r in rows if s2_deadcode.is_candidate(r["name"], r["file_path"])]
-    return filtered[:limit]
+    called = s2_deadcode.called_names(con)
+    ranked = []
+    for r in filtered:
+        confidence, reason = s2_deadcode.classify(r["name"], called)
+        item = dict(r)
+        item["confidence"] = confidence
+        item["reason"] = reason
+        ranked.append((s2_deadcode.CONFIDENCE_RANK[confidence], item))
+    ranked.sort(key=lambda pair: pair[0])  # BB2 #197: high→medium→low, view order within tier
+    return [item for _rank, item in ranked][:limit]
 
 
 def dup_clusters(con: sqlite3.Connection, limit: int = 20) -> list[dict]:

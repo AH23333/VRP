@@ -449,6 +449,7 @@ def cmd_s2(args) -> int:
     ]
     result, dead, p4, p2 = procs.run_thunks(thunks, _s2_workers() or None)
     result["dead_code_candidates"] = dead["total"]
+    result["dead_code_by_confidence"] = dead["by_confidence"]
     result["p4"] = p4
     result["p2"] = p2
     _print_json(result)

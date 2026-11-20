@@ -227,7 +227,7 @@ def _install_fake_engines(monkeypatch, repo, probe=None):
         return _scan
 
     monkeypatch.setattr(astgrep_mod, "scan", fake("s2-astgrep", {"total": 3, "anchored": 0, "rejected": 0, "per_rule": {}}))
-    monkeypatch.setattr(deadcode_mod, "scan", fake("s2-deadcode", {"total": 3}))
+    monkeypatch.setattr(deadcode_mod, "scan", fake("s2-deadcode", {"total": 3, "by_confidence": {"high": 3, "medium": 0, "low": 0}}))
     monkeypatch.setattr(p4_mod, "scan", fake("s2-knip", {"knip": 3, "vulture": "skipped", "ledger_rows": 0}))
     monkeypatch.setattr(jscpd_mod, "scan", fake("s2-jscpd", {"jscpd": 3, "ledger_rows": 0}))
 

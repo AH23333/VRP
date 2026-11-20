@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from vrp import s2_deadcode, testsig
-from vrp.s2_deadcode import ENTRY_NAMES, TARGET_LABELS, USAGE_EDGE_TYPES, is_candidate
+from vrp.s2_deadcode import TARGET_LABELS, USAGE_EDGE_TYPES, is_candidate
 from tests.deep.conftest import ROOT
 
 pytestmark = pytest.mark.deep
@@ -147,12 +146,21 @@ def test_view_uses_all_usage_edge_types():
         con.close()
 
 
-def test_schema_entry_names_match_python_constant():
+def test_view_has_no_name_level_exclusion():
+    """BB2 #197：视图 universe 只做结构性排除（合成/测试树）；名字级误报类
+    （dunder/测试钩子/入口名）由 s2_deadcode.classify 分层为 low，不再静默丢弃。
+    视图 SQL 不得再出现按名字排除的子句。"""
     view_sql = SCHEMA_TEXT[SCHEMA_TEXT.find("CREATE VIEW v_dead_code"):]
-    match = re.search(r"name NOT IN \(([^)]*)\)", view_sql)
-    assert match is not None
-    sql_names = {m.strip().strip("'") for m in match.group(1).split(",")}
-    assert sql_names == set(ENTRY_NAMES), f"drift: sql={sorted(sql_names)} py={sorted(ENTRY_NAMES)}"
+    for forbidden in (
+        "name NOT IN",
+        "name NOT GLOB",
+        "LOWER(c.name) != ",
+        "name NOT LIKE",
+    ):
+        assert forbidden not in view_sql, f"BB2 regression: {forbidden!r} reappeared in v_dead_code"
+    # 结构性排除仍在（测试树/合成路径/零入边三件）
+    for structural in ("NOT GLOB '<*'", "NOT GLOB '>*'", "NOT EXISTS (SELECT 1 FROM edges"):
+        assert structural in view_sql, f"structural exclusion lost: {structural!r}"
 
 
 def test_schema_edge_types_match_python_constant():

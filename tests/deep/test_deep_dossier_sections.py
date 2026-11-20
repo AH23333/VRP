@@ -264,7 +264,20 @@ def test_dead_code_double_filter_alignment(big_repo):
             )
         ]
         filtered = [r for r in view_rows if s2_deadcode.is_candidate(r["name"], r["file_path"])]
+        called = s2_deadcode.called_names(con)
         dossier_dead = s5_dossier.dead_code(con, limit=10**9)
     finally:
         con.close()
-    assert [r["qualified_name"] for r in filtered] == [r["qualified_name"] for r in dossier_dead]
+    # BB2 #197：集合恒等（dossier 过滤面 == 视图 ∩ is_candidate）不因分层排序变
+    assert {r["qualified_name"] for r in filtered} == {r["qualified_name"] for r in dossier_dead}
+    # 每行带 confidence/reason；置信度序 high→medium→low 非降，层内保持视图序
+    ranks = [s2_deadcode.CONFIDENCE_RANK[r["confidence"]] for r in dossier_dead]
+    assert ranks == sorted(ranks)
+    for tier in ("high", "medium", "low"):
+        expected = [
+            r["qualified_name"]
+            for r in filtered
+            if s2_deadcode.classify(r["name"], called)[0] == tier
+        ]
+        actual = [r["qualified_name"] for r in dossier_dead if r["confidence"] == tier]
+        assert expected == actual, f"tier={tier} within-tier order drifted from view order"
