@@ -352,9 +352,12 @@ def test_impact_over_mcp(tmp_path):
                     )
                     await session.initialize()
                     try:
-                        res = await session.call_tool("impact", {"paths": ["a.py"]})
+                        res = await session.call_tool(
+                            "vrp_query",
+                            {"query_type": "impact", "options_json": json.dumps({"paths": ["a.py"]})},
+                        )
                         results["paths"] = json.loads(res.content[0].text)
-                        res = await session.call_tool("impact", {})
+                        res = await session.call_tool("vrp_query", {"query_type": "impact", "options_json": "{}"})
                         results["auto"] = json.loads(res.content[0].text)
                     finally:
                         tg.cancel_scope.cancel()

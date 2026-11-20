@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -38,6 +39,11 @@ QUERY_MAX_ROWS = 100
 # per-query 超时，一条合法但病态的 SELECT（无界交叉积/无终止递归 CTE）可把
 # MCP 工具挂死；progress handler 超限中断（R-AC 纪律：elapsed 一律 monotonic）。
 QUERY_TIME_BUDGET_S = 10.0
+# AA2 L4（设计稿-AA1AA2 §4）：nav_path BFS 预算——10× 实测律（CGC tool_limits.py
+# 校准法）。实测（2026-11-20，tree-sitter-analyzer facts.db：66132 符号/251727 边，
+# 最大扇出 hub 源 depth-10 递归 BFS 形=nav_path max_hops 上限同构）：32.0s。
+# 10×32=320 取整对齐 CGC 自有 repo-size-bound 工具顶 300s。测试钉死。
+PATH_TIME_BUDGET_S = 300.0
 NEIGHBOR_LIST_MAX_LIMIT = 200
 NEIGHBOR_LIST_DEFAULT_LIMIT = 50
 SYMBOL_SLICES_CAP = 10
@@ -46,6 +52,22 @@ PATH_DEFAULT_MAX_HOPS = 5
 PATH_MAX_HOPS = 10
 
 _SELECT_HEADS = ("select", "with")
+
+
+def _sql_budget_s(default: float) -> float:
+    """AA2 L4：VRP_TOOL_QUERY_TIMEOUT env 覆盖（秒，>0 生效；缺省/非法回落默认）。
+
+    单旋钮覆盖 query_facts 与 nav_path 两处 SQL 预算（设计稿 D7）。
+    """
+    raw = os.environ.get("VRP_TOOL_QUERY_TIMEOUT")
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            return default
+        if value > 0:
+            return value
+    return default
 
 
 def _connect_ro(repo: Path) -> sqlite3.Connection:
@@ -484,8 +506,18 @@ def nav_path(
     if from_fid == to_fid:
         raise SystemExit("nav_path: from_fid and to_fid must differ")
     max_hops = max(1, min(int(max_hops), PATH_MAX_HOPS))
+    budget_s = _sql_budget_s(PATH_TIME_BUDGET_S)
+    deadline = time.monotonic() + budget_s
+
+    def _over_budget() -> int:
+        return 1 if time.monotonic() > deadline else 0
+
     con = _connect_ro(repo)
     try:
+        # AA2 L4：BFS 递归 CTE 是读族最重 SQL（hub 源 depth-10 实测 32s@tsa），
+        # progress handler 超限中断（与 query_facts 同法，R-AC monotonic 纪律）。
+        # handler 覆盖整连接（BFS+逐跳重建），TEMP 表不跨连接故单连接到底。
+        con.set_progress_handler(_over_budget, 1000)
         for fid in (from_fid, to_fid):
             if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is None:
                 raise SystemExit(f"nav_path: unknown fid: {fid[:16]}...")
@@ -562,6 +594,13 @@ def nav_path(
                 (fid,),
             ).fetchone()
             path.append(dict(row))
+    except sqlite3.OperationalError as exc:
+        if "interrupted" in str(exc).lower():
+            raise SystemExit(
+                f"nav_path: traversal exceeded the {budget_s:g}s time budget - "
+                "lower max_hops or query a nearer pair"
+            )
+        raise
     finally:
         con.close()
     return {
@@ -727,7 +766,7 @@ def query_facts(repo: Path, sql: str, params: str = "", max_rows: int = QUERY_MA
             raise SystemExit("query_facts: params must be a JSON array")
         bind = parsed
     max_rows = max(1, min(int(max_rows), 1000))
-    deadline = time.monotonic() + QUERY_TIME_BUDGET_S
+    deadline = time.monotonic() + _sql_budget_s(QUERY_TIME_BUDGET_S)
 
     def _over_budget() -> int:
         return 1 if time.monotonic() > deadline else 0

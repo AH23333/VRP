@@ -1,6 +1,6 @@
 # 设计稿：AA1+AA2 MCP 消费面改造
 
-状态：**待批准**（2026-11-20 起草；优先级总表批②；构想v13 AA1+AA2 合批落地稿；参照源码已逐行重读核验——codegraph `src/mcp/tools.ts`/`AGENTS.md`、CGC `tool_definitions.py`/`utils/tool_limits.py`，防转述失真纪律兑现）
+状态：**已批准并实施完成**（D1-D8 全批，2026-11-20；实施交接 #199——工具面 30→10+isError 归零+五层预算（`vrp/mcp_budget.py`）+MCP server 0.2.0 破坏性收敛；起草时参照源码已逐行重读核验——codegraph `src/mcp/tools.ts`/`AGENTS.md`、CGC `tool_definitions.py`/`utils/tool_limits.py`，防转述失真纪律兑现）
 
 ## 1. 现状与增量（诚实盘点）
 

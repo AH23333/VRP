@@ -4,8 +4,16 @@
 - 依赖：`pip install vrp[mcp]`（mcp>=2.0）；核心管道零第三方依赖红线不动
 - 安全闸：tx_run 不暴露 confirm 参数且恒以 confirm=False 调用 s6 层——
   T4 放行只能 CLI 人工 `vrp transact --confirm`，agent 不可绕过（构想v7 §3 决策点矩阵）
-- 错误语义：nav/transact 层的 SystemExit/ValueError 统一转 {"error": ...} JSON
-  （SystemExit 是 BaseException，裸抛会炸穿 server task）
+- 错误语义：工具边界捕 (SystemExit, Exception) 统一转 {"error": ...} 成功形状
+  （SystemExit 是 nav 层错误约定族；KeyboardInterrupt 属 BaseException 照传不捕——
+  isError 面归零：codegraph 实测一次 isError 早出现即让 agent 整个抛弃工具集，
+  设计稿-AA1AA2 D4）
+- 输出预算（AA2）：返回值经 mcp_budget.emit——24K 硬顶+JSON 感知确定性收缩
+  （设计稿 D5）；输入上界 mcp_budget.check_input（设计稿 L5）
+- 工具面（AA1，设计稿 D1-D3，0.2.0 破坏性收敛 30→10）：
+  vrp_query（17 只读类型单强查询工具，CGC analyze_code_relationships 律）
+  + render/session（kind/action 聚合）+ dossier/curate_submit/curate_reject
+  + tx_preview/tx_submit/tx_run + enforce（写路径/执行动词独立=安全闸）
 - 双 server 组合：本 server 之外推荐 bytebase/dbhub（SQLite 只读）自由浏览 facts.db
 """
 
@@ -23,6 +31,7 @@ from . import impact as impact_mod
 from . import dbpath
 from . import curate as curate_mod
 from . import etl as etl_mod
+from . import mcp_budget
 from . import render as render_mod
 from . import s5_dossier
 from . import s7_enforce
@@ -33,18 +42,25 @@ try:
 except ModuleNotFoundError:  # optional extra guard
     MCPServer = None  # type: ignore[assignment]
 
-_VERSION = "0.1.1"
+_VERSION = "0.2.0"
 _INSTRUCTIONS = (
-    "vrp restructuring loop: nav_search to locate -> nav_module/nav_symbol to drill down and verify -> "
-    "tx_preview to self-review the diff -> tx_run to execute -> tx_verdicts to read receipts; "
-    "on failure read failed_codes, fix and retry (<=3 attempts per transaction). "
-    "Curation: dossier (task-typed intake briefing) then curate_submit to submit slices/structure (deterministic validation; on rejection read the receipt, fix, resubmit), "
-    "nav_slice to drill down by business line; "
-    "Enforcement: once curate_structure is ingested, enforce runs architecture enforcement (P9 findings, idempotent). "
-    "Reporting: render_verdicts/render_slice produce decision-point briefing material, render_report produces the full static report; "
-    "Trust mode (design doc v7 §3.3): session_begin -> multi-round loop -> session_end -> "
-    "session_report delivers initial-vs-final comparison (count diff + side-by-side L0 graphs + verdict timeline). "
-    "Production rules: docs/契约/事务契约.md and docs/契约/梳理工件契约.md."
+    "vrp restructuring loop: dossier (task-typed intake briefing) then curate_submit to submit "
+    "slices/structure (deterministic validation; on rejection the returned receipt carries stable "
+    "error codes - fix accordingly and resubmit; curate_receipt reads CLI-run receipts only); "
+    "vrp_query is the single read tool (query_type: search/architecture/module/symbol/facts/"
+    "callers/callees/slice/path/seams/coverage/impact/drift/curate_slices/curate_structure/"
+    "curate_receipt/tx_verdicts; target carries the primary key - query text, fid, module_id, "
+    "slice_id, sql, tid, or 'from_fid->to_fid' for path; options_json carries secondary params "
+    "as a JSON object, e.g. {\"limit\":50}); "
+    "transactions: tx_preview the diff first, then tx_run to execute (T4 always needs_confirmation "
+    "- release only via manual CLI `vrp transact --confirm`, never by the agent), "
+    "then vrp_query tx_verdicts to read receipts; on failure read failed_codes, fix and retry "
+    "(<=3 attempts per transaction); "
+    "enforce runs architecture enforcement once curate_structure is ingested (P9 findings, idempotent); "
+    "render (kind=verdicts|slice|report) produces decision-point briefing material; "
+    "trust mode: session action=begin -> multi-round loop -> action=end -> action=report "
+    "(initial-vs-final comparison); "
+    "production rules: docs/契约/事务契约.md and docs/契约/梳理工件契约.md."
 )
 
 
@@ -53,22 +69,20 @@ def _dumps(payload) -> str:
 
 
 def _guard(fn):
-    """nav/s6/curate 层 SystemExit/ValueError/RuntimeError/OSError/sqlite3.Error -> {"error": ...}，不炸 server。
+    """工具边界（AA1 D4 + AA2 D5）：except (SystemExit, Exception) → {"error"} 成功形状。
 
-    functools.wraps 保住原函数签名（inspect.signature 跟 __wrapped__），
-    否则 schema 提取器看到 (*args, **kwargs) 会生成 args/kwargs 两个参数。
-    RuntimeError 含 M4 freshness 硬拒（etl.check_facts_freshness）；
-    sqlite3.Error 含损坏/异构 facts.db 的 DatabaseError/OperationalError；
-    OSError 含环境失败族（find_cbm 缺 cbm 的 FileNotFoundError/
-    Popen 坏 exe WinError 193/文件锁 PermissionError）——run_tree 按
-    设计传播 Popen OSError，长驻 server 边界诚实降级（R-AR）。
+    isError 面归零：KeyError/TypeError/IndexError 族此前逃逸到 SDK 变 isError:true
+    （codegraph 实测 isError 一次即弃用工具集）；KeyboardInterrupt 属 BaseException
+    照传不捕（与 _open_facts_rw 同理）。functools.wraps 保住原函数签名
+    （inspect.signature 跟 __wrapped__），否则 schema 提取器看到 (*args, **kwargs)。
+    返回值经 mcp_budget.emit：24K 硬顶+JSON 感知确定性收缩（截断永远可见）。
     """
 
     @functools.wraps(fn)
     def wrapped(*args, **kwargs):
         try:
-            return fn(*args, **kwargs)
-        except (SystemExit, ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
+            return mcp_budget.emit(fn(*args, **kwargs))
+        except (SystemExit, Exception) as exc:
             return _dumps({"error": str(exc) or exc.__class__.__name__})
 
     return wrapped
@@ -105,6 +119,58 @@ def _open_facts_rw(repo: Path) -> sqlite3.Connection:
     return con
 
 
+def _parse_options(options_json: str) -> dict:
+    """vrp_query options_json 解析：JSON object，非法/非 object 一律 ValueError
+    （工具层转成功形状 {"error"}）。"""
+    if not options_json or not options_json.strip():
+        return {}
+    try:
+        opts = json.loads(options_json)
+    except ValueError as exc:
+        raise ValueError(f"vrp_query: options_json must be a JSON object: {exc}") from exc
+    if not isinstance(opts, dict):
+        raise ValueError("vrp_query: options_json must be a JSON object")
+    return opts
+
+
+def _opt_int(opts: dict, key: str, default) -> int:
+    raw = opts.get(key, default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"vrp_query: option {key!r} must be an integer, got: {raw!r}")
+
+
+def _opt_str(opts: dict, key: str, default: str) -> str:
+    raw = opts.get(key, default)
+    if not isinstance(raw, str):
+        raise ValueError(f"vrp_query: option {key!r} must be a string, got: {raw!r}")
+    return raw
+
+
+def _opt_str_list(opts: dict, key: str):
+    raw = opts.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+        raise ValueError(f"vrp_query: option {key!r} must be an array of strings")
+    return raw
+
+
+def _opt_bool(opts: dict, key: str, default: bool) -> bool:
+    raw = opts.get(key, default)
+    if not isinstance(raw, bool):
+        raise ValueError(f"vrp_query: option {key!r} must be a boolean, got: {raw!r}")
+    return raw
+
+
+_VRP_QUERY_TYPES = (
+    "search", "architecture", "module", "symbol", "facts", "callers", "callees",
+    "slice", "path", "seams", "coverage", "impact", "drift", "curate_slices",
+    "curate_structure", "curate_receipt", "tx_verdicts",
+)
+
+
 def build_server(repo: Path) -> "MCPServer":
     """构造绑定单个 repo 的 MCP server（in-process 可测）。"""
     if MCPServer is None:
@@ -112,106 +178,136 @@ def build_server(repo: Path) -> "MCPServer":
     repo = Path(repo)
     server = MCPServer(name="vrp", title="vrp", version=_VERSION, instructions=_INSTRUCTIONS)
 
-    def nav_search(query: str, limit: int = 20) -> str:
-        return _dumps(nav.nav_search(repo, query, limit))
+    def vrp_query(query_type: str, target: str = "", options_json: str = "{}") -> dict:
+        """17 只读类型单强查询工具（AA1 D1/D2；内层 nav/curate/tx 函数零改动纯转发）。"""
+        mcp_budget.check_input("query_type", query_type, mcp_budget.MAX_QUERY_INPUT_CHARS)
+        mcp_budget.check_input("target", target, mcp_budget.MAX_JSON_INPUT_CHARS)
+        mcp_budget.check_input("options_json", options_json, mcp_budget.MAX_JSON_INPUT_CHARS)
+        opts = _parse_options(options_json)
+        qt = (query_type or "").strip()
+        if qt == "search":
+            mcp_budget.check_input("target", target, mcp_budget.MAX_QUERY_INPUT_CHARS)
+            return nav.nav_search(
+                repo, target, _opt_int(opts, "limit", mcp_budget.get_tool_result_limit("nav_search", nav.SEARCH_DEFAULT_LIMIT))
+            )
+        if qt == "architecture":
+            return nav.nav_architecture(repo)
+        if qt == "module":
+            return nav.nav_module(
+                repo, target, _opt_int(opts, "limit", mcp_budget.get_tool_result_limit("nav_module", nav.MODULE_SYMBOL_CAP))
+            )
+        if qt == "symbol":
+            return nav.nav_symbol(repo, target)
+        if qt == "facts":
+            return nav.query_facts(
+                repo, target,
+                _opt_str(opts, "params", ""),
+                _opt_int(opts, "max_rows", mcp_budget.get_tool_result_limit("query_facts", nav.QUERY_MAX_ROWS)),
+            )
+        if qt == "callers":
+            return nav.nav_callers(
+                repo, target, _opt_int(opts, "limit", mcp_budget.get_tool_result_limit("nav_callers", nav.NEIGHBOR_LIST_DEFAULT_LIMIT))
+            )
+        if qt == "callees":
+            return nav.nav_callees(
+                repo, target, _opt_int(opts, "limit", mcp_budget.get_tool_result_limit("nav_callees", nav.NEIGHBOR_LIST_DEFAULT_LIMIT))
+            )
+        if qt == "slice":
+            return nav.nav_slice(repo, target)
+        if qt == "path":
+            if "->" not in target:
+                raise ValueError("vrp_query: path target must be 'from_fid->to_fid'")
+            from_fid, to_fid = target.split("->", 1)
+            return nav.nav_path(repo, from_fid.strip(), to_fid.strip(), _opt_int(opts, "max_hops", nav.PATH_DEFAULT_MAX_HOPS))
+        if qt == "seams":
+            return nav.nav_seams(repo)
+        if qt == "coverage":
+            return coverage_mod.check_coverage(
+                repo, paths=_opt_str_list(opts, "paths"), kinds=_opt_str_list(opts, "kinds")
+            )
+        if qt == "impact":
+            base_raw = opts.get("base")
+            if base_raw is not None and not isinstance(base_raw, str):
+                raise ValueError("vrp_query: option 'base' must be a string")
+            return impact_mod.impact_report(
+                repo,
+                base=base_raw or None,
+                paths=_opt_str_list(opts, "paths"),
+                depth=_opt_int(opts, "depth", 2),
+                direction=_opt_str(opts, "direction", "inbound"),
+                tests=_opt_bool(opts, "tests", True),
+            )
+        if qt == "drift":
+            facts = repo / ".vrp" / "facts.db"
+            if not facts.exists():
+                raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts}")
+            con = dbpath.ro_connect(facts)
+            try:
+                return curate_mod.drift_report(con)
+            finally:
+                con.close()
+        if qt == "curate_slices":
+            con = _open_facts_rw(repo)
+            try:
+                return {"slices": curate_mod.list_slices(con)}
+            finally:
+                con.close()
+        if qt == "curate_structure":
+            con = _open_facts_rw(repo)
+            try:
+                return curate_mod.get_structure(con) or {"structure": None}
+            finally:
+                con.close()
+        if qt == "curate_receipt":
+            return curate_mod.read_receipt(repo) or {"receipt": None}
+        if qt == "tx_verdicts":
+            verdicts = s6_transact.load_verdicts(repo)
+            tid = target.strip()
+            if tid:
+                match = [v for v in verdicts if v.get("tid") == tid]
+                if not match:
+                    raise SystemExit(f"vrp_query: no verdict for tid: {tid}")
+                return match
+            return {"count": len(verdicts), "verdicts": verdicts}
+        raise ValueError(
+            f"vrp_query: unknown query_type: {query_type!r} (valid: {', '.join(_VRP_QUERY_TYPES)})"
+        )
 
-    def nav_architecture() -> str:
-        return _dumps(nav.nav_architecture(repo))
-
-    def nav_module(module_id: str, limit: int = 200) -> str:
-        return _dumps(nav.nav_module(repo, module_id, limit))
-
-    def nav_symbol(fid: str) -> str:
-        return _dumps(nav.nav_symbol(repo, fid))
-
-    def query_facts(sql: str, params: str = "", max_rows: int = 100) -> str:
-        return _dumps(nav.query_facts(repo, sql, params, max_rows))
-
-    def nav_callers(fid: str, limit: int = 50) -> str:
-        return _dumps(nav.nav_callers(repo, fid, limit))
-
-    def nav_callees(fid: str, limit: int = 50) -> str:
-        return _dumps(nav.nav_callees(repo, fid, limit))
-
-    def nav_slice(slice_id: str) -> str:
-        return _dumps(nav.nav_slice(repo, slice_id))
-
-    def nav_path(from_fid: str, to_fid: str, max_hops: int = 5) -> str:
-        return _dumps(nav.nav_path(repo, from_fid, to_fid, max_hops))
-
-    def seams() -> str:
-        return _dumps(nav.nav_seams(repo))
-
-    def coverage(paths: list[str] | None = None, kinds: list[str] | None = None) -> str:
-        return _dumps(coverage_mod.check_coverage(repo, paths=paths, kinds=kinds))
-
-    def impact(base: str | None = None, paths: list[str] | None = None, depth: int = 2,
-               direction: str = "inbound", tests: bool = True) -> str:
-        return _dumps(impact_mod.impact_report(
-            repo, base=base, paths=paths, depth=depth, direction=direction, tests=tests,
-        ))
-
-    def curate_submit(kind: str, payload_json: str) -> str:
-        con = _open_facts_rw(repo)
-        try:
-            return _dumps(curate_mod.curate_payload(con, kind, payload_json))
-        finally:
-            con.close()
-
-    def curate_slices() -> str:
-        con = _open_facts_rw(repo)
-        try:
-            return _dumps({"slices": curate_mod.list_slices(con)})
-        finally:
-            con.close()
-
-    def curate_structure() -> str:
-        con = _open_facts_rw(repo)
-        try:
-            return _dumps(curate_mod.get_structure(con) or {"structure": None})
-        finally:
-            con.close()
-
-    def curate_reject(kind: str, target_id: str, note: str = "") -> str:
-        con = _open_facts_rw(repo)
-        try:
-            return _dumps(curate_mod.reject(con, kind, target_id, note))
-        finally:
-            con.close()
-
-    def curate_receipt() -> str:
-        return _dumps(curate_mod.read_receipt(repo) or {"receipt": None})
-
-    def drift_report() -> str:
-        facts = repo / ".vrp" / "facts.db"
-        if not facts.exists():
-            raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts}")
-        con = dbpath.ro_connect(facts)
-        try:
-            return _dumps(curate_mod.drift_report(con))
-        finally:
-            con.close()
-
-    def dossier(task: str = "T4", budget: int = 32000, skip_external: bool = True) -> str:
+    def dossier(task: str = "T4", budget: int = 32000, skip_external: bool = True) -> dict:
         facts = repo / ".vrp" / "facts.db"
         if not facts.exists():
             raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts}")
         con = _open_facts_rw(repo)  # M4 freshness：build_dossier 写 dossier_views
         con.close()
-        return _dumps(
-            s5_dossier.build_dossier(
-                repo, facts, repo.name, budget=budget, task=task, skip_external=skip_external
-            )
+        return s5_dossier.build_dossier(
+            repo, facts, repo.name, budget=budget, task=task, skip_external=skip_external
         )
 
-    def tx_preview(tx_json: str) -> str:
+    def curate_submit(kind: str, payload_json: str) -> dict:
+        mcp_budget.check_input("payload_json", payload_json, mcp_budget.MAX_JSON_INPUT_CHARS)
+        con = _open_facts_rw(repo)
+        try:
+            return curate_mod.curate_payload(con, kind, payload_json)
+        finally:
+            con.close()
+
+    def curate_reject(kind: str, target_id: str, note: str = "") -> dict:
+        con = _open_facts_rw(repo)
+        try:
+            return curate_mod.reject(con, kind, target_id, note)
+        finally:
+            con.close()
+
+    def tx_preview(tx_json: str) -> dict:
+        mcp_budget.check_input("tx_json", tx_json, mcp_budget.MAX_JSON_INPUT_CHARS)
         tmp = _write_temp(tx_json)
         try:
-            return _dumps(s6_transact.preview_transaction(repo, tmp))
+            return s6_transact.preview_transaction(repo, tmp)
         finally:
             tmp.unlink(missing_ok=True)
 
-    def tx_submit(tx_json: str, overwrite: bool = False) -> str:
+    def tx_submit(tx_json: str, overwrite: bool = False) -> dict:
+        mcp_budget.check_input("tx_json", tx_json, mcp_budget.MAX_JSON_INPUT_CHARS)
         tmp = _write_temp(tx_json)
         try:
             payload = s6_transact.load_transaction(tmp)
@@ -226,11 +322,10 @@ def build_server(repo: Path) -> "MCPServer":
                 f"tx_submit: transaction exists (overwrite=True to replace): {path.name}"
             )
         path.write_text(tx_json, encoding="utf-8", newline="\n")
-        return _dumps(
-            {"submitted": True, "path": str(path), "id": payload["id"], "type": payload["type"]}
-        )
+        return {"submitted": True, "path": str(path), "id": payload["id"], "type": payload["type"]}
 
-    def tx_run(tx_json: str, name: str = "") -> str:
+    def tx_run(tx_json: str, name: str = "") -> dict:
+        mcp_budget.check_input("tx_json", tx_json, mcp_budget.MAX_JSON_INPUT_CHARS)
         tmp = _write_temp(tx_json)
         try:
             payload = s6_transact.load_transaction(tmp)
@@ -242,123 +337,72 @@ def build_server(repo: Path) -> "MCPServer":
         path = tx_dir / f"{tid}.json"
         path.write_text(tx_json, encoding="utf-8", newline="\n")
         verdict = s6_transact.transact(repo, path, name or repo.name, confirm=False)
-        return _dumps(verdict)
+        return verdict
 
-    def tx_verdicts(tid: str = "") -> str:
-        verdicts = s6_transact.load_verdicts(repo)
-        if tid:
-            match = [v for v in verdicts if v.get("tid") == tid]
-            if not match:
-                raise SystemExit(f"tx_verdicts: no verdict for tid: {tid}")
-            return _dumps(match)
-        return _dumps({"count": len(verdicts), "verdicts": verdicts})
+    def render(kind: str, target: str = "") -> dict:
+        mcp_budget.check_input("kind", kind, mcp_budget.MAX_QUERY_INPUT_CHARS)
+        mcp_budget.check_input("target", target, mcp_budget.MAX_QUERY_INPUT_CHARS)
+        k = kind.strip()
+        if k == "verdicts":
+            return render_mod.render_verdicts(repo)
+        if k == "slice":
+            return render_mod.render_slice(repo, target)
+        if k == "report":
+            return render_mod.render_report(repo)
+        raise ValueError(f"render: unknown kind: {kind!r} (valid: verdicts, slice, report)")
 
-    def render_verdicts() -> str:
-        return _dumps(render_mod.render_verdicts(repo))
+    def session(action: str, target: str = "") -> dict:
+        mcp_budget.check_input("action", action, mcp_budget.MAX_QUERY_INPUT_CHARS)
+        mcp_budget.check_input("target", target, mcp_budget.MAX_QUERY_INPUT_CHARS)
+        a = action.strip()
+        if a == "begin":
+            return session_mod.session_begin(repo, target)
+        if a == "end":
+            return session_mod.session_end(repo, target)
+        if a == "report":
+            return session_mod.session_report(repo, target)
+        raise ValueError(f"session: unknown action: {action!r} (valid: begin, end, report)")
 
-    def render_slice(slice_id: str) -> str:
-        return _dumps(render_mod.render_slice(repo, slice_id))
-
-    def render_report() -> str:
-        return _dumps(render_mod.render_report(repo))
-
-    def session_begin(note: str = "") -> str:
-        return _dumps(session_mod.session_begin(repo, note))
-
-    def session_end(note: str = "") -> str:
-        return _dumps(session_mod.session_end(repo, note))
-
-    def session_report(session_id: str = "") -> str:
-        return _dumps(session_mod.session_report(repo, session_id))
-
-    def enforce(timeout: int = 600) -> str:
+    def enforce(timeout: int = 600) -> dict:
         con = _open_facts_rw(repo)
         try:
-            return _dumps(s7_enforce.run(repo, con, timeout))
+            return s7_enforce.run(repo, con, timeout)
         finally:
             con.close()
 
     server.add_tool(
-        _guard(nav_search),
-        name="nav_search",
-        description="Symbol search (AI entry point): name/qualified_name matching, exact matches first; returns fid handles for drill-down",
+        _guard(vrp_query),
+        name="vrp_query",
+        description="Single read tool over facts.db (17 query types; AA1 single-strong-tool, CGC analyze_code_relationships precedent): "
+        "search (AI entry point - name/qualified_name matching, exact matches first, returns fid handles for drill-down; option limit), "
+        "architecture (L0 global map, prefers ingested structure), "
+        "module (L1 file drill-down, target=module_id i.e. file_path; option limit), "
+        "symbol (L2 symbol drill-down by fid: signature/lines/callers/callees/findings), "
+        "facts (lightweight read-only SQL, single SELECT/WITH, target=sql; options params (JSON array string, positional), max_rows; "
+        "schema in vrp/schema/facts_schema.sql), "
+        "callers/callees (full neighbor lists by fid; option limit; truncated=true means raise limit), "
+        "slice (business-line view by slice_id), "
+        "path (shortest coupling path along edges src->dst, target='from_fid->to_fid'; option max_hops cap 10; "
+        "hops_detail carries per-hop type/evidence/confidence), "
+        "seams (cross-module edge aggregation over the active curated structure; honestly reports structure=missing), "
+        "coverage (index completeness check per path; options paths (array), kinds (array); no paths = gap inventory), "
+        "impact (change blast radius + suggested tests, read-only; options base, paths (array), depth, direction, tests), "
+        "drift (unified artifact drift query: fresh/missing_fids/missing_edges + fid_ledger remap candidates; "
+        "non-empty summary.active_but_drifted must be reported), "
+        "curate_slices (list ingested business lines with status), "
+        "curate_structure (read ingested overall structure), "
+        "curate_receipt (read the latest CLI-run curate receipt; curate_submit returns its own receipt inline), "
+        "tx_verdicts (transaction receipts; target=tid returns one full record, empty lists all). "
+        "target carries the primary key for the type; options_json carries secondary params as a JSON object",
     )
     server.add_tool(
-        _guard(nav_architecture),
-        name="nav_architecture",
-        description="L0 global map: directory-level aggregation (files/symbols/pathology counts), drill-down handle = module_id (file_path); "
-        "prefers the structure table (R2' curate ingest) when present",
-    )
-    server.add_tool(
-        _guard(nav_module),
-        name="nav_module",
-        description="L1 file-level drill-down: module_id = file_path; returns symbol list + pathology summary + fid handles; "
-        "get paths first via nav_search / nav_architecture",
-    )
-    server.add_tool(
-        _guard(nav_symbol),
-        name="nav_symbol",
-        description="L2 symbol-level drill-down: signature/lines/callers/callees/related findings; "
-        "caller/callee fids keep drilling (full chain reachable, no shallow stops)",
-    )
-    server.add_tool(
-        _guard(query_facts),
-        name="query_facts",
-        description="Lightweight SQL over facts.db (read-only SELECT/WITH, single statement); params is a JSON array string bound positionally; "
-        "schema in vrp/schema/facts_schema.sql (five views: v_hotspots/v_cycles/v_dead_code/v_dup_clusters/v_coupling)",
-    )
-    server.add_tool(
-        _guard(nav_callers),
-        name="nav_callers",
-        description="Full caller list (paginated limit; complements nav_symbol's built-in cap of 20); "
-        "truncated=true means raise limit; fid handles drill down via nav_symbol",
-    )
-    server.add_tool(
-        _guard(nav_callees),
-        name="nav_callees",
-        description="Full callee list (paginated limit; complements nav_symbol's built-in cap of 20); "
-        "truncated=true means raise limit; fid handles drill down via nav_symbol",
-    )
-    server.add_tool(
-        _guard(nav_slice),
-        name="nav_slice",
-        description="Business-line view: steps (with symbol summaries + fid handles) + acts; "
-        "slices are ingested via curate_submit; status=stale means symbols/edges drifted",
-    )
-    server.add_tool(
-        _guard(nav_path),
-        name="nav_path",
-        description="Coupling path lookup: shortest from→to path along edges (src→dst) (WITH RECURSIVE BFS); "
-        "hops_detail carries per-hop type/evidence/confidence — verify low-confidence edges by drilling down; "
-        "found=false when unreachable (raise max_hops up to 10 or query the reverse direction)",
-    )
-    server.add_tool(
-        _guard(seams),
-        name="seams",
-        description="Seam query face (#143, unwind seams): cross-module edge aggregation over the active curated structure "
-        "(per ordered module pair: total + by-type counts + distinct fid pairs + capped top edge samples; "
-        "plus internal/unassigned totals); seams list = module dependency graph (strangler rebuild-order raw material); "
-        "honestly reports structure=missing when no active structure",
-    )
-    server.add_tool(
-        _guard(coverage),
-        name="coverage",
-        description="Index completeness check (#145, CBM check_index_coverage): verify a path before citing it from the graph "
-        "(paths: per-path status - exact + ancestor gap match, status in unusable/partial/unresolved_calls/skipped/excluded/no_recorded_issue "
-        "each with a recommended_action; kinds: optional kind filter); "
-        "no paths = gap inventory summary by kind; "
-        "no_recorded_issue is not proof of completeness - clean means no recorded gap",
-    )
-    server.add_tool(
-        _guard(impact),
-        name="impact",
-        description="Change impact + suggested tests (#146, CBM detect_changes/test_impact; read-only): "
-        "diff the current worktree (or a base ref) -> seed symbols by hunk-range overlap -> "
-        "multi-source BFS blast radius over CALLS/CALL_REFERENCE "
-        "(inbound callers default, depth cap 15, row cap 5000 - saturated means lower bounds) "
-        "-> suggest tests via test_linkage consumption; "
-        "explicit paths skip git and seed directly; "
-        "suggested is NOT sufficient - run the full suite for gates",
+        _guard(dossier),
+        name="dossier",
+        description="S5 intake dossier: task-typed briefing over facts.db (task=T1|T2|T3|T4 budget profiles; "
+        "sections: architecture/repomap/sql_views/evidence/summary) — the intake material for curation and refactor planning; "
+        "default skip_external=True = fast and deterministic (external sections honestly marked skipped); "
+        "skip_external=False opts into external tooling (repo_map_brief/raw_pack, slow, up to 180s); "
+        "writes .vrp/dossier.json and dossier_views; facts.db must be fresh (M4)",
     )
     server.add_tool(
         _guard(curate_submit),
@@ -369,48 +413,12 @@ def build_server(repo: Path) -> "MCPServer":
         "schema in docs/契约/梳理工件契约.md",
     )
     server.add_tool(
-        _guard(curate_slices),
-        name="curate_slices",
-        description="List ingested business lines (slice_id/name/status/step counts); "
-        "status=active is usable, stale=drifted and awaiting re-curation, rejected=user veto",
-    )
-    server.add_tool(
-        _guard(curate_structure),
-        name="curate_structure",
-        description="Read the ingested overall structure (modules/layers/rules verbatim + status); "
-        "structure feeds S7 architecture enforcement and the L0 map",
-    )
-    server.add_tool(
         _guard(curate_reject),
         name="curate_reject",
         description="User vetoes an ingested artifact (kind=slice|structure, target_id=slice_id or 'structure'): "
         "for structure a numeric target_id vetoes that exact row id (unknown id errors), "
         "non-numeric vetoes the latest version; "
         "status→rejected + decision logged; veto is the conservative direction, the agent may relay the user's decision",
-    )
-    server.add_tool(
-        _guard(curate_receipt),
-        name="curate_receipt",
-        description="Read the latest curate receipt (.vrp/curate-receipt.json): "
-        "when rejected, fix the artifact per error codes and resubmit",
-    )
-    server.add_tool(
-        _guard(drift_report),
-        name="drift_report",
-        description="Unified drift query surface (read-only): per-artifact fresh/missing_fids/missing_edges for active/stale artifacts "
-        "+ relocation candidates — fid_ledger identity history maps old fid to qualified_name, then re-resolves to the current fid; "
-        "a unique candidate yields a direct remap (F1 read-out aid); when the qualified_name is gone, same-file candidates fill in; "
-        "re-curate with the remap and curate_submit again (full re-validation, no bypass); "
-        "non-empty summary.active_but_drifted = a hole in the revalidation chain, must be reported",
-    )
-    server.add_tool(
-        _guard(dossier),
-        name="dossier",
-        description="S5 intake dossier: task-typed briefing over facts.db (task=T1|T2|T3|T4 budget profiles; "
-        "sections: architecture/repomap/sql_views/evidence/summary) — the intake material for curation and refactor planning; "
-        "default skip_external=True = fast and deterministic (external sections honestly marked skipped); "
-        "skip_external=False opts into external tooling (repo_map_brief/raw_pack, slow, up to 180s); "
-        "writes .vrp/dossier.json and dossier_views; facts.db must be fresh (M4)",
     )
     server.add_tool(
         _guard(tx_preview),
@@ -432,46 +440,23 @@ def build_server(repo: Path) -> "MCPServer":
         "tx_preview the diff first",
     )
     server.add_tool(
-        _guard(tx_verdicts),
-        name="tx_verdicts",
-        description="Read transaction receipts: tid returns one full record, no listing; "
-        "open (non-committed) items feed back into the dossier evidence section automatically",
-    )
-    server.add_tool(
-        _guard(render_verdicts),
-        name="render_verdicts",
-        description="T4 decision-point briefing: verdict timeline + open/T4 list; "
-        "T4 release only via manual CLI vrp transact --confirm",
-    )
-    server.add_tool(
-        _guard(render_slice),
-        name="render_slice",
-        description="Single business-line briefing: Mermaid sequence source (steps/acts), paste into mermaid.live to render; "
-        "get slice_id from curate_slices",
-    )
-    server.add_tool(
-        _guard(render_report),
-        name="render_report",
-        description="S8 full static report -> .vrp/report/ (report.html + IR + SARIF + Mermaid; "
+        _guard(render),
+        name="render",
+        description="Briefing material (kind=verdicts|slice|report): "
+        "verdicts = T4 decision-point briefing (verdict timeline + open/T4 list; T4 release only via manual CLI vrp transact --confirm); "
+        "slice = single business-line briefing as Mermaid sequence source (target=slice_id, get ids via vrp_query curate_slices; "
+        "paste into mermaid.live to render); "
+        "report = S8 full static report -> .vrp/report/ (report.html + IR + SARIF + Mermaid; "
         "auto-degrades to Mermaid-only when archify is missing); no timestamps, traceable via facts.git_head",
     )
     server.add_tool(
-        _guard(session_begin),
-        name="session_begin",
-        description="Trust-mode opening (design doc v7 §3.3): facts.db snapshot + session metadata; "
-        "only one active session per repo at a time; subsequent refactor rounds run undisturbed until session_end",
-    )
-    server.add_tool(
-        _guard(session_end),
-        name="session_end",
-        description="Trust-mode closing: final snapshot + ended_at + initial-vs-final count diff "
-        "(nodes/edges/pathology/xcheck); session_report then delivers the output",
-    )
-    server.add_tool(
-        _guard(session_report),
-        name="session_report",
-        description="Trust-mode delivery: initial-vs-final count diff + side-by-side L0 architecture graphs (archify, Mermaid fallback) "
-        "+ verdict timeline within the session window -> report.html in the session directory; session_id defaults to the latest ended session",
+        _guard(session),
+        name="session",
+        description="Trust-mode lifecycle (action=begin|end|report; target semantics per action): "
+        "begin = facts.db snapshot + session metadata (target=note; only one active session per repo); "
+        "end = final snapshot + initial-vs-final count diff (target=note); "
+        "report = initial-vs-final comparison + side-by-side L0 graphs + verdict timeline -> report.html "
+        "(target=session_id, defaults to the latest ended session)",
     )
     server.add_tool(
         _guard(enforce),

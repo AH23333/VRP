@@ -13,18 +13,18 @@ description: AI restructuring loop over the vrp MCP tools - navigate, verify, pr
 
 ## The 8-step loop
 
-1. **Locate**: `nav_search(query)` for candidate symbols (fid handles + file_path)
-   - For the global map first call `nav_architecture()` (prefers the AI-curated structure; directory aggregation fallback)
-2. **Drill down and verify**: `nav_module(module_id=file_path)` -> `nav_symbol(fid)`
+1. **Locate**: `vrp_query(query_type=search, target=<query>)` for candidate symbols (fid handles + file_path)
+   - For the global map first call `vrp_query(query_type=architecture)` (prefers the AI-curated structure; directory aggregation fallback)
+2. **Drill down and verify**: `vrp_query(query_type=module, target=<file_path>)` -> `vrp_query(query_type=symbol, target=<fid>)`
    - **Full-chain drilling**: keep drilling caller/callee fids until the blast radius is closed
-   - Do not read raw source as a source of cognition - use the layered interfaces (`query_facts`, dossier)
+   - Do not read raw source as a source of cognition - use the layered interfaces (`vrp_query(query_type=facts, target=<sql>)`, dossier)
 3. **Produce the transaction**: assemble tx_json per the contract (`{"id","type","summary","declared_moves","edits"}`)
    - **Minimal transactions**: one intent per transaction; edits are full-file overwrites (fetch current content first)
-   - T1 declared_moves must be complete (base them on nav_symbol/query_facts qualified_names, never memory)
+   - T1 declared_moves must be complete (base them on symbol/qualified_name query results, never memory)
 4. **Preview**: `tx_preview(tx_json)` - read the unified diff, confirm the change surface matches the declared intent
 5. **Run**: `tx_run(tx_json)`
    - T4 returns needs_confirmation - **do not retry**; summarize the diff and hand it to the user for manual release (CLI `vrp transact --confirm`)
-6. **Read the verdict**: `tx_verdicts()`; on failure read `failed_gate` + `failed_codes`
+6. **Read the verdict**: `vrp_query(query_type=tx_verdicts)` (target=<tid> for a single record); on failure read `failed_gate` + `failed_codes`
 7. **Fix and retry**: repair tx_json per the failure codes, preview -> run again; **max 3 retries per transaction** - after 3 failures change approach or drop the target and tell the user why
 8. **Regression**: when the batch is done, ask the user to run `vrp run <repo>` to rebuild the fact layer + `vrp dossier` to re-check pathology (open verdicts feed into the dossier evidence section automatically)
 
@@ -36,7 +36,7 @@ Once a structure is ingested (`curate_submit` kind=structure), run `enforce()`:
 
 ## Drift handling
 
-Curated artifacts go stale as transactions land. `drift_report()` (read-only) reports per-artifact `fresh` / `missing_fids` / `missing_edges` plus relocation candidates from the fid ledger:
+Curated artifacts go stale as transactions land. `vrp_query(query_type=drift)` (read-only) reports per-artifact `fresh` / `missing_fids` / `missing_edges` plus relocation candidates from the fid ledger:
 - A unique qualified_name candidate yields a direct `remap` (old fid -> new fid); re-curate with the remap and `curate_submit` again (full re-validation, no bypass)
 - Non-empty `summary.active_but_drifted` means a hole in the revalidation chain - report it to the user immediately
 
@@ -62,7 +62,7 @@ Curated artifacts go stale as transactions land. `drift_report()` (read-only) re
 | Supervised (default) | user approves each decision point (curate reject / T4 confirm / render material) | per-round verdicts + briefing material |
 | Trust | zero interruptions across multi-round refactors | initial-vs-final comparison |
 
-**Trust-mode flow**: `session_begin(note)` -> run the 8-step loop as usual (multiple rounds, uninterrupted) -> `session_end(note)` -> `session_report()` (count diff over four groups + side-by-side L0 graphs + verdict timeline within the window, written to the session directory report.html).
+**Trust-mode flow**: `session(action=begin, target=<note>)` -> run the 8-step loop as usual (multiple rounds, uninterrupted) -> `session(action=end)` -> `session(action=report)` (count diff over four groups + side-by-side L0 graphs + verdict timeline within the window, written to the session directory report.html).
 - The T4 safety gate does not open in trust mode: `tx_run` still always returns needs_confirmation - avoid T4 during the session, or leave T4 for manual handling after session_end
 - Initial-vs-final comparison is the honest "side-by-side + counts" version; no graph diff (fid content is sensitive and always changes after refactors)
 
@@ -77,5 +77,5 @@ Curated artifacts go stale as transactions land. `drift_report()` (read-only) re
 ## Related
 
 - Curation loop (slices/structure) -> `skills/vrp-curation/` (curate_submit validation -> nav_slice drill-down -> drift remap)
-- Reporting loop -> render tools: `render_verdicts()` (T4 briefing), `render_slice(slice_id)` (business-line Mermaid source), `render_report()` (full static report at `.vrp/report/` - the user-facing product: how-to-read guide, AI-curated overview, pathology checkup in plain language, deep data folded for agents)
+- Reporting loop -> render tool: `render(kind=verdicts)` (T4 briefing), `render(kind=slice, target=<slice_id>)` (business-line Mermaid source), `render(kind=report)` (full static report at `.vrp/report/` - the user-facing product: how-to-read guide, AI-curated overview, pathology checkup in plain language, deep data folded for agents)
 - Transaction schema authority: `docs/契约/事务契约.md`; curated-artifact schema authority: `docs/契约/梳理工件契约.md`

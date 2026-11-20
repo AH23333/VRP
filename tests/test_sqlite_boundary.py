@@ -90,18 +90,27 @@ def _except_tuple_names(fn_name: str, path: Path, inner: str | None = None) -> s
 
 
 def test_sqlite_error_in_boundary_catch_tuples():
-    """AST 守卫：cli.main 与 mcp_server._guard 两处边界元组必含 sqlite3.Error，防漂移。"""
+    """AST 守卫：cli.main 与 mcp_server._guard 两处边界元组必含 sqlite3.Error，防漂移。
+
+    #199 D4：_guard 收敛为兜底 (SystemExit, Exception)（isError 归零）——
+    Exception 子类覆盖 sqlite3.Error，显式成员与 Exception 兜底二选一满足；
+    若未来收窄元组把两者都丢了，本守卫仍红。
+    """
     cli_names = _except_tuple_names("main", VRP_DIR / "cli.py")
     assert "sqlite3.Error" in cli_names, f"cli.main 边界元组缺 sqlite3.Error: {sorted(cli_names)}"
     guard_names = _except_tuple_names("_guard", VRP_DIR / "mcp_server.py", inner="wrapped")
-    assert "sqlite3.Error" in guard_names, f"mcp _guard 边界元组缺 sqlite3.Error: {sorted(guard_names)}"
+    assert "sqlite3.Error" in guard_names or "Exception" in guard_names, (
+        f"mcp _guard 边界元组缺 sqlite3.Error（亦无 Exception 兜底）: {sorted(guard_names)}"
+    )
 
 
 def test_os_error_in_boundary_catch_tuples():
     """R-AR AST 守卫：cli.main 与 mcp_server._guard 两处边界元组必含 OSError
     （环境失败族：find_cbm FileNotFoundError/Popen 坏 exe/文件锁
-    PermissionError），防漂移。"""
+    PermissionError），防漂移。#199 D4 同上：Exception 兜底二选一满足。"""
     cli_names = _except_tuple_names("main", VRP_DIR / "cli.py")
     assert "OSError" in cli_names, f"cli.main 边界元组缺 OSError: {sorted(cli_names)}"
     guard_names = _except_tuple_names("_guard", VRP_DIR / "mcp_server.py", inner="wrapped")
-    assert "OSError" in guard_names, f"mcp _guard 边界元组缺 OSError: {sorted(guard_names)}"
+    assert "OSError" in guard_names or "Exception" in guard_names, (
+        f"mcp _guard 边界元组缺 OSError（亦无 Exception 兜底）: {sorted(guard_names)}"
+    )

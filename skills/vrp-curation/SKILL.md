@@ -22,15 +22,15 @@ Validation is **deterministic** (machine-checked; everything passes or nothing i
 ## Production flow (six steps)
 
 ```
-1. Gather      dossier / nav_search to locate the target business
-2. Verify      nav_callers / nav_callees for genuinely adjacent symbols
-               (no skipping ahead, no invented fids)
+1. Gather      dossier / vrp_query(search) to locate the target business
+2. Verify      vrp_query(callers) / vrp_query(callees) for genuinely adjacent
+               symbols (no skipping ahead, no invented fids)
 3. Produce     write slices.json / structure.json per the contract schema
 4. Submit      curate_submit(kind, payload_json), or drop into .vrp/ai/
                and run `vrp curate <repo>`
 5. Read receipt accepted -> done; rejected -> fix per errors[].code,
                resubmit the whole file
-6. Drill down  nav_slice(slice_id) to double-check the ingested result
+6. Drill down  vrp_query(slice, target=slice_id) to double-check the ingested result
 ```
 
 After a structure is ingested, run `enforce()` (S7): broken layer contracts become P9 findings - report them to the user and fold them into refactor targets.
@@ -40,7 +40,7 @@ After a structure is ingested, run `enforce()` (S7): broken layer contracts beco
 | Mistake | Receipt code |
 |---|---|
 | no real edge between adjacent steps (skipping/wishful thinking) | `SLICE_MISSING_EDGE` |
-| stale fid (transactions landed, no fresh nav_search) | `SLICE_UNKNOWN_FID` |
+| stale fid (transactions landed, no fresh vrp_query(search)) | `SLICE_UNKNOWN_FID` |
 | same symbol assigned to two modules | `STRUCT_FID_OVERLAP` |
 | layer dependency cycle | `STRUCT_LAYER_CYCLE` |
 | module.layer / rule references a layer not in layers | `STRUCT_UNKNOWN_LAYER` / `STRUCT_RULE_LAYER` |
@@ -48,8 +48,8 @@ After a structure is ingested, run `enforce()` (S7): broken layer contracts beco
 
 ## Rules
 
-1. **fids come only from nav-family queries** - invented fids never pass existence validation
-2. **Adjacent steps need a real edge**: `CALLS`/`CALL_REFERENCE`/`HTTP_CALLS` in either direction; verify with nav_callers/nav_callees before writing steps
+1. **fids come only from vrp_query (nav-family types)** - invented fids never pass existence validation
+2. **Adjacent steps need a real edge**: `CALLS`/`CALL_REFERENCE`/`HTTP_CALLS` in either direction; verify with vrp_query(callers)/vrp_query(callees) before writing steps
 3. **Atomicity**: one bad entry rejects the whole file - fix everything, then resubmit the file
 4. **Idempotent**: resubmitting the same slice_id overwrites; structure is single-row overwrite - iterate boldly
 5. **Honesty**: if a business line cannot be drawn with real edges, shorten its scope; never pad steps to force a shape
@@ -57,7 +57,7 @@ After a structure is ingested, run `enforce()` (S7): broken layer contracts beco
 
 ## Drift and remap
 
-Transactions invalidate fids. `drift_report()` (read-only) lists per-artifact `fresh`/`missing_fids`/`missing_edges` plus relocation candidates from the fid ledger:
+Transactions invalidate fids. `vrp_query(drift)` (read-only) lists per-artifact `fresh`/`missing_fids`/`missing_edges` plus relocation candidates from the fid ledger:
 - Unique qualified_name candidate -> direct `remap` (old fid -> new fid): apply it, re-curate, `curate_submit` again (full re-validation, no bypass)
 - Qualified_name gone (renamed/deleted) -> same-file candidates are listed (capped) for judgment
 - Artifacts marked `stale` are re-validation failures - re-curate before relying on them
@@ -68,16 +68,15 @@ slices: `SLICE_SCHEMA` / `SLICE_EMPTY_NAME` / `SLICE_EMPTY_SUMMARY` / `SLICE_UNK
 structure: `STRUCT_SCHEMA` / `STRUCT_EMPTY_NAME` / `STRUCT_EMPTY_RESPONSIBILITY` / `STRUCT_UNKNOWN_FID` / `STRUCT_FID_OVERLAP` / `STRUCT_LAYER_CYCLE` / `STRUCT_UNKNOWN_LAYER` / `STRUCT_RULE_LAYER`
 file level: `FILE_NOT_JSON` / `FILE_WRONG_SHAPE`
 
-## Tool surface
+## Tool surface (MCP 0.2.0: ten tools - single read tool vrp_query + write/execution verbs)
 
 | Tool | Use |
 |---|---|
+| `vrp_query(query_type, target, options_json)` | single read tool, 17 types: search/architecture/module/symbol/facts/callers/callees/slice/path/seams/coverage/impact/drift/curate_slices/curate_structure/curate_receipt/tx_verdicts (target carries the primary key; options_json carries secondary params, e.g. `{"limit":50}`) |
 | `dossier(task, budget, skip_external)` | S5 intake briefing over facts.db (task-typed budgets T1-T4; default skip_external=True = fast, deterministic) |
 | `curate_submit(kind, payload_json)` | submit for validation and ingest (kind=slices/structure) |
-| `curate_slices()` / `curate_structure()` | read ingested artifacts and status |
-| `curate_receipt()` | read the latest validation receipt |
 | `curate_reject(kind, target_id, note)` | relay a user rejection (conservative direction, agent may relay) |
-| `drift_report()` | unified drift query (fresh/missing/remap candidates, read-only) |
-| `nav_slice(slice_id)` | drill down into an ingested business line |
 | `enforce()` | S7 architecture enforcement over the ingested structure (P9 findings) |
 | CLI `vrp curate <repo>` / `--reject <id> --note ...` | manual entry points |
+
+Output budget: tool outputs are capped at 24K chars with deterministic JSON-aware shrinking (a `_truncated` note records what was cut - narrow the query or pass a lower `limit` option instead of retrying blindly).

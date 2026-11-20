@@ -12,36 +12,17 @@ from vrp import mcp_server
 
 SCHEMA = Path(__file__).parent.parent / "vrp" / "schema" / "facts_schema.sql"
 
+# AA1（设计稿 D1）：30→10 分族收敛。
 TOOL_NAMES = {
-    "nav_search",
-    "nav_architecture",
-    "nav_module",
-    "nav_symbol",
-    "nav_callers",
-    "nav_callees",
-    "nav_slice",
-    "nav_path",
-    "seams",
-    "coverage",
-    "impact",
-    "query_facts",
-    "curate_submit",
-    "curate_slices",
-    "curate_structure",
-    "curate_reject",
-    "curate_receipt",
-    "drift_report",
+    "vrp_query",
     "dossier",
+    "curate_submit",
+    "curate_reject",
     "tx_preview",
     "tx_submit",
     "tx_run",
-    "tx_verdicts",
-    "render_verdicts",
-    "render_slice",
-    "render_report",
-    "session_begin",
-    "session_end",
-    "session_report",
+    "render",
+    "session",
     "enforce",
 }
 
@@ -126,7 +107,7 @@ async def _call(session: ClientSession, name: str, args: dict):
         return {"_raw": text, "_isError": result.is_error}
 
 
-def test_list_tools_nine_and_no_confirm_param(tmp_path):
+def test_list_tools_ten_and_no_confirm_param(tmp_path):
     repo = _mk_repo(tmp_path)
     tools = _run(_drive(repo, {"tools": _tools}))["tools"]
     assert set(tools) == TOOL_NAMES
@@ -137,18 +118,38 @@ def test_list_tools_nine_and_no_confirm_param(tmp_path):
         assert "repo" not in props, f"{name} must not expose repo (per-repo binding)"
 
 
-def test_nav_chain_over_mcp(tmp_path):
+def test_instructions_teach_vrp_query(tmp_path):
+    """AA1 引导单源律（codegraph #529）：initialize 响应教新循环（vrp_query 单读工具）。"""
     repo = _mk_repo(tmp_path)
 
     async def plan(session: ClientSession):
-        search = await _call(session, "nav_search", {"query": "total"})
+        return session.initialize_result
+
+    result = _run(_drive(repo, {"init": plan}))["init"]
+    instructions = result.instructions or ""
+    assert "vrp_query" in instructions
+    assert "curate_submit" in instructions
+    assert "tx_run" in instructions
+    assert "session" in instructions
+
+
+def test_version_bumped_020():
+    """AA1 D3：破坏性收敛版本位 0.2.0（测试钉死防静默回退）。"""
+    assert mcp_server._VERSION == "0.2.0"
+
+
+def test_vrp_query_chain_over_mcp(tmp_path):
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        search = await _call(session, "vrp_query", {"query_type": "search", "target": "total"})
         fid = search["results"][0]["fid"]
-        mod = await _call(session, "nav_module", {"module_id": "pkg/calc.py"})
-        sym = await _call(session, "nav_symbol", {"fid": fid})
-        facts = await _call(session, "query_facts", {"sql": "SELECT COUNT(*) AS n FROM symbols"})
-        arch = await _call(session, "nav_architecture", {})
-        path = await _call(session, "nav_path", {"from_fid": "f1", "to_fid": "f2"})
-        rev = await _call(session, "nav_path", {"from_fid": "f2", "to_fid": "f1"})
+        mod = await _call(session, "vrp_query", {"query_type": "module", "target": "pkg/calc.py"})
+        sym = await _call(session, "vrp_query", {"query_type": "symbol", "target": fid})
+        facts = await _call(session, "vrp_query", {"query_type": "facts", "target": "SELECT COUNT(*) AS n FROM symbols"})
+        arch = await _call(session, "vrp_query", {"query_type": "architecture"})
+        path = await _call(session, "vrp_query", {"query_type": "path", "target": "f1->f2"})
+        rev = await _call(session, "vrp_query", {"query_type": "path", "target": "f2->f1"})
         return {"search": search, "mod": mod, "sym": sym, "facts": facts, "arch": arch,
                 "path": path, "rev": rev}
 
@@ -166,12 +167,113 @@ def test_nav_chain_over_mcp(tmp_path):
     assert out["rev"]["found"] is False
 
 
-def test_seams_over_mcp(tmp_path):
-    """#143 A 件：seams 工具 over the wire（结构缺失诚实降级面）。"""
+def test_vrp_query_facts_options(tmp_path):
+    """vrp_query facts：options_json 次参数（params 位置绑定+max_rows）。"""
     repo = _mk_repo(tmp_path)
 
     async def plan(session: ClientSession):
-        return await _call(session, "seams", {})
+        return await _call(session, "vrp_query", {
+            "query_type": "facts",
+            "target": "SELECT qualified_name FROM symbols WHERE name = ?",
+            "options_json": json.dumps({"params": json.dumps(["double"]), "max_rows": 5}),
+        })
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert out["rows"] == [{"qualified_name": "pkg.calc.double"}]
+
+
+def test_vrp_query_path_target_parse_error(tmp_path):
+    """path target 缺 '->' → 成功形状错误（D4：isError 面归零）。"""
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "vrp_query", {"query_type": "path", "target": "f1f2"})
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert "from_fid->to_fid" in out["error"]
+
+
+def test_vrp_query_unknown_type_error(tmp_path):
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "vrp_query", {"query_type": "bogus", "target": "x"})
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert "unknown query_type" in out["error"]
+    for qt in mcp_server._VRP_QUERY_TYPES:
+        assert qt in out["error"], f"valid types must be listed, missing: {qt}"
+
+
+def test_vrp_query_bad_options_json(tmp_path):
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "vrp_query", {"query_type": "search", "target": "x", "options_json": "not json"})
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert "options_json" in out["error"]
+
+
+def test_vrp_query_bad_option_type(tmp_path):
+    """options_json 合法 JSON 但 limit 非整数 → 成功形状错误。"""
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "vrp_query", {
+            "query_type": "search", "target": "x", "options_json": json.dumps({"limit": "fifty"}),
+        })
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert "'limit'" in out["error"]
+
+
+def test_vrp_query_limit_option_respected(tmp_path):
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        one = await _call(session, "vrp_query", {
+            "query_type": "search", "target": "calc", "options_json": json.dumps({"limit": 1}),
+        })
+        return {"one": one}
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert out["one"]["count"] <= 1 or len(out["one"]["results"]) <= 1
+
+
+def test_vrp_query_input_bounds(tmp_path):
+    """AA2 L5：target 超 10K → 成功形状错误（不炸 server）。"""
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        oversized = await _call(session, "vrp_query", {"query_type": "search", "target": "x" * 10_001})
+        return {"oversized": oversized}
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert "max 10000" in out["oversized"]["error"]
+
+
+def test_vrp_query_options_bound(tmp_path):
+    """AA2 L5：options_json 超 1 MiB → 成功形状错误。"""
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        huge = await _call(session, "vrp_query", {
+            "query_type": "search", "target": "x",
+            "options_json": json.dumps({"limit": 1}) + " " * (1 << 20),
+        })
+        return {"huge": huge}
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert "max 1048576" in out["huge"]["error"]
+
+
+def test_seams_over_mcp(tmp_path):
+    """#143 A 件：seams over the wire（结构缺失诚实降级面）。"""
+    repo = _mk_repo(tmp_path)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "vrp_query", {"query_type": "seams"})
 
     out = _run(_drive(repo, {"plan": plan}))["plan"]
     assert out["structure"] == "missing"
@@ -182,8 +284,8 @@ def test_error_json_not_crash(tmp_path):
     repo = _mk_repo(tmp_path)
 
     async def plan(session: ClientSession):
-        bad_sql = await _call(session, "query_facts", {"sql": "DROP TABLE symbols"})
-        unknown_fid = await _call(session, "nav_symbol", {"fid": "nope"})
+        bad_sql = await _call(session, "vrp_query", {"query_type": "facts", "target": "DROP TABLE symbols"})
+        unknown_fid = await _call(session, "vrp_query", {"query_type": "symbol", "target": "nope"})
         return {"bad_sql": bad_sql, "unknown_fid": unknown_fid}
 
     out = _run(_drive(repo, {"plan": plan}))["plan"]
@@ -232,7 +334,7 @@ def test_tx_preview_submit_verdicts(tmp_path):
         preview = await _call(session, "tx_preview", {"tx_json": _tx_json()})
         submit = await _call(session, "tx_submit", {"tx_json": _tx_json("tx-sub")})
         dup = await _call(session, "tx_submit", {"tx_json": _tx_json("tx-sub")})
-        verdicts = await _call(session, "tx_verdicts", {})
+        verdicts = await _call(session, "vrp_query", {"query_type": "tx_verdicts"})
         return {"preview": preview, "submit": submit, "dup": dup, "verdicts": verdicts}
 
     out = _run(_drive(repo, {"plan": plan}))["plan"]
@@ -244,6 +346,24 @@ def test_tx_preview_submit_verdicts(tmp_path):
     assert (repo / ".vrp" / "transactions" / "tx-sub.json").exists()
     assert "error" in out["dup"]
     assert out["verdicts"]["count"] == 0
+
+
+def test_vrp_query_tx_verdicts_tid_filter(tmp_path):
+    """tx_verdicts target=tid：单条过滤命中与未命中错误。"""
+    repo = _mk_repo(tmp_path)
+    (repo / ".vrp" / "verdicts").mkdir(parents=True)
+    (repo / ".vrp" / "verdicts" / "tx-1.json").write_text(json.dumps({
+        "tid": "tx-1", "type": "T2", "status": "committed", "verdict_at": "2026-11-20T00:00:00Z",
+    }), encoding="utf-8")
+
+    async def plan(session: ClientSession):
+        one = await _call(session, "vrp_query", {"query_type": "tx_verdicts", "target": "tx-1"})
+        missing = await _call(session, "vrp_query", {"query_type": "tx_verdicts", "target": "tx-nope"})
+        return {"one": one, "missing": missing}
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert isinstance(out["one"], list) and out["one"][0]["tid"] == "tx-1"
+    assert "no verdict for tid" in out["missing"]["error"]
 
 
 def test_tx_run_t4_gate_never_confirms(tmp_path, monkeypatch):
@@ -298,8 +418,20 @@ def test_tx_run_stages_transaction_then_calls_transact(tmp_path, monkeypatch):
     assert staged and staged[0].parent == repo / ".vrp" / "transactions"
 
 
+def test_tx_input_bound_over_mcp(tmp_path):
+    """AA2 L5：tx_json 超 1 MiB → 成功形状错误。"""
+    repo = _mk_repo(tmp_path)
+    huge = _tx_json("tx-huge") + " " * (1 << 20)
+
+    async def plan(session: ClientSession):
+        return await _call(session, "tx_run", {"tx_json": huge})
+
+    out = _run(_drive(repo, {"plan": plan}))["plan"]
+    assert "max 1048576" in out["error"]
+
+
 def test_curate_flow_over_mcp(tmp_path):
-    """curate 五件 + nav 三件 over MCP：submit 验收入库 -> 读回 -> reject 留痕 -> receipt。"""
+    """curate 流 over MCP：submit 验收入库 -> 读回（vrp_query）-> reject 留痕 -> receipt。"""
 
     slices_ok = json.dumps([{
         "slice_id": "calc-flow",
@@ -320,15 +452,17 @@ def test_curate_flow_over_mcp(tmp_path):
         accept = await _call(session, "curate_submit", {"kind": "slices", "payload_json": slices_ok})
         reject = await _call(session, "curate_submit", {"kind": "slices", "payload_json": slices_bad})
         st = await _call(session, "curate_submit", {"kind": "structure", "payload_json": structure_ok})
-        listing = await _call(session, "curate_slices", {})
-        struct = await _call(session, "curate_structure", {})
-        arch = await _call(session, "nav_architecture", {})
-        sl = await _call(session, "nav_slice", {"slice_id": "calc-flow"})
-        callers = await _call(session, "nav_callers", {"fid": "f2"})
+        listing = await _call(session, "vrp_query", {"query_type": "curate_slices"})
+        struct = await _call(session, "vrp_query", {"query_type": "curate_structure"})
+        arch = await _call(session, "vrp_query", {"query_type": "architecture"})
+        sl = await _call(session, "vrp_query", {"query_type": "slice", "target": "calc-flow"})
+        callers = await _call(session, "vrp_query", {"query_type": "callers", "target": "f2"})
         veto = await _call(session, "curate_reject", {"kind": "slice", "target_id": "calc-flow", "note": "n"})
-        after = await _call(session, "curate_slices", {})
+        after = await _call(session, "vrp_query", {"query_type": "curate_slices"})
+        receipt = await _call(session, "vrp_query", {"query_type": "curate_receipt"})
         return {"accept": accept, "reject": reject, "st": st, "listing": listing, "struct": struct,
-                "arch": arch, "sl": sl, "callers": callers, "veto": veto, "after": after}
+                "arch": arch, "sl": sl, "callers": callers, "veto": veto, "after": after,
+                "receipt": receipt}
 
     repo = _mk_repo(tmp_path)
     out = _run(_drive(repo, {"plan": plan}))["plan"]
@@ -348,6 +482,10 @@ def test_curate_flow_over_mcp(tmp_path):
     assert out["callers"]["neighbors"][0]["fid"] == "f1"
     assert out["veto"]["status"] == "rejected"
     assert out["after"]["slices"][0]["status"] == "rejected"
+    # curate_receipt 读 CLI curate() 落盘的 .vrp/curate-receipt.json——MCP submit
+    # 路径不写该文件（收据即 curate_submit 返回值，拒绝时带稳定错误码），
+    # 诚实语义：无文件 → {"receipt": None} 而非编造。
+    assert out["receipt"] == {"receipt": None}
     con = sqlite3.connect(repo / ".vrp" / "facts.db")
     try:
         assert con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 1
@@ -357,7 +495,7 @@ def test_curate_flow_over_mcp(tmp_path):
 
 
 def test_render_tools_over_mcp(tmp_path, monkeypatch):
-    """render 三件 over MCP：verdicts 快材料 + slice 快材料 + 全量报告（降级不炸）。"""
+    """render kind 聚合 over MCP：verdicts 快材料 + slice 快材料 + 全量报告（降级不炸）。"""
     from vrp import render as render_mod
 
     monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
@@ -377,10 +515,11 @@ def test_render_tools_over_mcp(tmp_path, monkeypatch):
     }), encoding="utf-8")
 
     async def plan(session: ClientSession):
-        verdicts = await _call(session, "render_verdicts", {})
-        sl = await _call(session, "render_slice", {"slice_id": "calc-flow"})
-        report = await _call(session, "render_report", {})
-        return {"verdicts": verdicts, "sl": sl, "report": report}
+        verdicts = await _call(session, "render", {"kind": "verdicts"})
+        sl = await _call(session, "render", {"kind": "slice", "target": "calc-flow"})
+        report = await _call(session, "render", {"kind": "report"})
+        bad = await _call(session, "render", {"kind": "bogus"})
+        return {"verdicts": verdicts, "sl": sl, "report": report, "bad": bad}
 
     out = _run(_drive(repo, {"plan": plan}))["plan"]
     assert out["verdicts"]["count"] == 1
@@ -390,6 +529,7 @@ def test_render_tools_over_mcp(tmp_path, monkeypatch):
     assert out["report"]["archify"] is False
     assert any("archify not found" in d for d in out["report"]["degraded"])
     assert (repo / ".vrp" / "report" / "report.html").is_file()
+    assert "unknown kind" in out["bad"]["error"]
 
 
 def test_drift_report_over_mcp(tmp_path):
@@ -402,9 +542,9 @@ def test_drift_report_over_mcp(tmp_path):
     }], ensure_ascii=False)
 
     async def plan(session: ClientSession):
-        empty = await _call(session, "drift_report", {})
+        empty = await _call(session, "vrp_query", {"query_type": "drift"})
         st = await _call(session, "curate_submit", {"kind": "slices", "payload_json": slices_ok})
-        fresh = await _call(session, "drift_report", {})
+        fresh = await _call(session, "vrp_query", {"query_type": "drift"})
         return {"empty": empty, "st": st, "fresh": fresh}
 
     repo = _mk_repo(tmp_path)
@@ -424,7 +564,7 @@ def test_drift_report_over_mcp(tmp_path):
     assert out["fresh"]["slices"][0]["fresh"] is True
     assert out["fresh"]["summary"]["active_but_drifted"] == []
 
-    # 直插漂移 slice（引用已消亡 fid-old）→ drift_report 给 ledger remap
+    # 直插漂移 slice（引用已消亡 fid-old）→ drift 给 ledger remap
     con = sqlite3.connect(repo / ".vrp" / "facts.db")
     con.execute(
         "INSERT INTO slices (slice_id, name, summary, payload_json, status)"
@@ -435,7 +575,7 @@ def test_drift_report_over_mcp(tmp_path):
     con.close()
 
     async def again(session: ClientSession):
-        return await _call(session, "drift_report", {})
+        return await _call(session, "vrp_query", {"query_type": "drift"})
 
     drifted = _run(_drive(repo, {"plan": again}))["plan"]
     ghost = [s for s in drifted["slices"] if s["slice_id"] == "ghost"][0]
@@ -488,7 +628,7 @@ def test_cli_mcp_wiring(tmp_path, monkeypatch):
 
 
 def test_session_flow_over_mcp(tmp_path, monkeypatch):
-    """R3.5' session 三件 over MCP：begin（快照+元数据）-> end（diff）-> report（交付）。"""
+    """R3.5' session action 聚合 over MCP：begin（快照+元数据）-> end（diff）-> report（交付）。"""
     from vrp import render as render_mod
 
     monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
@@ -496,11 +636,12 @@ def test_session_flow_over_mcp(tmp_path, monkeypatch):
     repo = _mk_repo(tmp_path)
 
     async def plan(session: ClientSession):
-        begin = await _call(session, "session_begin", {"note": "trust round"})
-        mid = await _call(session, "session_begin", {"note": "should fail"})  # 活动会话互斥
-        end = await _call(session, "session_end", {})
-        report = await _call(session, "session_report", {})
-        return {"begin": begin, "mid": mid, "end": end, "report": report}
+        begin = await _call(session, "session", {"action": "begin", "target": "trust round"})
+        mid = await _call(session, "session", {"action": "begin", "target": "should fail"})  # 活动会话互斥
+        end = await _call(session, "session", {"action": "end"})
+        report = await _call(session, "session", {"action": "report"})
+        bad = await _call(session, "session", {"action": "bogus"})
+        return {"begin": begin, "mid": mid, "end": end, "report": report, "bad": bad}
 
     out = _run(_drive(repo, {"plan": plan}))["plan"]
     assert out["begin"]["session_id"]
@@ -510,6 +651,7 @@ def test_session_flow_over_mcp(tmp_path, monkeypatch):
     assert out["end"]["diff"]["symbols"] == {"begin": 2, "end": 2, "delta": 0}
     assert out["report"]["archify"] is False
     assert out["report"]["verdicts_in_window"] == 0
+    assert "unknown action" in out["bad"]["error"]
     sdir = repo / ".vrp" / "sessions" / out["begin"]["session_id"]
     assert (sdir / "report.html").is_file()
     assert (sdir / "begin.db").is_file() and (sdir / "end.db").is_file()
@@ -573,7 +715,7 @@ def test_tx_submit_malicious_id_stays_in_transactions(tmp_path):
     assert out["submitted"] is True, out
     tx_dir = repo / ".vrp" / "transactions"
     persisted = list(tx_dir.glob("*.json"))
-    assert len(persisted) == 1, f"expected exactly one persisted tx, got {persisted}"
+    assert len(persisted) == 1, f"expected exactly one persisted tx, got: {persisted}"
     assert not (repo / ".vrp" / "escape-probe.json").is_file(), "path escape outside transactions/"
 
 
@@ -587,7 +729,7 @@ def test_tx_run_malicious_id_stays_in_transactions(tmp_path):
     _run(_drive(repo, {"run": plan}))["run"]  # transact 自会失败（非 git 仓），只验文件落点
     tx_dir = repo / ".vrp" / "transactions"
     persisted = list(tx_dir.glob("*.json"))
-    assert len(persisted) == 1, f"expected exactly one persisted tx, got {persisted}"
+    assert len(persisted) == 1, f"expected exactly one persisted tx, got: {persisted}"
     assert not (repo / ".vrp" / "evil-run.json").is_file(), "path escape outside transactions/"
     assert not (repo / "evil-run.json").is_file(), "path escape outside repo"
 

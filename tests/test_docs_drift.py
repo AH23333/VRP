@@ -37,7 +37,9 @@ def _cn_num(text: str) -> int:
     if "十" not in text:
         return _CN_DIGITS[text]
     tens_s, _, ones_s = text.partition("十")
-    tens = _CN_DIGITS[tens_s] if tens_s else 10
+    # 裸"十"系数是 1 不是 10（#199：README"三十→十件"措辞暴露——旧码 10*10+0=100，
+    # docstring 早已写明 十→10/十七→17，实现从未对过，此前 README 只用"N十"形从未踩中）
+    tens = _CN_DIGITS[tens_s] if tens_s else 1
     ones = _CN_DIGITS[ones_s] if ones_s else 0
     return tens * 10 + ones
 

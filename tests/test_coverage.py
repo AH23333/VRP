@@ -227,7 +227,7 @@ def test_cli_coverage_missing_facts_rejected(tmp_path):
 
 
 def test_coverage_over_mcp(tmp_path):
-    """MCP coverage 工具 over the wire：in-process 对打（seams 同款 _drive）。"""
+    """MCP vrp_query(type=coverage) over the wire：in-process 对打（seams 同款 _drive）。"""
     repo = _mk_repo(tmp_path)
     _add_gap(repo, "a.py", "parse_partial", "1-1")
 
@@ -245,9 +245,12 @@ def test_coverage_over_mcp(tmp_path):
                     )
                     await session.initialize()
                     try:
-                        res = await session.call_tool("coverage", {"paths": ["a.py"]})
+                        res = await session.call_tool(
+                            "vrp_query",
+                            {"query_type": "coverage", "options_json": json.dumps({"paths": ["a.py"]})},
+                        )
                         results["check"] = json.loads(res.content[0].text)
-                        res = await session.call_tool("coverage", {})
+                        res = await session.call_tool("vrp_query", {"query_type": "coverage", "options_json": "{}"})
                         results["summary"] = json.loads(res.content[0].text)
                     finally:
                         tg.cancel_scope.cancel()
