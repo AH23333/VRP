@@ -683,7 +683,8 @@ def test_run_routes_php_orphan_surfaced(tmp_path):
     assert out["orphan_php_files"] == 1  # 无 namespace 声明诚实上报
 
 
-def test_run_mixed_php_and_py_not_enforceable(tmp_path):
+def test_run_mixed_php_and_py_divide_and_conquer(tmp_path):
+    """混仓分治（C7）：py + php 双语言并跑——php 违例如期落库，py 侧（无真实\n    .py 文件）无契约可派生诚实 not-enforceable，整体 partial；分治单次清场清\n    陈旧 findings（写面互斥回归核心件）。"""
     repo = _mk_php_repo(tmp_path)
     con = _con(repo)
     con.execute(
@@ -702,15 +703,33 @@ def test_run_mixed_php_and_py_not_enforceable(tmp_path):
         ],
     }, ensure_ascii=False),))
     con.commit()
+    con.execute(  # 陈旧 findings 先行：分治单次清场锚
+        "INSERT INTO findings (pathology, kind, source, payload_json)"
+        " VALUES ('P9', 'layer-violation', 's7-enforce', '\"stale\"')"
+    )
+    con.commit()
     try:
         out = s7_enforce.run(repo, con)
+        stale = con.execute(
+            "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+            " AND payload_json = '\"stale\"'"
+        ).fetchone()[0]
+        total = con.execute(
+            "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+        ).fetchone()[0]
     finally:
         con.close()
-    assert out["status"] == "not-enforceable"
-    assert "mixed-language" in out["reason"]
-    assert "py + php" in out["reason"]
-
-
+    assert out["status"] == "partial"
+    assert set(out["languages"]) == {"py", "php"}
+    assert out["languages"]["py"]["status"] == "not-enforceable"
+    assert out["languages"]["php"]["status"] == "ok"
+    assert out["languages"]["php"]["contracts"] == 1
+    assert out["languages"]["php"]["violations"] == 1
+    assert out["languages"]["php"]["findings_written"] == 1
+    assert out["cross_language_edges"] == []
+    assert out["cross_language_edge_groups_total"] == 0
+    assert stale == 0  # 分治单次清场：陈旧 findings 已清
+    assert total == 1  # 只剩本 run 新写（单语言引擎不清他语言 findings）
 def test_run_php_derive_timeout(tmp_path, monkeypatch):
     repo = _mk_php_repo(tmp_path)
     monkeypatch.setattr(

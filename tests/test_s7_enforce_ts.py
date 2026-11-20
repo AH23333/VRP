@@ -347,7 +347,8 @@ def test_run_routes_to_ts_engine(tmp_path, monkeypatch):
     assert calls[0]["targets"] == ["src/core", "src/iface"]
 
 
-def test_run_mixed_language_not_enforceable(tmp_path):
+def test_run_mixed_language_divide_and_conquer(tmp_path):
+    """混仓分治（C7）：py + ts 双语言并跑——ts 违例如期落库，py 侧（无真实\n    .py 文件）无契约可派生诚实 not-enforceable，整体 partial；分治单次清场清\n    陈旧 findings（写面互斥回归核心件）。"""
     repo = _mk_repo(tmp_path)
     con = _con(repo)
     # 加一个 .py 符号进 core 模块 → py 容器与 ts 容器并存
@@ -359,14 +360,33 @@ def test_run_mixed_language_not_enforceable(tmp_path):
     mixed["modules"][0]["symbol_fids"].append("t3")
     con.execute("UPDATE structure SET payload_json = ?", (json.dumps(mixed, ensure_ascii=False),))
     con.commit()
+    con.execute(  # 陈旧 findings 先行：分治单次清场锚
+        "INSERT INTO findings (pathology, kind, source, payload_json)"
+        " VALUES ('P9', 'layer-violation', 's7-enforce', '\"stale\"')"
+    )
+    con.commit()
     try:
         out = s7_enforce.run(repo, con)
+        stale = con.execute(
+            "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+            " AND payload_json = '\"stale\"'"
+        ).fetchone()[0]
+        total = con.execute(
+            "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+        ).fetchone()[0]
     finally:
         con.close()
-    assert out["status"] == "not-enforceable"
-    assert "mixed-language" in out["reason"]
-
-
+    assert out["status"] == "partial"
+    assert set(out["languages"]) == {"py", "ts"}
+    assert out["languages"]["py"]["status"] == "not-enforceable"
+    assert out["languages"]["ts"]["status"] == "ok"
+    assert out["languages"]["ts"]["contracts"] == 1
+    assert out["languages"]["ts"]["violations"] == 1
+    assert out["languages"]["ts"]["findings_written"] == 1
+    assert out["cross_language_edges"] == []
+    assert out["cross_language_edge_groups_total"] == 0
+    assert stale == 0  # 分治单次清场：陈旧 findings 已清
+    assert total == 1  # 只剩本 run 新写（单语言引擎不清他语言 findings）
 def test_run_ts_cli_enforce_wiring(tmp_path, monkeypatch, capsys):
     from vrp import cli
 

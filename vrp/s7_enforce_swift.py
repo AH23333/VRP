@@ -588,8 +588,10 @@ def _write_findings(
     con: sqlite3.Connection,
     violations: list[dict],
     structure_status: str,
+    replace: bool = True,
 ) -> dict:
-    con.execute("DELETE FROM findings WHERE source = ?", (FINDINGS_SOURCE,))
+    if replace:  # C7 ② 分治混仓：单次清场由分治入口负责，此处只插不删
+        con.execute("DELETE FROM findings WHERE source = ?", (FINDINGS_SOURCE,))
     rows = []
     anchored = 0
     for v in violations:
@@ -643,6 +645,7 @@ def run_swift(
     structure_status: str,
     containers: dict[str, list[str]],
     timeout: int = DEFAULT_TIMEOUT,
+    replace: bool = True,
 ) -> dict:
     """Swift 执法入口：契约生成（复用层 DAG）→ Package.swift 权威 target 图
     → BFS 违例 → P9（幂等）。
@@ -724,7 +727,7 @@ def run_swift(
         dropped = sum(1 for v in violations if v["file_path"] is None)
         violations = [v for v in violations if v["file_path"] is not None]
         summary["unanchored_dropped"] = dropped
-    written = _write_findings(con, violations, structure_status)
+    written = _write_findings(con, violations, structure_status, replace=replace)
     return {
         **summary,
         "status": "ok",

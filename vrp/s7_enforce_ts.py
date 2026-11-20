@@ -202,9 +202,10 @@ def parse_violations(stdout: str) -> tuple[list[dict], dict]:
     return violations, subset
 
 
-def _write_findings(con: sqlite3.Connection, violations: list[dict], contracts: list[dict], structure_status: str) -> dict:
+def _write_findings(con: sqlite3.Connection, violations: list[dict], contracts: list[dict], structure_status: str, replace: bool = True) -> dict:
     """违例 → P9 findings（幂等 replace-all）；锚定=违例文件首符号。"""
-    con.execute("DELETE FROM findings WHERE source = ?", (FINDINGS_SOURCE,))
+    if replace:  # C7 ② 分治混仓：单次清场由分治入口负责，此处只插不删
+        con.execute("DELETE FROM findings WHERE source = ?", (FINDINGS_SOURCE,))
     by_name = {c["name"]: c for c in contracts}
     rows = []
     anchored = 0
@@ -258,6 +259,7 @@ def run_ts(
     structure_status: str,
     containers: dict[str, list[str]],
     timeout: int = DEFAULT_TIMEOUT,
+    replace: bool = True,
 ) -> dict:
     """TS/JS 执法入口：契约生成（复用层 DAG）→ depcruise → P9 findings（幂等）。"""
     repo = Path(repo)
@@ -330,7 +332,7 @@ def run_ts(
             "reason": "depcruise output is not valid JSON",
             "stdout_tail": stdout[-500:],
         }
-    written = _write_findings(con, violations, contracts, structure_status)
+    written = _write_findings(con, violations, contracts, structure_status, replace=replace)
     return {
         **summary,
         "status": "ok",

@@ -534,8 +534,8 @@ def test_run_routes_objc(tmp_path):
     assert out["anchored"] == 1
 
 
-def test_run_mixed_c_and_objc_not_enforceable(tmp_path):
-    """真混仓（.c 源文件 + .m 并存）→ c + objc 诚实 not-enforceable。"""
+def test_run_mixed_c_and_objc_divide_and_conquer(tmp_path):
+    """真混仓（.c 源文件 + .m 并存）分治（C7）：c + objc 双引擎并跑——objc 违例\n    如期落库，c 侧无契约可派生诚实 not-enforceable，整体 partial。"""
     repo = _mk_objc_repo(tmp_path)
     con = _con(repo)
     con.execute(
@@ -554,16 +554,35 @@ def test_run_mixed_c_and_objc_not_enforceable(tmp_path):
         ],
     }, ensure_ascii=False),))
     con.commit()
+    con.execute(  # 陈旧 findings 先行：分治单次清场锚
+        "INSERT INTO findings (pathology, kind, source, payload_json)"
+        " VALUES ('P9', 'layer-violation', 's7-enforce', '\"stale\"')"
+    )
+    con.commit()
     try:
         out = s7_enforce.run(repo, con)
+        stale = con.execute(
+            "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+            " AND payload_json = '\"stale\"'"
+        ).fetchone()[0]
+        total = con.execute(
+            "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+        ).fetchone()[0]
     finally:
         con.close()
-    assert out["status"] == "not-enforceable"
-    assert "mixed-language" in out["reason"]
-    assert "c + objc" in out["reason"]
-
-
-def test_run_mixed_objc_and_py_not_enforceable(tmp_path):
+    assert out["status"] == "partial"
+    assert set(out["languages"]) == {"c", "objc"}
+    assert out["languages"]["c"]["status"] == "not-enforceable"
+    assert out["languages"]["objc"]["status"] == "ok"
+    assert out["languages"]["objc"]["contracts"] == 1
+    assert out["languages"]["objc"]["violations"] == 1
+    assert out["languages"]["objc"]["findings_written"] == 1
+    assert out["cross_language_edges"] == []
+    assert out["cross_language_edge_groups_total"] == 0
+    assert stale == 0  # 分治单次清场：陈旧 findings 已清
+    assert total == 1  # 只剩本 run 新写（单语言引擎不清他语言 findings）
+def test_run_mixed_objc_and_py_divide_and_conquer(tmp_path):
+    """混仓分治（C7）：py + objc 双语言并跑——objc 违例如期落库，py 侧（无真实\n    .py 文件）无契约可派生诚实 not-enforceable，整体 partial；分治单次清场清\n    陈旧 findings（写面互斥回归核心件）。"""
     repo = _mk_objc_repo(tmp_path)
     con = _con(repo)
     con.execute(
@@ -582,15 +601,33 @@ def test_run_mixed_objc_and_py_not_enforceable(tmp_path):
         ],
     }, ensure_ascii=False),))
     con.commit()
+    con.execute(  # 陈旧 findings 先行：分治单次清场锚
+        "INSERT INTO findings (pathology, kind, source, payload_json)"
+        " VALUES ('P9', 'layer-violation', 's7-enforce', '\"stale\"')"
+    )
+    con.commit()
     try:
         out = s7_enforce.run(repo, con)
+        stale = con.execute(
+            "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+            " AND payload_json = '\"stale\"'"
+        ).fetchone()[0]
+        total = con.execute(
+            "SELECT COUNT(*) FROM findings WHERE source = 's7-enforce'"
+        ).fetchone()[0]
     finally:
         con.close()
-    assert out["status"] == "not-enforceable"
-    assert "mixed-language" in out["reason"]
-    assert "py + objc" in out["reason"]
-
-
+    assert out["status"] == "partial"
+    assert set(out["languages"]) == {"py", "objc"}
+    assert out["languages"]["py"]["status"] == "not-enforceable"
+    assert out["languages"]["objc"]["status"] == "ok"
+    assert out["languages"]["objc"]["contracts"] == 1
+    assert out["languages"]["objc"]["violations"] == 1
+    assert out["languages"]["objc"]["findings_written"] == 1
+    assert out["cross_language_edges"] == []
+    assert out["cross_language_edge_groups_total"] == 0
+    assert stale == 0  # 分治单次清场：陈旧 findings 已清
+    assert total == 1  # 只剩本 run 新写（单语言引擎不清他语言 findings）
 def test_cli_enforce_objc_wiring(tmp_path, capsys):
     repo = _mk_objc_repo(tmp_path)
     rc = cli.main(["enforce", str(repo)])

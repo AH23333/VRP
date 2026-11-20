@@ -54,7 +54,12 @@ def test_assess_mixed_language_warning(tmp_path):
     repo = _mkrepo(tmp_path, {"a.py": "x = 1\n", "b.ts": "const b = 1;\n"})
     result = assess_mod.assess(repo)
     assert {e["engine"] for e in result["engines"]["s7"]} == {"py", "ts"}
-    assert any("mixed-language (py+ts)" in w for w in result["warnings"])
+    assert any(
+        "mixed-language (py+ts)" in w
+        and "divide-and-conquer" in w
+        and "not-enforceable" not in w
+        for w in result["warnings"]
+    )  # C7 D7：分治执法提示（去 not-enforceable 旧文案）
 
 
 def test_assess_content_repo_skip(tmp_path):

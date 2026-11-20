@@ -39,7 +39,7 @@ C# 引擎；.kt 符号 → Kotlin 引擎；.c/.cc/.cpp/.h 等符号 → C/C++ �
 文件时归 ObjC 引擎）；.m/.mm 符号 → ObjC 引擎；
 .php 符号 → PHP 引擎；.scala 符号 → Scala 引擎；.rb 符号 → Ruby 引擎；
 .dart 符号 → Dart 引擎；.swift 符号 → Swift 引擎；.zig 符号 → Zig 引擎；
-.lua 符号 → Lua 引擎；.pl/.pm/.t 符号 → Perl 引擎；.erl 符号 → Erlang 引擎；.R 符号 → R 引擎；.clj/.cljc 符号 → Clojure 引擎；.ml/.mli 符号 → OCaml 引擎；混语言 not-enforceable。
+.lua 符号 → Lua 引擎；.pl/.pm/.t 符号 → Perl 引擎；.erl 符号 → Erlang 引擎；.R 符号 → R 引擎；.clj/.cljc 符号 → Clojure 引擎；.ml/.mli 符号 → OCaml 引擎；混语言分治（C7）：langs>1 时逐语言引擎并跑（分治入口单次清场+各引擎只插不删），跨语言边只入 result 不写 findings，status 聚合（全 ok→ok/全同态→该态/否则 partial）。
 
 探针事实（work/probe_r4_importlinter.py + probe_r4_forbidden.py，2026-11-05）：
 - rc 0=kept / 1=broken；rc 1 且 stdout 无 "Broken contracts" 块 = 配置/环境
@@ -422,8 +422,9 @@ def _anchor_for(con: sqlite3.Connection, file_path: str | None, line: int) -> st
     return row[0] if row else None
 
 
-def _write_findings(con: sqlite3.Connection, violations: list[dict], contracts: list[dict], structure_status: str) -> dict:
-    con.execute("DELETE FROM findings WHERE source = ?", (FINDINGS_SOURCE,))
+def _write_findings(con: sqlite3.Connection, violations: list[dict], contracts: list[dict], structure_status: str, replace: bool = True) -> dict:
+    if replace:  # C7 ② 分治混仓：单次清场由分治入口负责，此处只插不删
+        con.execute("DELETE FROM findings WHERE source = ?", (FINDINGS_SOURCE,))
     by_name = {c["name"]: c for c in contracts}
     rows = []
     anchored = 0
@@ -473,361 +474,18 @@ def _write_findings(con: sqlite3.Connection, violations: list[dict], contracts: 
     return {"findings_written": len(rows), "anchored": anchored}
 
 
-def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> dict:
-    """执法入口：structure(active) → 契约生成 → lint-imports → P9 findings（幂等）。"""
-    repo = Path(repo)
+def _run_py(
+    repo: Path,
+    con: sqlite3.Connection,
+    payload: dict,
+    structure_status: str,
+    derived: dict,
+    timeout: int = DEFAULT_TIMEOUT,
+    replace: bool = True,
+) -> dict:
+    """Python 引擎路径（import-linter）：自 run() 内联路径原样提取（C7 ①）。"""
     base = {"step": "s7-enforce"}
-    info = curate_mod.get_structure(con)
-    if info is None or info["payload"] is None:
-        return {
-            **base,
-            "status": "skipped",
-            "reason": "no ingested structure (run 'vrp curate' first)",
-        }
-    payload = info["payload"]
-    structure_status = info["status"]
-    if structure_status != "active":
-        return {
-            **base,
-            "status": "skipped",
-            "reason": f"structure status={structure_status} (only active is enforceable)",
-        }
-    derived = derive_containers(con, payload)
     containers = derived["containers"]
-    from .s7_enforce_ts import derive_ts_containers, run_ts  # 惰性导入防环（ts 模块顶层反向 import 本模块）
-    from .s7_enforce_go import derive_go_containers, run_go  # 惰性导入防环（go 模块 import 本模块常量）
-    from .s7_enforce_rs import derive_rs_containers, run_rs  # 惰性导入防环（rs 模块 import 本模块常量）
-    from .s7_enforce_java import derive_java_containers, run_java  # 惰性导入防环（java 模块 import 本模块常量）
-    from .s7_enforce_cs import derive_cs_containers, run_cs  # 惰性导入防环（cs 模块 import 本模块常量）
-    from .s7_enforce_kt import derive_kt_containers, run_kt  # 惰性导入防环（kt 模块 import 本模块常量）
-    from .s7_enforce_c import derive_c_containers, run_c  # 惰性导入防环（c 模块 import 本模块常量）
-    from .s7_enforce_php import derive_php_containers, run_php  # 惰性导入防环（php 模块 import 本模块常量）
-    from .s7_enforce_scala import derive_scala_containers, run_scala  # 惰性导入防环（scala 模块 import 本模块常量）
-    from .s7_enforce_ruby import derive_ruby_containers, run_ruby  # 惰性导入防环（ruby 模块 import 本模块常量）
-    from .s7_enforce_dart import derive_dart_containers, run_dart  # 惰性导入防环（dart 模块 import 本模块常量）
-    from .s7_enforce_swift import derive_swift_containers, run_swift  # 惰性导入防环（swift 模块 import 本模块常量）
-    from .s7_enforce_zig import derive_zig_containers, run_zig  # 惰性导入防环（zig 模块 import 本模块常量）
-    from .s7_enforce_lua import derive_lua_containers, run_lua  # 惰性导入防环（lua 模块 import 本模块常量）
-    from .s7_enforce_objc import derive_objc_containers, run_objc  # 惰性导入防环（objc 模块 import 本模块常量）
-    from .s7_enforce_perl import derive_perl_containers, run_perl  # 惰性导入防环（perl 模块 import 本模块常量）
-    from .s7_enforce_erlang import derive_erlang_containers, run_erlang  # 惰性导入防环（erlang 模块 import 本模块常量）
-    from .s7_enforce_r import derive_r_containers, run_r  # 惰性导入防环（r 模块 import 本模块常量）
-    from .s7_enforce_clj import derive_clj_containers, run_clj  # 惰性导入防环（clj 模块 import 本模块常量）
-    from .s7_enforce_ocaml import derive_ocaml_containers, run_ocaml  # 惰性导入防环（ocaml 模块 import 本模块常量）
-
-    ts_derived = derive_ts_containers(con, payload)
-    go_derived = derive_go_containers(con, payload)
-    rs_derived = derive_rs_containers(repo, con, payload, timeout)
-    java_derived = derive_java_containers(repo, con, payload, timeout)
-    cs_derived = derive_cs_containers(repo, con, payload, timeout)
-    kt_derived = derive_kt_containers(repo, con, payload, timeout)
-    c_derived = derive_c_containers(con, payload)
-    php_derived = derive_php_containers(repo, con, payload, timeout)
-    scala_derived = derive_scala_containers(repo, con, payload, timeout)
-    ruby_derived = derive_ruby_containers(repo, con, payload, timeout)
-    dart_derived = derive_dart_containers(repo, con, payload, timeout)
-    swift_derived = derive_swift_containers(repo, con, payload)
-    zig_derived = derive_zig_containers(repo, con, payload)
-    lua_derived = derive_lua_containers(repo, con, payload)
-    objc_derived = derive_objc_containers(con, payload)
-    perl_derived = derive_perl_containers(repo, con, payload, timeout)
-    erlang_derived = derive_erlang_containers(repo, con, payload, timeout)
-    r_derived = derive_r_containers(repo, con, payload, timeout)
-    clj_derived = derive_clj_containers(repo, con, payload, timeout)
-    ocaml_derived = derive_ocaml_containers(con, payload)
-    has_py = any(containers.values())
-    has_ts = any(ts_derived["containers"].values())
-    has_go = any(go_derived["containers"].values())
-    has_rs = rs_derived["rs_files"] > 0
-    has_java = java_derived["java_files"] > 0
-    has_cs = cs_derived["cs_files"] > 0
-    has_kt = kt_derived["kt_files"] > 0
-    has_php = php_derived["php_files"] > 0
-    has_scala = scala_derived["scala_files"] > 0
-    has_ruby = ruby_derived["ruby_files"] > 0
-    has_dart = dart_derived["dart_files"] > 0
-    has_swift = swift_derived["swift_files"] > 0
-    has_zig = zig_derived["zig_files"] > 0
-    has_lua = lua_derived["lua_files"] > 0
-    has_objc = objc_derived["objc_files"] > 0
-    has_perl = perl_derived["perl_files"] > 0
-    has_erlang = erlang_derived["erlang_files"] > 0
-    has_r = r_derived["r_files"] > 0
-    has_clj = clj_derived["clj_files"] > 0
-    has_ocaml = ocaml_derived["ocaml_files"] > 0
-    # .h 归属：.m/.mm 在仓（has_objc）且无 C 源文件时 .h 归 objc 引擎——
-    # 纯 ObjC 仓（.h+.m）不算 c 混仓；.c 与 .m 并存则诚实 c+objc 混仓
-    has_c = c_derived["c_files"] > 0 and (
-        c_derived.get("c_source_files", 0) > 0 or not has_objc
-    )
-    langs = [
-        name
-        for name, present in (
-            ("py", has_py),
-            ("ts", has_ts),
-            ("go", has_go),
-            ("rs", has_rs),
-            ("java", has_java),
-            ("cs", has_cs),
-            ("kt", has_kt),
-            ("c", has_c),
-            ("objc", has_objc),
-            ("php", has_php),
-            ("scala", has_scala),
-            ("ruby", has_ruby),
-            ("dart", has_dart),
-            ("swift", has_swift),
-            ("zig", has_zig),
-            ("lua", has_lua),
-            ("perl", has_perl),
-            ("erlang", has_erlang),
-            ("r", has_r),
-            ("clj", has_clj),
-            ("ocaml", has_ocaml),
-        )
-        if present
-    ]
-    if len(langs) > 1:
-        return {
-            **base,
-            "structure_status": structure_status,
-            "status": "not-enforceable",
-            "reason": (
-                f"mixed-language structure ({' + '.join(langs)}):"
-                " split per language into separate structures"
-            ),
-        }
-    if has_go:
-        return run_go(repo, con, payload, structure_status, go_derived["containers"], timeout)
-    if has_rs:
-        if rs_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"rust mod tree build exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_rs(repo, con, payload, structure_status, rs_derived["containers"], timeout)
-        if rs_derived.get("orphan_files"):
-            result["orphan_rs_files"] = rs_derived["orphan_files"]
-        return result
-    if has_java:
-        if java_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"java scan exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_java(repo, con, payload, structure_status, java_derived["containers"], timeout)
-        if java_derived.get("orphan_files"):
-            result["orphan_java_files"] = java_derived["orphan_files"]
-        return result
-    if has_cs:
-        if cs_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"c# scan exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_cs(repo, con, payload, structure_status, cs_derived["containers"], timeout)
-        if cs_derived.get("orphan_files"):
-            result["orphan_cs_files"] = cs_derived["orphan_files"]
-        return result
-    if has_kt:
-        if kt_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"kotlin scan exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_kt(repo, con, payload, structure_status, kt_derived["containers"], timeout)
-        if kt_derived.get("orphan_files"):
-            result["orphan_kt_files"] = kt_derived["orphan_files"]
-        return result
-    if has_c:
-        return run_c(repo, con, payload, structure_status, c_derived["containers"], timeout)
-    if has_objc:
-        return run_objc(repo, con, payload, structure_status, objc_derived["containers"], timeout)
-    if has_perl:
-        if perl_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"perl scan exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_perl(repo, con, payload, structure_status, perl_derived["containers"], timeout)
-        if perl_derived.get("orphan_files"):
-            result["orphan_perl_files"] = perl_derived["orphan_files"]
-        return result
-    if has_erlang:
-        if erlang_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"erlang scan exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_erlang(repo, con, payload, structure_status, erlang_derived["containers"], timeout)
-        if erlang_derived.get("orphan_files"):
-            result["orphan_erlang_files"] = erlang_derived["orphan_files"]
-        return result
-    if has_r:
-        if r_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"r scan exceeded {timeout}s (partial results discarded)",
-            }
-        return run_r(repo, con, payload, structure_status, r_derived["containers"], timeout)
-    if has_clj:
-        if clj_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"clojure scan exceeded {timeout}s (partial results discarded)",
-            }
-        return run_clj(repo, con, payload, structure_status, clj_derived["containers"], timeout)
-    if has_ocaml:
-        return run_ocaml(repo, con, payload, structure_status, ocaml_derived["containers"], timeout)
-    if has_php:
-        if php_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"php scan exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_php(repo, con, payload, structure_status, php_derived["containers"], timeout)
-        if php_derived.get("orphan_files"):
-            result["orphan_php_files"] = php_derived["orphan_files"]
-        return result
-    if has_scala:
-        if scala_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"scala scan exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_scala(repo, con, payload, structure_status, scala_derived["containers"], timeout)
-        if scala_derived.get("orphan_files"):
-            result["orphan_scala_files"] = scala_derived["orphan_files"]
-        return result
-    if has_ruby:
-        if ruby_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"ruby scan exceeded {timeout}s (partial results discarded)",
-            }
-        result = run_ruby(repo, con, payload, structure_status, ruby_derived["containers"], timeout)
-        if ruby_derived.get("orphan_files"):
-            result["orphan_ruby_files"] = ruby_derived["orphan_files"]
-        return result
-    if has_dart:
-        if dart_derived.get("timed_out"):
-            return {
-                **base,
-                "structure_status": structure_status,
-                "status": "enforcer-failed",
-                "reason": f"dart scan exceeded {timeout}s (partial results discarded)",
-            }
-        return run_dart(repo, con, payload, structure_status, dart_derived["containers"], timeout)
-    if has_swift:
-        return run_swift(repo, con, payload, structure_status, swift_derived["containers"], timeout)
-    if has_zig:
-        return run_zig(repo, con, payload, structure_status, zig_derived["containers"], timeout)
-    if has_lua:
-        return run_lua(repo, con, payload, structure_status, lua_derived["containers"], timeout)
-    if has_ts:
-        return run_ts(repo, con, payload, structure_status, ts_derived["containers"], timeout)
-    if not has_py:
-        if (
-            derived["extensions"]
-            or ts_derived["extensions"]
-            or go_derived["extensions"]
-            or rs_derived["extensions"]
-            or java_derived["extensions"]
-            or cs_derived["extensions"]
-            or kt_derived["extensions"]
-            or c_derived["extensions"]
-            or php_derived["extensions"]
-            or scala_derived["extensions"]
-            or ruby_derived["extensions"]
-            or dart_derived["extensions"]
-            or swift_derived["extensions"]
-            or zig_derived["extensions"]
-            or lua_derived["extensions"]
-            or objc_derived["extensions"]
-            or perl_derived["extensions"]
-            or erlang_derived["extensions"]
-                    or r_derived["extensions"]
-                    or clj_derived["extensions"]
-                    or ocaml_derived["extensions"]
-        ):
-            seen = ", ".join(
-                sorted(
-                    set(derived["extensions"])
-                    | set(ts_derived["extensions"])
-                    | set(go_derived["extensions"])
-                    | set(rs_derived["extensions"])
-                    | set(java_derived["extensions"])
-                    | set(cs_derived["extensions"])
-                    | set(kt_derived["extensions"])
-                    | set(c_derived["extensions"])
-                    | set(php_derived["extensions"])
-                    | set(scala_derived["extensions"])
-                    | set(ruby_derived["extensions"])
-                    | set(dart_derived["extensions"])
-                    | set(swift_derived["extensions"])
-                    | set(zig_derived["extensions"])
-                    | set(lua_derived["extensions"])
-                    | set(objc_derived["extensions"])
-                    | set(perl_derived["extensions"])
-                    | set(erlang_derived["extensions"])
-                    | set(r_derived["extensions"])
-                    | set(clj_derived["extensions"])
-                    | set(ocaml_derived["extensions"])
-                )
-            )
-            return {
-                **base,
-                "status": "language-unsupported",
-                "reason": (
-                    f"no enforceable containers (seen: {seen}); supported: .py (import-linter),"
-                    " .ts/.tsx/.js/.jsx/.mjs/.cjs (dependency-cruiser), .go (go list),"
-                    " .rs (built-in use parser), .java (built-in package/import parser),"
-                    " .cs (built-in namespace/using parser), .kt (built-in package/import parser),"
-                    " .c/.cc/.cpp/.h etc. (built-in include parser),"
-                    " .php (built-in namespace/use parser),"
-                    " .scala (built-in package/import parser),"
-                    " .rb (built-in module/require parser),"
-                    " .dart (built-in import parser),"
-                    " .swift (built-in Package.swift target parser),"
-                    " .zig (built-in @import parser),"
-                    " .lua (built-in require parser),"
-                    " .m/.mm (built-in #import parser),"
-                    " .pl/.pm (built-in package/use parser),"
-                    " .erl (built-in module/call parser),"
-                    " .r/.R (built-in source/package parser),"
-                    " .clj/.cljc (built-in namespace/require parser),"
-                    " .ml/.mli (built-in module/open parser)"
-                ),
-                "structure_status": structure_status,
-            }
-        return {
-            **base,
-            "status": "not-enforceable",
-            "reason": "no containers resolved from symbol_fids",
-            "structure_status": structure_status,
-        }
     built = build_contracts(payload, containers)
     contracts = built["contracts"]
     summary = {
@@ -895,7 +553,7 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
     stats = _STATS.search(stdout)
     kept = int(stats.group(1)) if stats else None
     broken = int(stats.group(2)) if stats else None
-    written = _write_findings(con, violations, contracts, structure_status)
+    written = _write_findings(con, violations, contracts, structure_status, replace=replace)
     return {
         **summary,
         "status": "ok",
@@ -905,3 +563,370 @@ def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> 
         "violations": len(violations),
         **written,
     }
+
+
+def _cross_language_edges(
+    con: sqlite3.Connection, payload: dict, langs: list[str]
+) -> dict:
+    """跨语言依赖边关联上报（C7 §4）：edges ⋈ symbols，只读，不写 findings。
+
+    语言分类复用 assess._s7_engine_suffixes() 后缀集合（#89 单一事实源），
+    只认本次分治 langs 内的引擎——.h 等多引擎竞争后缀按运行时归属解析
+    （仅 c 在 langs → .h 归 c；仅 objc → 归 objc；c+objc 并存 → .h 双命中
+    =歧义，跳过不猜）。模块归属：modules[].symbol_fids → fid→模块集合
+    （一 fid 可属多模块，模块对全组合上报）。只上报两端均属 structure
+    声明模块的边（未关联文件的跨语言边是索引面噪音，结构执法面不收）；
+    跨语言边不参与层判定——不产生 P9 findings，只入 result。
+    """
+    from .assess import _s7_engine_suffixes
+
+    suffixes = _s7_engine_suffixes()
+    lang_exts = {lang: set(suffixes.get(lang, ())) for lang in langs}
+    fid_to_mods: dict[str, set[str]] = {}
+    for mod in payload.get("modules", []):
+        if isinstance(mod, dict) and isinstance(mod.get("module_id"), str):
+            for fid in mod.get("symbol_fids", []):
+                if isinstance(fid, str):
+                    fid_to_mods.setdefault(fid, set()).add(mod["module_id"])
+    if not fid_to_mods:
+        return {"groups": [], "total": 0}
+    fid_lang: dict[str, str] = {}
+    fids = list(fid_to_mods)
+    for i in range(0, len(fids), 500):
+        chunk = fids[i : i + 500]
+        for fid, file_path in con.execute(
+            "SELECT fid, file_path FROM symbols WHERE fid IN (%s)"
+            % ",".join("?" * len(chunk)),
+            chunk,
+        ):
+            if not file_path:
+                continue
+            ext = Path(file_path.replace("\\", "/")).suffix.lower()
+            matched = [lang for lang in langs if ext in lang_exts[lang]]
+            if len(matched) == 1:
+                fid_lang[fid] = matched[0]
+    groups: dict[tuple[str, str, str, str], dict] = {}
+    for src_fid, dst_fid, edge_type in con.execute(
+        "SELECT src_fid, dst_fid, type FROM edges"
+    ):
+        src_lang = fid_lang.get(src_fid)
+        dst_lang = fid_lang.get(dst_fid)
+        if not src_lang or not dst_lang or src_lang == dst_lang:
+            continue
+        src_mods = sorted(fid_to_mods.get(src_fid, ()))
+        dst_mods = sorted(fid_to_mods.get(dst_fid, ()))
+        if not src_mods or not dst_mods:
+            continue
+        for sm in src_mods:
+            for dm in dst_mods:
+                key = (sm, dm, src_lang, dst_lang)
+                group = groups.get(key)
+                if group is None:
+                    group = {
+                        "src_module": sm,
+                        "dst_module": dm,
+                        "src_lang": src_lang,
+                        "dst_lang": dst_lang,
+                        "count": 0,
+                        "types": {},
+                        "sample_edge": {
+                            "src_fid": src_fid,
+                            "dst_fid": dst_fid,
+                            "type": edge_type,
+                        },
+                    }
+                    groups[key] = group
+                group["count"] += 1
+                group["types"][edge_type] = group["types"].get(edge_type, 0) + 1
+    ordered = sorted(
+        groups.values(),
+        key=lambda g: (
+            -g["count"],
+            g["src_module"],
+            g["dst_module"],
+            g["src_lang"],
+            g["dst_lang"],
+        ),
+    )
+    return {"groups": ordered, "total": len(ordered)}
+
+
+_CROSS_EDGE_CAP = 100
+
+
+def _run_mixed(
+    repo: Path,
+    con: sqlite3.Connection,
+    payload: dict,
+    structure_status: str,
+    langs: list[str],
+    derived: dict,
+    engines: list,
+    timeout: int,
+) -> dict:
+    """混仓分治执法（C7 §3）：单次清场 → 逐语言引擎（只插不删）→ 跨语言边 → 聚合。
+
+    单次清场保持工具级 replace-all 语义（一次 run 一次清场，与单语言
+    run 等价）；每语言 run_X(replace=False) 只插不删——多语言 findings
+    并存是本特性的核心交付（旧"混仓 not-enforceable"缺口闭合）。timeout
+    per-engine 全额不均摊（单语言行为不随仓形态漂移），分治 wall clock
+    最坏 N×timeout 诚实记档。status 聚合：全 ok→ok；全同态→该态；
+    否则 partial（新 status 值，消费面已核安全）。跨语言边 top 100 cap
+    + 诚实总组数。
+    """
+    base = {"step": "s7-enforce"}
+    con.execute("DELETE FROM findings WHERE source = ?", (FINDINGS_SOURCE,))
+    con.commit()
+    by_name = {name: row for name, *row in engines}
+    languages: dict[str, dict] = {}
+    for lang in langs:  # langs 固定序：确定性执行序与呈现序
+        if lang == "py":
+            languages[lang] = _run_py(
+                repo, con, payload, structure_status, derived, timeout, replace=False
+            )
+            continue
+        eng_derived, timeout_reason, orphan_key, run_fn = by_name[lang]
+        if timeout_reason and eng_derived.get("timed_out"):
+            languages[lang] = {
+                **base,
+                "structure_status": structure_status,
+                "status": "enforcer-failed",
+                "reason": timeout_reason,
+            }
+            continue
+        result = run_fn(
+            repo,
+            con,
+            payload,
+            structure_status,
+            eng_derived["containers"],
+            timeout,
+            replace=False,
+        )
+        if orphan_key and eng_derived.get("orphan_files"):
+            result[orphan_key] = eng_derived["orphan_files"]
+        languages[lang] = result
+    cross = _cross_language_edges(con, payload, langs)
+    statuses = {result["status"] for result in languages.values()}
+    if statuses == {"ok"}:
+        status = "ok"
+    elif len(statuses) == 1:
+        status = statuses.pop()
+    else:
+        status = "partial"
+    out: dict = {
+        **base,
+        "structure_status": structure_status,
+        "status": status,
+        "languages": languages,
+        "cross_language_edges": cross["groups"][:_CROSS_EDGE_CAP],
+        "cross_language_edge_groups_total": cross["total"],
+        "timeout_note": (
+            f"per-engine timeout {timeout}s each;"
+            f" mixed wall clock worst case {len(langs) * timeout}s"
+        ),
+    }
+    if all(isinstance(r.get("violations"), int) for r in languages.values()):
+        out["violations"] = sum(r["violations"] for r in languages.values())
+    if all(isinstance(r.get("findings_written"), int) for r in languages.values()):
+        out["findings_written"] = sum(
+            r["findings_written"] for r in languages.values()
+        )
+        out["anchored"] = sum(r["anchored"] for r in languages.values())
+    return out
+
+
+def run(repo: Path, con: sqlite3.Connection, timeout: int = DEFAULT_TIMEOUT) -> dict:
+    """执法入口：structure(active) → 契约生成 → lint-imports → P9 findings（幂等）。
+
+    单语言走该语言引擎（字节级不变）；混语言（langs>1）分治（C7）：
+    单次清场 → 逐语言引擎只插不删 → 跨语言边上报 → status 聚合。
+    """
+    repo = Path(repo)
+    base = {"step": "s7-enforce"}
+    info = curate_mod.get_structure(con)
+    if info is None or info["payload"] is None:
+        return {
+            **base,
+            "status": "skipped",
+            "reason": "no ingested structure (run 'vrp curate' first)",
+        }
+    payload = info["payload"]
+    structure_status = info["status"]
+    if structure_status != "active":
+        return {
+            **base,
+            "status": "skipped",
+            "reason": f"structure status={structure_status} (only active is enforceable)",
+        }
+    derived = derive_containers(con, payload)
+    containers = derived["containers"]
+    from .s7_enforce_ts import derive_ts_containers, run_ts  # 惰性导入防环（ts 模块顶层反向 import 本模块）
+    from .s7_enforce_go import derive_go_containers, run_go  # 惰性导入防环（go 模块 import 本模块常量）
+    from .s7_enforce_rs import derive_rs_containers, run_rs  # 惰性导入防环（rs 模块 import 本模块常量）
+    from .s7_enforce_java import derive_java_containers, run_java  # 惰性导入防环（java 模块 import 本模块常量）
+    from .s7_enforce_cs import derive_cs_containers, run_cs  # 惰性导入防环（cs 模块 import 本模块常量）
+    from .s7_enforce_kt import derive_kt_containers, run_kt  # 惰性导入防环（kt 模块 import 本模块常量）
+    from .s7_enforce_c import derive_c_containers, run_c  # 惰性导入防环（c 模块 import 本模块常量）
+    from .s7_enforce_php import derive_php_containers, run_php  # 惰性导入防环（php 模块 import 本模块常量）
+    from .s7_enforce_scala import derive_scala_containers, run_scala  # 惰性导入防环（scala 模块 import 本模块常量）
+    from .s7_enforce_ruby import derive_ruby_containers, run_ruby  # 惰性导入防环（ruby 模块 import 本模块常量）
+    from .s7_enforce_dart import derive_dart_containers, run_dart  # 惰性导入防环（dart 模块 import 本模块常量）
+    from .s7_enforce_swift import derive_swift_containers, run_swift  # 惰性导入防环（swift 模块 import 本模块常量）
+    from .s7_enforce_zig import derive_zig_containers, run_zig  # 惰性导入防环（zig 模块 import 本模块常量）
+    from .s7_enforce_lua import derive_lua_containers, run_lua  # 惰性导入防环（lua 模块 import 本模块常量）
+    from .s7_enforce_objc import derive_objc_containers, run_objc  # 惰性导入防环（objc 模块 import 本模块常量）
+    from .s7_enforce_perl import derive_perl_containers, run_perl  # 惰性导入防环（perl 模块 import 本模块常量）
+    from .s7_enforce_erlang import derive_erlang_containers, run_erlang  # 惰性导入防环（erlang 模块 import 本模块常量）
+    from .s7_enforce_r import derive_r_containers, run_r  # 惰性导入防环（r 模块 import 本模块常量）
+    from .s7_enforce_clj import derive_clj_containers, run_clj  # 惰性导入防环（clj 模块 import 本模块常量）
+    from .s7_enforce_ocaml import derive_ocaml_containers, run_ocaml  # 惰性导入防环（ocaml 模块 import 本模块常量）
+
+    ts_derived = derive_ts_containers(con, payload)
+    go_derived = derive_go_containers(con, payload)
+    rs_derived = derive_rs_containers(repo, con, payload, timeout)
+    java_derived = derive_java_containers(repo, con, payload, timeout)
+    cs_derived = derive_cs_containers(repo, con, payload, timeout)
+    kt_derived = derive_kt_containers(repo, con, payload, timeout)
+    c_derived = derive_c_containers(con, payload)
+    php_derived = derive_php_containers(repo, con, payload, timeout)
+    scala_derived = derive_scala_containers(repo, con, payload, timeout)
+    ruby_derived = derive_ruby_containers(repo, con, payload, timeout)
+    dart_derived = derive_dart_containers(repo, con, payload, timeout)
+    swift_derived = derive_swift_containers(repo, con, payload)
+    zig_derived = derive_zig_containers(repo, con, payload)
+    lua_derived = derive_lua_containers(repo, con, payload)
+    objc_derived = derive_objc_containers(con, payload)
+    perl_derived = derive_perl_containers(repo, con, payload, timeout)
+    erlang_derived = derive_erlang_containers(repo, con, payload, timeout)
+    r_derived = derive_r_containers(repo, con, payload, timeout)
+    clj_derived = derive_clj_containers(repo, con, payload, timeout)
+    ocaml_derived = derive_ocaml_containers(con, payload)
+    has = {
+        "py": any(containers.values()),
+        "ts": any(ts_derived["containers"].values()),
+        "go": any(go_derived["containers"].values()),
+        "rs": rs_derived["rs_files"] > 0,
+        "java": java_derived["java_files"] > 0,
+        "cs": cs_derived["cs_files"] > 0,
+        "kt": kt_derived["kt_files"] > 0,
+        "objc": objc_derived["objc_files"] > 0,
+        "php": php_derived["php_files"] > 0,
+        "scala": scala_derived["scala_files"] > 0,
+        "ruby": ruby_derived["ruby_files"] > 0,
+        "dart": dart_derived["dart_files"] > 0,
+        "swift": swift_derived["swift_files"] > 0,
+        "zig": zig_derived["zig_files"] > 0,
+        "lua": lua_derived["lua_files"] > 0,
+        "perl": perl_derived["perl_files"] > 0,
+        "erlang": erlang_derived["erlang_files"] > 0,
+        "r": r_derived["r_files"] > 0,
+        "clj": clj_derived["clj_files"] > 0,
+        "ocaml": ocaml_derived["ocaml_files"] > 0,
+    }
+    # .h 归属：.m/.mm 在仓（has["objc"]）且无 C 源文件时 .h 归 objc 引擎——
+    # 纯 ObjC 仓（.h+.m）不算 c 混仓；.c 与 .m 并存则诚实 c+objc 混仓
+    has["c"] = c_derived["c_files"] > 0 and (
+        c_derived.get("c_source_files", 0) > 0 or not has["objc"]
+    )
+    langs = [
+        name
+        for name in (
+            "py", "ts", "go", "rs", "java", "cs", "kt", "c", "objc",
+            "php", "scala", "ruby", "dart", "swift", "zig", "lua",
+            "perl", "erlang", "r", "clj", "ocaml",
+        )
+        if has[name]
+    ]
+    # 引擎分派表（C7 ①表驱动）：行 = (name, derived, timeout_reason,
+    # orphan_key, run_fn)，行序 = 旧 if 链 dispatch 序（单语言下至多一行
+    # 命中，顺序仅为转写保真；分治混仓按 langs 固定序遍历——单语言与
+    # 分治共用同一张表，唯一执行定义点，两处复写漂移面消除）。timeout_reason=None 表示无 dispatch 层
+    # 超时预检（go 超时在 run_go 内部树杀 go list 自处理；c/objc/ocaml/
+    # swift/zig/lua/ts/py 扫描无超时面）。orphan_key=None 表示无 orphan
+    # 合并面（r/clj/dart 的 orphan 只影响引擎内部跳过不透出；swift 的
+    # orphan_swift_files 由 run_swift 自带进 result；go 的 orphan 在图
+    # 构建内部消化）。
+    engines = [
+        ("go", go_derived, None, None, run_go),
+        ("rs", rs_derived, f"rust mod tree build exceeded {timeout}s (partial results discarded)", "orphan_rs_files", run_rs),
+        ("java", java_derived, f"java scan exceeded {timeout}s (partial results discarded)", "orphan_java_files", run_java),
+        ("cs", cs_derived, f"c# scan exceeded {timeout}s (partial results discarded)", "orphan_cs_files", run_cs),
+        ("kt", kt_derived, f"kotlin scan exceeded {timeout}s (partial results discarded)", "orphan_kt_files", run_kt),
+        ("c", c_derived, None, None, run_c),
+        ("objc", objc_derived, None, None, run_objc),
+        ("perl", perl_derived, f"perl scan exceeded {timeout}s (partial results discarded)", "orphan_perl_files", run_perl),
+        ("erlang", erlang_derived, f"erlang scan exceeded {timeout}s (partial results discarded)", "orphan_erlang_files", run_erlang),
+        ("r", r_derived, f"r scan exceeded {timeout}s (partial results discarded)", None, run_r),
+        ("clj", clj_derived, f"clojure scan exceeded {timeout}s (partial results discarded)", None, run_clj),
+        ("ocaml", ocaml_derived, None, None, run_ocaml),
+        ("php", php_derived, f"php scan exceeded {timeout}s (partial results discarded)", "orphan_php_files", run_php),
+        ("scala", scala_derived, f"scala scan exceeded {timeout}s (partial results discarded)", "orphan_scala_files", run_scala),
+        ("ruby", ruby_derived, f"ruby scan exceeded {timeout}s (partial results discarded)", "orphan_ruby_files", run_ruby),
+        ("dart", dart_derived, f"dart scan exceeded {timeout}s (partial results discarded)", None, run_dart),
+        ("swift", swift_derived, None, None, run_swift),
+        ("zig", zig_derived, None, None, run_zig),
+        ("lua", lua_derived, None, None, run_lua),
+        ("ts", ts_derived, None, None, run_ts),
+    ]
+    if len(langs) > 1:
+        return _run_mixed(
+            repo, con, payload, structure_status, langs, derived, engines, timeout
+        )
+    for name, eng_derived, timeout_reason, orphan_key, run_fn in engines:
+        if not has[name]:
+            continue
+        if timeout_reason and eng_derived.get("timed_out"):
+            return {
+                **base,
+                "structure_status": structure_status,
+                "status": "enforcer-failed",
+                "reason": timeout_reason,
+            }
+        result = run_fn(repo, con, payload, structure_status, eng_derived["containers"], timeout)
+        if orphan_key and eng_derived.get("orphan_files"):
+            result[orphan_key] = eng_derived["orphan_files"]
+        return result
+    if not has["py"]:
+        all_derived = (
+            derived, ts_derived, go_derived, rs_derived, java_derived, cs_derived,
+            kt_derived, c_derived, php_derived, scala_derived, ruby_derived,
+            dart_derived, swift_derived, zig_derived, lua_derived, objc_derived,
+            perl_derived, erlang_derived, r_derived, clj_derived, ocaml_derived,
+        )
+        if any(d["extensions"] for d in all_derived):
+            seen = ", ".join(
+                sorted(set().union(*(set(d["extensions"]) for d in all_derived)))
+            )
+            return {
+                **base,
+                "status": "language-unsupported",
+                "reason": (
+                    f"no enforceable containers (seen: {seen}); supported: .py (import-linter),"
+                    " .ts/.tsx/.js/.jsx/.mjs/.cjs (dependency-cruiser), .go (go list),"
+                    " .rs (built-in use parser), .java (built-in package/import parser),"
+                    " .cs (built-in namespace/using parser), .kt (built-in package/import parser),"
+                    " .c/.cc/.cpp/.h etc. (built-in include parser),"
+                    " .php (built-in namespace/use parser),"
+                    " .scala (built-in package/import parser),"
+                    " .rb (built-in module/require parser),"
+                    " .dart (built-in import parser),"
+                    " .swift (built-in Package.swift target parser),"
+                    " .zig (built-in @import parser),"
+                    " .lua (built-in require parser),"
+                    " .m/.mm (built-in #import parser),"
+                    " .pl/.pm (built-in package/use parser),"
+                    " .erl (built-in module/call parser),"
+                    " .r/.R (built-in source/package parser),"
+                    " .clj/.cljc (built-in namespace/require parser),"
+                    " .ml/.mli (built-in module/open parser)"
+                ),
+                "structure_status": structure_status,
+            }
+        return {
+            **base,
+            "status": "not-enforceable",
+            "reason": "no containers resolved from symbol_fids",
+            "structure_status": structure_status,
+        }
+    return _run_py(repo, con, payload, structure_status, derived, timeout)

@@ -164,8 +164,7 @@ def assess(repo: Path) -> dict:
         names = "+".join(e["engine"] for e in s7_engines[:3])
         warnings.append(
             f"mixed-language ({names}):"
-            " s7 structure enforcement requires per-language split"
-            " (currently not-enforceable)"
+            " s7 enforcement runs per-language engines (divide-and-conquer)"
         )
     if {e["engine"] for e in s7_engines} >= {"c", "objc"} and ext_counts.get(".h", 0) > 0:
         warnings.append(
