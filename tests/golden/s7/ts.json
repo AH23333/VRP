@@ -1,0 +1,39 @@
+{
+  "format": "vrp-golden-1",
+  "name": "s7-ts-deep",
+  "language": "ts",
+  "provenance": "提取自 tests/deep/test_deep_s7_enforce_ts.py::_mk_repo 与 test_enforce_ts_e2e_violation_to_finding 行断言（真 depcruise 图；行号取锚符号 start_line——depcruise 无行号，payload.line=null）；deep skip-if-missing（find_depcruise）；批⑥ #204 定稿，人工核对 2026-11-21。",
+  "fixture": {
+    "repo_name": "golden-ts",
+    "files": {
+      "package.json": "{\"name\": \"fx\", \"version\": \"0.0.0\"}\n",
+      "src/core/a.ts": "import { b } from \"../iface/b\";\nexport const a = b + 1;\n",
+      "src/iface/b.ts": "export const b = 41;\n"
+    },
+    "meta": {"git_head": ""},
+    "symbols": [
+      ["t1", "p", "src.core.a", "Function", "a", "src/core/a.ts", 1, 3, "h"],
+      ["t2", "p", "src.iface.b", "Function", "b", "src/iface/b.ts", 1, 2, "h"]
+    ],
+    "structure": {
+      "modules": [
+        {"module_id": "core-mod", "name": "核心", "responsibility": "算", "symbol_fids": ["t1"], "layer": "core"},
+        {"module_id": "iface-mod", "name": "接口", "responsibility": "面", "symbol_fids": ["t2"], "layer": "interface"}
+      ],
+      "layers": [
+        {"name": "core", "may_depend_on": []},
+        {"name": "interface", "may_depend_on": ["core"]}
+      ]
+    }
+  },
+  "truth": {
+    "violations": [
+      {"kind": "layer-violation", "file": "src/core/a.ts", "line": 1, "importer": "src/core/a.ts", "imported": "src/iface/b.ts", "pathology": "P9"}
+    ],
+    "symbols": [
+      {"qn": "src.core.a", "label": "Function", "file": "src/core/a.ts", "start": 1, "end": 3},
+      {"qn": "src.iface.b", "label": "Function", "file": "src/iface/b.ts", "start": 1, "end": 2}
+    ],
+    "findings_source": "s7-enforce"
+  }
+}

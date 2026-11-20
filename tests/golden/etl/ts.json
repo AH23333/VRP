@@ -1,0 +1,24 @@
+{
+  "format": "vrp-golden-1",
+  "name": "etl-ts-deep",
+  "language": "ts",
+  "provenance": "BB3 深度面：CBM index+etl 真链（run_vrp index --reindex / etl，deep conftest 模式）。真值=人工从源码独立枚举（src/core/a.ts 声明 module a 与导出常量 a（第 2 行），src/iface/b.ts 声明 module b 与导出常量 b（第 1 行）——行号逐行人工核对）。约定记档（2026-11-21 批⑥ #204 真链探针观测）：qn 前缀=repo 目录名 golden-ts；TS Module 行 end=行数+1（EOF 位置——树边界约定，标注者接受并记档）；File 行（label File, 0-0 结构簿记）非源声明符号——不入真值，审计面诚实呈现为 spurious（D7 pin 观测值非装好值）；Folder/Project/Branch 在文件域外不触碰。violations 面=期望零声明（source=etl，净语料零 findings 探针实证）。",
+  "fixture": {
+    "repo_name": "golden-ts",
+    "files": {
+      "package.json": "{\"name\": \"fx\", \"version\": \"0.0.0\"}\n",
+      "src/core/a.ts": "import { b } from \"../iface/b\";\nexport const a = b + 1;\n",
+      "src/iface/b.ts": "export const b = 41;\n"
+    }
+  },
+  "truth": {
+    "violations": [],
+    "symbols": [
+      {"qn": "golden-ts.src.core.a", "label": "Module", "file": "src/core/a.ts", "start": 1, "end": 3},
+      {"qn": "golden-ts.src.core.a.a", "label": "Variable", "file": "src/core/a.ts", "start": 2, "end": 2},
+      {"qn": "golden-ts.src.iface.b", "label": "Module", "file": "src/iface/b.ts", "start": 1, "end": 2},
+      {"qn": "golden-ts.src.iface.b.b", "label": "Variable", "file": "src/iface/b.ts", "start": 1, "end": 1}
+    ],
+    "findings_source": "etl"
+  }
+}

@@ -45,6 +45,7 @@ from . import propose as propose_mod
 from . import traces as traces_mod
 from . import coverage as coverage_mod
 from . import testcov as testcov_mod
+from . import golden as golden_mod
 from . import impact as impact_mod
 from . import procs
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
@@ -782,6 +783,13 @@ def cmd_testcov(args) -> int:
     return 0 if result.get("ok") else 1
 
 
+def cmd_golden(args) -> int:
+    repo = _repo_arg(args.repo)
+    result = golden_mod.run_audit(repo, Path(args.file))
+    _print_json(result)
+    return 0
+
+
 def cmd_coverage(args) -> int:
     repo = _repo_arg(args.repo)
     result = coverage_mod.check_coverage(repo, paths=args.paths, kinds=args.kinds)
@@ -1498,6 +1506,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--file", required=True, help="coverage JSON file ({files: {path: {executed_lines, missing_lines}}})")
     p.add_argument("--label", help="run label (default 'unlabeled')")
     p.set_defaults(func=cmd_testcov)
+
+    p = sub.add_parser(
+        "golden",
+        help="F15+BB3: audit findings/symbols against committed golden truth JSON"
+        " (vrp-golden-1; violations multiset match + symbols scoped exact enum;"
+        " precision/recall honest-null; rc always 0 - measurement, not a gate)",
+    )
+    p.add_argument("repo")
+    p.add_argument("--file", required=True, help="golden truth JSON file (vrp-golden-1 format)")
+    p.set_defaults(func=cmd_golden)
 
     p = sub.add_parser(
         "coverage",

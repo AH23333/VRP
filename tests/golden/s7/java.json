@@ -1,0 +1,38 @@
+{
+  "format": "vrp-golden-1",
+  "name": "s7-java-quick",
+  "language": "java",
+  "provenance": "提取自 tests/test_s7_enforce_java.py::_mk_java_repo 与 test_run_java_violation_e2e 行断言（fixture 文件字节/symbols/structure/违例 payload 一一对应，javac 21 探针实证过）；批⑥ #204 定稿，人工核对 2026-11-21。",
+  "fixture": {
+    "repo_name": "golden-java",
+    "files": {
+      "src/main/java/com/demo/api/Handler.java": "package com.demo.api;\n\npublic class Handler {\n    public String handle() { return \"h\"; }\n}\n",
+      "src/main/java/com/demo/store/Store.java": "package com.demo.store;\n\nimport com.demo.api.Handler;\n\npublic class Store {\n    public String get() { return new Handler().handle(); }\n}\n"
+    },
+    "meta": {"git_head": ""},
+    "symbols": [
+      ["f1", "p", "demo.store.Store", "Class", "Store", "src/main/java/com/demo/store/Store.java", 5, 7, "h"],
+      ["f2", "p", "demo.api.Handler", "Class", "Handler", "src/main/java/com/demo/api/Handler.java", 3, 5, "h"]
+    ],
+    "structure": {
+      "modules": [
+        {"module_id": "core-mod", "name": "存储", "responsibility": "存", "symbol_fids": ["f1"], "layer": "core"},
+        {"module_id": "iface-mod", "name": "接口", "responsibility": "面", "symbol_fids": ["f2"], "layer": "interface"}
+      ],
+      "layers": [
+        {"name": "core", "may_depend_on": []},
+        {"name": "interface", "may_depend_on": ["core"]}
+      ]
+    }
+  },
+  "truth": {
+    "violations": [
+      {"kind": "layer-violation", "file": "src/main/java/com/demo/store/Store.java", "line": 3, "importer": "com.demo.store", "imported": "com.demo.api", "pathology": "P9"}
+    ],
+    "symbols": [
+      {"qn": "demo.store.Store", "label": "Class", "file": "src/main/java/com/demo/store/Store.java", "start": 5, "end": 7},
+      {"qn": "demo.api.Handler", "label": "Class", "file": "src/main/java/com/demo/api/Handler.java", "start": 3, "end": 5}
+    ],
+    "findings_source": "s7-enforce"
+  }
+}

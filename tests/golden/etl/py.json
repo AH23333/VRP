@@ -1,0 +1,26 @@
+{
+  "format": "vrp-golden-1",
+  "name": "etl-py-deep",
+  "language": "py",
+  "provenance": "BB3 深度面：CBM index+etl 真链（run_vrp index --reindex / etl，deep conftest 模式）。真值=人工从源码独立枚举（pkg/calc.py 声明 module pkg.calc 与 add/sub，test_calc.py 声明 module test_calc 与 test_add——行号逐行人工核对）。约定记档（2026-11-21 批⑥ #204 真链探针观测）：qn 前缀=repo 目录名 golden-py；py Module 行 end=精确末行；CBM File 行（label File, 0-0 结构簿记）非源声明符号——不入真值，审计面诚实呈现为 spurious（D7 pin 观测值非装好值）；builtins/Folder/Project/Branch 在文件域外不触碰。violations 面=期望零声明（source=etl，净语料零 findings 探针实证）。",
+  "fixture": {
+    "repo_name": "golden-py",
+    "files": {
+      "pkg/__init__.py": "",
+      "pkg/calc.py": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n",
+      "test_calc.py": "from pkg.calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+      ".gitignore": ".vrp/\n__pycache__/\n"
+    }
+  },
+  "truth": {
+    "violations": [],
+    "symbols": [
+      {"qn": "golden-py.pkg.calc", "label": "Module", "file": "pkg/calc.py", "start": 1, "end": 7},
+      {"qn": "golden-py.pkg.calc.add", "label": "Function", "file": "pkg/calc.py", "start": 1, "end": 2},
+      {"qn": "golden-py.pkg.calc.sub", "label": "Function", "file": "pkg/calc.py", "start": 5, "end": 6},
+      {"qn": "golden-py.test_calc", "label": "Module", "file": "test_calc.py", "start": 1, "end": 6},
+      {"qn": "golden-py.test_calc.test_add", "label": "Function", "file": "test_calc.py", "start": 4, "end": 5}
+    ],
+    "findings_source": "etl"
+  }
+}

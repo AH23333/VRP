@@ -1,0 +1,38 @@
+{
+  "format": "vrp-golden-1",
+  "name": "s7-ruby-quick",
+  "language": "ruby",
+  "provenance": "提取自 tests/test_s7_enforce_ruby.py::_mk_ruby_repo 与 test_run_ruby_violation_e2e 行断言（require_relative 解析+BOM/endless def 探针实证过）；批⑥ #204 定稿，人工核对 2026-11-21。",
+  "fixture": {
+    "repo_name": "golden-ruby",
+    "files": {
+      "src/api/api.rb": "module Probe\n  module Api\n    def self.handle(value)\n      value\n    end\n  end\nend\n",
+      "src/store/storage.rb": "require_relative \"../api/api\"\n\nmodule Probe\n  module Storage\n    def self.put(value)\n      Probe::Api.handle(value)\n    end\n  end\nend\n"
+    },
+    "meta": {"git_head": ""},
+    "symbols": [
+      ["f1", "p", "Probe::Storage", "Module", "Storage", "src/store/storage.rb", 3, 9, "h"],
+      ["f2", "p", "Probe::Api", "Module", "Api", "src/api/api.rb", 1, 7, "h"]
+    ],
+    "structure": {
+      "modules": [
+        {"module_id": "core-mod", "name": "存储", "responsibility": "存", "symbol_fids": ["f1"], "layer": "core"},
+        {"module_id": "iface-mod", "name": "接口", "responsibility": "面", "symbol_fids": ["f2"], "layer": "interface"}
+      ],
+      "layers": [
+        {"name": "core", "may_depend_on": []},
+        {"name": "interface", "may_depend_on": ["core"]}
+      ]
+    }
+  },
+  "truth": {
+    "violations": [
+      {"kind": "layer-violation", "file": "src/store/storage.rb", "line": 1, "importer": "Probe::Storage", "imported": "Probe::Api", "pathology": "P9"}
+    ],
+    "symbols": [
+      {"qn": "Probe::Storage", "label": "Module", "file": "src/store/storage.rb", "start": 3, "end": 9},
+      {"qn": "Probe::Api", "label": "Module", "file": "src/api/api.rb", "start": 1, "end": 7}
+    ],
+    "findings_source": "s7-enforce"
+  }
+}

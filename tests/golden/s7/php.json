@@ -1,0 +1,38 @@
+{
+  "format": "vrp-golden-1",
+  "name": "s7-php-quick",
+  "language": "php",
+  "provenance": "提取自 tests/test_s7_enforce_php.py::_mk_php_repo 与 test_run_php_violation_e2e 行断言（岛模型词法探针 2026-11-07 实证过）；批⑥ #204 定稿，人工核对 2026-11-21。",
+  "fixture": {
+    "repo_name": "golden-php",
+    "files": {
+      "src/Api.php": "<?php\n\nnamespace Probe\\Iface;\n\ninterface Api\n{\n    public function get(): string;\n}\n",
+      "src/Store.php": "<?php\n\nnamespace Probe\\Core;\n\nuse Probe\\Iface\\Api;\n\nfinal class Store\n{\n    public function __construct(private Api $api) {}\n}\n"
+    },
+    "meta": {"git_head": ""},
+    "symbols": [
+      ["f1", "p", "Probe.Core.Store", "Class", "Store", "src/Store.php", 7, 11, "h"],
+      ["f2", "p", "Probe.Iface.Api", "Interface", "Api", "src/Api.php", 3, 6, "h"]
+    ],
+    "structure": {
+      "modules": [
+        {"module_id": "core-mod", "name": "存储", "responsibility": "存", "symbol_fids": ["f1"], "layer": "core"},
+        {"module_id": "iface-mod", "name": "接口", "responsibility": "面", "symbol_fids": ["f2"], "layer": "interface"}
+      ],
+      "layers": [
+        {"name": "core", "may_depend_on": []},
+        {"name": "interface", "may_depend_on": ["core"]}
+      ]
+    }
+  },
+  "truth": {
+    "violations": [
+      {"kind": "layer-violation", "file": "src/Store.php", "line": 5, "importer": "Probe\\Core", "imported": "Probe\\Iface", "pathology": "P9"}
+    ],
+    "symbols": [
+      {"qn": "Probe.Core.Store", "label": "Class", "file": "src/Store.php", "start": 7, "end": 11},
+      {"qn": "Probe.Iface.Api", "label": "Interface", "file": "src/Api.php", "start": 3, "end": 6}
+    ],
+    "findings_source": "s7-enforce"
+  }
+}

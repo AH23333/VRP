@@ -1,0 +1,39 @@
+{
+  "format": "vrp-golden-1",
+  "name": "s7-go-deep",
+  "language": "go",
+  "provenance": "提取自 tests/deep/test_deep_s7_enforce_go.py::_mk_repo 与 test_enforce_go_e2e_violation_to_finding 行断言（真 go list 图，go 1.26 探针实证过）；deep skip-if-missing（find_go）；批⑥ #204 定稿，人工核对 2026-11-21。",
+  "fixture": {
+    "repo_name": "golden-go",
+    "files": {
+      "go.mod": "module example.com/deep\n\ngo 1.26\n",
+      "api/handler.go": "package api\n\nfunc Handle() int { return 1 }\n",
+      "store/repo.go": "package store\n\nimport \"example.com/deep/api\"\n\nfunc Get() int { return api.Handle() }\n"
+    },
+    "meta": {"git_head": ""},
+    "symbols": [
+      ["g1", "p", "deep/store.Get", "Function", "Get", "store/repo.go", 5, 7, "h"],
+      ["g2", "p", "deep/api.Handle", "Function", "Handle", "api/handler.go", 3, 5, "h"]
+    ],
+    "structure": {
+      "modules": [
+        {"module_id": "core-mod", "name": "核心", "responsibility": "算", "symbol_fids": ["g1"], "layer": "core"},
+        {"module_id": "iface-mod", "name": "接口", "responsibility": "面", "symbol_fids": ["g2"], "layer": "interface"}
+      ],
+      "layers": [
+        {"name": "core", "may_depend_on": []},
+        {"name": "interface", "may_depend_on": ["core"]}
+      ]
+    }
+  },
+  "truth": {
+    "violations": [
+      {"kind": "layer-violation", "file": "store/repo.go", "line": 3, "importer": "store", "imported": "api", "pathology": "P9"}
+    ],
+    "symbols": [
+      {"qn": "deep/store.Get", "label": "Function", "file": "store/repo.go", "start": 5, "end": 7},
+      {"qn": "deep/api.Handle", "label": "Function", "file": "api/handler.go", "start": 3, "end": 5}
+    ],
+    "findings_source": "s7-enforce"
+  }
+}
