@@ -273,12 +273,22 @@ def _ingest_structure(con: sqlite3.Connection, raw: dict) -> None:
 # ----------------------------------------------------------- stale revalidate
 
 
-def _revalidate_ingested(con: sqlite3.Connection) -> dict:
-    """复验已入库 active 工件：fid/边失效者标 stale（防漂移，v7 §2.2）。"""
+def _revalidate_ingested(
+    con: sqlite3.Connection, git_head: str = "", event: str = "revalidate"
+) -> dict:
+    """复验已入库 active 工件：fid/边失效者标 stale（防漂移，v7 §2.2）。
+
+    批④ A3 前置：每次复验向 drift_history 落一行事件（复验统计快照+
+    git_head 批次锚；event 区分时刻——etl-full/etl-incremental/curate/
+    curate-merge/mcp）。历史跨 etl 经 OWNED_TABLES 存续；外推本体留触发池
+    （≥10 批数据后启动），此处只积累数据。
+    """
     stale_slices: list[str] = []
+    slices_checked = 0
     for slice_id, payload_json in con.execute(
         "SELECT slice_id, payload_json FROM slices WHERE status = 'active'"
     ).fetchall():
+        slices_checked += 1
         try:
             raw = json.loads(payload_json)
         except json.JSONDecodeError:
@@ -327,8 +337,42 @@ def _revalidate_ingested(con: sqlite3.Connection) -> dict:
         if not ok:
             con.execute("UPDATE structure SET status = 'stale' WHERE id = ?", (row[0],))
             structure_stale = True
+    _record_drift_history(
+        con,
+        git_head,
+        event,
+        {
+            "slices_checked": slices_checked,
+            "slices_new_stale": len(stale_slices),
+            "new_stale_slice_ids": stale_slices,
+            "structure_new_stale": structure_stale,
+            "slices_active_after": con.execute(
+                "SELECT COUNT(*) FROM slices WHERE status = 'active'"
+            ).fetchone()[0],
+            "slices_stale_after": con.execute(
+                "SELECT COUNT(*) FROM slices WHERE status = 'stale'"
+            ).fetchone()[0],
+            "structure_active_after": con.execute(
+                "SELECT COUNT(*) FROM structure WHERE status = 'active'"
+            ).fetchone()[0],
+        },
+    )
     con.commit()
     return {"slices": stale_slices, "structure": structure_stale}
+
+
+def _record_drift_history(con: sqlite3.Connection, git_head: str, event: str, payload: dict) -> None:
+    """A3 前置：drift 历史事件落库（每次复验一行；payload sort_keys 字节确定性）。"""
+    con.execute(
+        "INSERT INTO drift_history (created_at, git_head, event, payload_json) VALUES (?,?,?,?)",
+        (_now(), git_head, event, json.dumps(payload, ensure_ascii=False, sort_keys=True)),
+    )
+
+
+def _meta_git_head(con: sqlite3.Connection) -> str:
+    """git_head 批次锚读出（meta 无键/前 freshness 构建 → '' 诚实）。"""
+    row = con.execute("SELECT value FROM meta WHERE key = 'git_head'").fetchone()
+    return row[0] if row is not None else ""
 
 
 # ------------------------------------------------------------------ curate
@@ -345,7 +389,9 @@ def curate(repo: Path, con: sqlite3.Connection) -> dict:
                 continue
             entry = _curate_file(con, path, kind)
             receipt["files"].append(entry)
-    receipt["stale"] = _revalidate_ingested(con)
+    receipt["stale"] = _revalidate_ingested(
+        con, git_head=_meta_git_head(con), event="curate"
+    )
     receipt_path = repo / RECEIPT_NAME
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
@@ -402,14 +448,14 @@ def curate_payload(con: sqlite3.Connection, kind: str, payload_json: str) -> dic
             return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": len(raw), "errors": errors}
         _ingest_slices(con, raw)
         return {"kind": kind, "status": "accepted", "accepted": len(raw), "rejected": 0, "errors": [],
-                "stale": _revalidate_ingested(con)}
+                "stale": _revalidate_ingested(con, git_head=_meta_git_head(con), event="mcp")}
     if kind == "structure":
         errors = _validate_structure(con, raw)
         if errors:
             return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": 1, "errors": errors}
         _ingest_structure(con, raw)
         return {"kind": kind, "status": "accepted", "accepted": 1, "rejected": 0, "errors": [],
-                "stale": _revalidate_ingested(con)}
+                "stale": _revalidate_ingested(con, git_head=_meta_git_head(con), event="mcp")}
     raise SystemExit(f"kind must be slices or structure: {kind}")
 
 
@@ -679,6 +725,46 @@ def drift_report(con: sqlite3.Connection) -> dict:
     summary["active_but_drifted"] = active_but_drifted
     report["summary"] = summary
     return report
+
+
+def drift_history(con: sqlite3.Connection, limit: int = 50) -> dict:
+    """A3 前置读出面：drift 复验历史事件（倒序最近 limit 条+总数；只读）。
+
+    旧库无表（批④前构建、尚未经 rw 连接 ensure_schema 自愈）→ 空结果+
+    note 诚实标注；payload_json 损坏（用户可写 DB，R-X 族）→ payload_raw
+    原样给出不崩。
+    """
+    try:
+        total = con.execute("SELECT COUNT(*) FROM drift_history").fetchone()[0]
+        rows = con.execute(
+            "SELECT id, created_at, git_head, event, payload_json FROM drift_history"
+            " ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {
+            "total": 0,
+            "events": [],
+            "note": "drift_history 表不存在（批④前构建的 facts.db；下次 rw 连接/etl 自动建表）",
+        }
+    events: list[dict] = []
+    for rid, created_at, git_head, event, payload_json in rows:
+        try:
+            payload = json.loads(payload_json)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if not isinstance(payload, dict):
+            payload = {"payload_raw": payload_json}
+        events.append(
+            {
+                "id": rid,
+                "created_at": created_at,
+                "git_head": git_head,
+                "event": event,
+                "payload": payload,
+            }
+        )
+    return {"total": total, "events": events}
 
 
 # ------------------------------------------------------------- remap apply

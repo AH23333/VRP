@@ -152,4 +152,5 @@ def test_owned_tables_constant():
         "decisions",
         "fid_ledger",
         "co_changes",
+        "drift_history",
     }

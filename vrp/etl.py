@@ -98,6 +98,7 @@ OWNED_TABLES = (
     "decisions",
     "fid_ledger",
     "co_changes",
+    "drift_history",
 )
 
 
@@ -283,7 +284,9 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None, full: bool = 
             # get marked stale and the "fake active" window closes. Covers all
             # three write paths (etl / run / transact G1 promote), which all go
             # through run_etl.
-            revalidated = curate_mod._revalidate_ingested(dst)
+            revalidated = curate_mod._revalidate_ingested(
+                dst, git_head=current_git_head(repo), event="etl-full"
+            )
             stats["curate_stale_slices"] = len(revalidated["slices"])
             stats["curate_stale_structure"] = 1 if revalidated["structure"] else 0
             stats["t_total_s"] = round(time.perf_counter() - t0, 3)

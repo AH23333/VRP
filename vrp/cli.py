@@ -726,12 +726,16 @@ def cmd_drift(args) -> int:
     facts_path = repo / ".vrp" / "facts.db"
     if not facts_path.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    history_limit = max(0, getattr(args, "history", 0) or 0)
     con = dbpath.ro_connect(facts_path)
     try:
         result = curate_mod.drift_report(con)
+        history = curate_mod.drift_history(con, history_limit) if history_limit else None
     finally:
         con.close()
     _print_step("S2.5 drift report", result)
+    if history is not None:
+        _print_step("S2.5 drift history", history)
     # rc=1 = stored active 实际已漂移（假 active——F2 复验链有洞的对账信号）
     return 1 if result["summary"]["active_but_drifted"] else 0
 
@@ -1430,6 +1434,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="S2.5: unified drift report for curate artifacts (missing fids/edges + relocation candidates; read-only)",
     )
     p.add_argument("repo")
+    p.add_argument("--history", type=int, default=0, metavar="N",
+                   help="also print the last N drift_history revalidation events (A3 data-accumulation face; 0 = off)")
     p.set_defaults(func=cmd_drift)
 
     p = sub.add_parser(

@@ -20,6 +20,7 @@
 | P 码 | 病理码（render 层人话图例），`render.PATHOLOGY_LEGEND` 单源 | `vrp/render.py`；`vrp explain` 三族码之一 |
 | evidence chain | 证据链：dossier 内嵌 evidence（runtime_evidence + last_verdicts + discrepancy_ledger）——AI 生产方每轮必读的上轮失败上下文 | `vrp/s5_dossier.py`；《契约/事务契约》T3 行 |
 | OWNED_TABLES | ETL 自有表清单——重灌 facts.db 时被快照/回灌存续的表集合（用户裁决/AI 工件不随重灌丢失） | `vrp/etl.py`（`OWNED_TABLES` 常量）；test_etl_preserve |
+| drift_history | drift 复验历史事件流（A3 前置）——每次 `_revalidate_ingested` 落一行（复验统计快照+git_head 批次锚，etl 全量/增量/curate/curate_merge/MCP 五类时刻）；跨 etl 经 OWNED_TABLES 存续，外推本体留触发池 | `vrp/curate.py`（`drift_history` 读出/`_record_drift_history`）；`vrp drift --history N`；test_drift_history |
 | fid_ledger | 符号账本：fid 的存续/重定位记录，漂移恢复的记账面 | `fid_ledger` 表；`vrp/curate.py` |
 | discrepancy_ledger | 差异登记簿：xcheck/S2 与 CBM 对账差异留痕 | `discrepancy_ledger` 表 |
 | co_changes | co-change 隐式耦合边（git 历史挖掘），R2 设计稿落地表 | `co_changes` 表；《设计稿-R2-co-change隐式耦合边.md》 |

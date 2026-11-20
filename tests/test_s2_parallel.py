@@ -292,18 +292,24 @@ def test_cmd_s2_workers_one_serializes(repo, capsys, monkeypatch):
 
 
 def test_cmd_s2_each_engine_own_connection(repo, capsys, monkeypatch):
-    """D2：每引擎线程自建连接——4 连接互异。"""
-    seen = set()
+    """D2：每引擎线程自建连接——4 连接对象互异。
+
+    强引用持有连接对象（非裸 id()）：顺序执行+及时关闭下 id 会被复用
+    （同地址重分配，实测环境敏感 flake——干净 master 5/5 红）；强引用使
+    4 对象必然共存，断言确定性（R-W 零竞态纪律；批④ BB5 审计收口）。
+    """
+    seen: list = []
     lock = threading.Lock()
 
     def probe(con):
         with lock:
-            seen.add(id(con))
+            seen.append(con)
 
     _install_fake_engines(monkeypatch, repo, probe=probe)
     rc, _ = _run_cmd_s2(repo, capsys)
     assert rc == 0
     assert len(seen) == 4
+    assert len({id(c) for c in seen}) == 4
 
 
 def test_cmd_s2_error_first_by_engine_order(repo, capsys, monkeypatch):

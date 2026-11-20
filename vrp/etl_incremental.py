@@ -397,7 +397,10 @@ def _patch(
 
     noise = etl.detect_artifact_noise(dst)
     stats["artifact_hints"] = len(noise["hints"])
-    revalidated = curate_mod._revalidate_ingested(dst)  # F2：fid 轮换时刻照跑
+    # F2：fid 轮换时刻照跑（git_head=新批次锚，event=etl-incremental——批④ A3 前置历史事件流）
+    revalidated = curate_mod._revalidate_ingested(
+        dst, git_head=etl.current_git_head(repo), event="etl-incremental"
+    )
     stats["curate_stale_slices"] = len(revalidated["slices"])
     stats["curate_stale_structure"] = 1 if revalidated["structure"] else 0
 

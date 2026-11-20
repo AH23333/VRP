@@ -253,6 +253,20 @@ CREATE TABLE IF NOT EXISTS co_changes (
     PRIMARY KEY (file_a, file_b)
 );
 
+-- 批④ A3 前置：drift 复验历史事件流（A3 漂移预测的数据积累面——外推本体
+-- 留触发池，积累 ≥10 批数据后再启动）。每次 _revalidate_ingested（etl 全量/
+-- 增量/curate/curate_merge/MCP 五类时刻）落一行复验统计快照，git_head 为
+-- 批次锚。跨 etl 经 OWNED_TABLES 快照回灌存续（历史跨重灌不丢）。
+-- payload_json sort_keys 序列化（字节确定性）；created_at 事件时刻——
+-- facts.db 本身非字节复现面（meta.etl_at/count_* 先例，红线绑下游产物）。
+CREATE TABLE IF NOT EXISTS drift_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    git_head TEXT NOT NULL DEFAULT '',
+    event TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
 DROP VIEW IF EXISTS v_hotspots;
 -- P-3（跨项目实测 archify 案例）：fan_in_same_file = 同文件内 fan-in 边数；
 -- fan_in_same_file_pct = 其占 fan_in 比例。CBM 对跨文件同名符号（浏览器全局桩

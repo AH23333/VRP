@@ -408,7 +408,10 @@ def run_curate_merge(repo: Path, con: sqlite3.Connection, theirs_path: Path) -> 
             recorded += 1
     con.commit()
 
-    stale = curate_mod._revalidate_ingested(con)
+    # 批④ A3 前置：event=curate-merge（三方合并复验时刻同入历史事件流）
+    stale = curate_mod._revalidate_ingested(
+        con, git_head=curate_mod._meta_git_head(con), event="curate-merge"
+    )
 
     return {
         "merged_at": _now(),
