@@ -378,11 +378,14 @@ def test_cli_parser_accepts_cochange():
 
 
 # ---------- #215 dogfood 考古演练修复：--code-only 呈现过滤 ----------
+# ---------- #216 本机样例战役：制品黑名单扩展（.json/.zip/.html 实测噪音） ----------
 
 
-def test_query_pairs_code_only_filters_doc_pairs(facts_db):
-    """--code-only：任一侧为文档（.md/.rst/.adoc）的对被剔除——code-code
-    隐式耦合信号聚焦（dogfood 实测 top 对被 README↔文档 148 共现主导）。
+def test_query_pairs_code_only_filters_artifact_pairs(facts_db):
+    """--code-only：任一侧为非代码制品的对被剔除——code-code 隐式耦合信号
+    聚焦。噪音实录：#215 文档对（README↔交接 148）；#216 样例战役制品对
+    （archify gallery.html↔manifest.json 155/excalidraw package-lock.json↔
+    package.json 344——锁文件/数据/打包产物机械共变非耦合）。
     呈现过滤语义：表存全量不变，幸存数为过滤后真值。"""
     facts_db.executemany(
         "INSERT INTO co_changes VALUES (?,?,?,?,?,?,?,?,?)",
@@ -392,16 +395,34 @@ def test_query_pairs_code_only_filters_doc_pairs(facts_db):
             ("README.md", "a.py", 7, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
             ("a.py", "docs/y.rst", 6, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
             ("c.adoc", "d.py", 4, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            # #216 实测噪音面：数据/打包/锁/标记/资产/配置
+            ("package.json", "package-lock.json", 8, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            ("archify.zip", "manifest.json", 3, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            ("docs/gallery.html", "manifest.json", 2, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            ("app.py", "config.yaml", 5, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            ("logo.svg", "b.py", 3, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
         ],
     )
     facts_db.commit()
-    shown_all, surviving_all = coc.query_pairs(facts_db, 3, 0.3)
-    assert surviving_all == 5  # 默认不过滤
-    shown, surviving = coc.query_pairs(facts_db, 3, 0.3, code_only=True)
+    n_all = facts_db.execute("SELECT COUNT(*) FROM co_changes").fetchone()[0]
+    assert n_all == 10
+    shown_all, surviving_all = coc.query_pairs(facts_db, 2, 0.3)
+    assert surviving_all == 10  # 默认不过滤
+    shown, surviving = coc.query_pairs(facts_db, 2, 0.3, code_only=True)
     assert surviving == 1
     assert [(e["file_a"], e["file_b"]) for e in shown] == [("a.py", "b.py")]
     n_rows = facts_db.execute("SELECT COUNT(*) FROM co_changes").fetchone()[0]
-    assert n_rows == 5  # 表存全量不变（呈现过滤零重挖）
+    assert n_rows == 10  # 表存全量不变（呈现过滤零重挖）
+
+
+def test_is_artifact_path_suffix_cases():
+    """制品后缀判定：文档/数据/打包/锁/资产/配置黑名单；源码后缀与无扩展
+    名=代码侧（黑名单制——防新制品类型漏滤，陌生代码面不误伤）。"""
+    for p in ("x.md", "x.rst", "x.adoc", "x.json", "x.html", "x.zip",
+              "x.yaml", "x.toml", "x.lock", "x.svg", "x.png", "x.pdf", "x.csv"):
+        assert coc.is_artifact_path(p), p
+    for p in ("x.py", "x.ts", "x.go", "x.cs", "Makefile", "Dockerfile", "x"):
+        assert not coc.is_artifact_path(p), p
 
 
 def test_run_cochange_code_only_summary_and_render(tmp_path, facts_db):
@@ -420,7 +441,7 @@ def test_run_cochange_code_only_summary_and_render(tmp_path, facts_db):
     assert result["summary"]["surviving_pairs"] == 1
     assert [(e["file_a"], e["file_b"]) for e in result["pairs"]] == [("a.py", "b.py")]
     text = coc.render_text(result)
-    assert "code-only   : doc pairs excluded" in text
+    assert "code-only   : non-code artifact pairs excluded" in text
 
 
 def test_cli_parser_code_only_flag():

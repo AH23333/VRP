@@ -39,12 +39,23 @@ GIT_LOG_TIMEOUT = 60
 GIT_LOG_FORMAT = "%x1f%H%x1f%aI"
 # #215 dogfood 修复：top 对被文档对主导（README↔交接 148 共现实测）——
 # code-code 隐式耦合信号被稀释；--code-only 呈现过滤（表存全量对不变）。
-DOC_SUFFIXES = frozenset({".md", ".rst", ".adoc"})
+# #216 本机样例战役扩展：archify/excalidraw 实测 top 对被非代码制品主导
+# （docs/gallery.html↔manifest.json 155/archify.zip↔manifest.json 144/
+# package-lock.json↔package.json 344——锁文件/数据/打包产物是机械共变非
+# 耦合信号）；黑名单制（防新制品类型漏滤——白名单误伤陌生代码面更痛）。
+ARTIFACT_SUFFIXES = frozenset({
+    ".md", ".rst", ".adoc",            # 文档
+    ".json", ".xml", ".yml", ".yaml",  # 数据/配置（锁文件 .json 同治）
+    ".toml", ".ini", ".cfg", ".lock",  # 配置/锁
+    ".html", ".htm", ".csv", ".txt",   # 标记/数据
+    ".svg", ".png", ".jpg", ".jpeg", ".gif", ".pdf",  # 资产
+    ".zip", ".gz", ".tar",             # 打包产物
+})
 
 
-def is_doc_path(path: str) -> bool:
-    """文档路径判定（后缀面；呈现过滤用，无扩展名=代码侧）。"""
-    return Path(path).suffix.lower() in DOC_SUFFIXES
+def is_artifact_path(path: str) -> bool:
+    """非代码制品路径判定（后缀黑名单面；呈现过滤用，无扩展名=代码侧）。"""
+    return Path(path).suffix.lower() in ARTIFACT_SUFFIXES
 
 
 def parse_log(raw: str) -> list[dict]:
@@ -141,8 +152,8 @@ def query_pairs(
     任一方向够强即耦合）；浮点仅展示（round 4，#159 同哲学）。
     排序 (support DESC, confidence_max DESC, file_a, file_b)——整数键
     优先，浮点只作次级，字符串键收尾保证确定性。
-    code_only：剔除任一侧为文档路径（.md/.rst/.adoc）的对——呈现过滤，
-    表存全量不变（阈值同哲学——改动零重挖）。
+    code_only：剔除任一侧为非代码制品（.md/.json/.zip 等黑名单后缀）的对
+    ——呈现过滤，表存全量不变（阈值同哲学——改动零重挖）。
     返回 (展示列表, 阈值后幸存数)——幸存数在截断前计（诚实计数）。
     """
     filtered: list[dict] = []
@@ -153,7 +164,7 @@ def query_pairs(
         cmax = max(cab, cba)
         if s < min_support or cmax < min_confidence:
             continue
-        if code_only and (is_doc_path(a) or is_doc_path(b)):
+        if code_only and (is_artifact_path(a) or is_artifact_path(b)):
             continue
         filtered.append(
             {
@@ -247,7 +258,7 @@ def render_text(result: dict) -> str:
     )
     if s.get("code_only"):
         lines.append(
-            "  code-only   : doc pairs excluded (.md/.rst/.adoc either side)"
+            "  code-only   : non-code artifact pairs excluded (docs/data/config/assets/archives)"
         )
     for e in result["pairs"]:
         lines.append(

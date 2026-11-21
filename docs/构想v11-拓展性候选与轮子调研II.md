@@ -129,6 +129,9 @@
 - **成本**：文档低/补齐中-高。优先级：文档面甜点（补齐按需立项）。
 
 ### N19. 跨语言 API 边界对账
+
+> **状态注记**：**触发条件验证完成（2026-11-22 #216 本机样例战役，6 真实仓实测）**：HTTP_CALLS 面=MarketTwin 572/restruct-music-player 82（JS→Go 路由跨界+测试打路由）/archify 109/excalidraw 8/StarMarkDesktop 1/CookMyFridge 0——方法标注边（GET/POST/DELETE+真实路由符号）质量达标；噪音面记档：ANY 方法边把路径形字符串（.env/文件系统路径/URL/打包产物/嵌码压缩文件）误判为路由（excalidraw 8 条中 5 条、archify findChrome→/Applications/...）。**参数级对账前置未满足**：签名数据不在 facts.db（content_hash 是摘要非签名——N20 mdcode 同边界记档）；路由符号已可经 nav callers/callees 通用导航。**维持探索**：锐化前置=facts.db 签名落地后参数级漂移检测再立项；上游边噪音（ANY 路由误判）归 CBM 上游记档非本仓修复面。
+
 - **是什么**：py↔ts 的 HTTP/FFI 调用点参数对账（调用方传参与被调方签名漂移检测）。
 - **轮子**：**OpenAPI spec 验证**（契约对账思想）；**grpcurl/proto 校验**（强契约先例）。
 - **判定**：**学**（契约对比语义）。依赖 HTTP_CALLS 边提取精度，当前证据面可能不够。
