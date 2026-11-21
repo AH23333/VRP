@@ -110,6 +110,8 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `flakes` | L15 flake 登记表（构想v11 甜点，GitHub flaky bot 形态借鉴；pytest-rerunfailures **不引入**——重试即掩盖，只记录不掩盖）：首观测记交接 prose 不进表，复发进表 count+1；count>=2=抖王名单→隔离候选；validate() 漂移守卫（active 条目测试文件+函数必须在树，改名未同步=红 rc=1）；判例入册：fd0d7db rawpack 过断言"复发优先找根因，定案缺陷修不进表"+testsig rust 环境瞬态"单跑绿不修只记档"+#170 push"门禁红先查环境负载勿急修代码" |
 | `langmatrix` | N18 语言能力矩阵（构想v11 甜点，tree-sitter README 语言支持表形态，#153 纪律全量落实——**每格实时核码生成零硬编码语言清单**）：行=21 s7 引擎语言（assess 单源）∪ indexed-only 诚实行（GDScript——认知无引擎 #124 先例）；列=五逐语言面各从属主模块派生：astgrep 规则 yml language 字段→EXT_LANGUAGES 反查→引擎后缀交集归行（js 规则归 ts 行 9 规则不失踪）/mutate 三引擎（mutmut/stryker/cargo-mutants）/deadcode-p4（knip/vulture 门控镜像+锚点锁）/testsig 自建面；js→ts、C++→c 归并注记；语言无关面（jscpd/S3/S5/dossier）注记不入逐语言列；rc 恒 0（缺口是待办非错误）；缺口清单即补齐 backlog（astgrep 19 语言/mutate 18/deadcode 19） |
 | `mdcode` | N20 Markdown 代码块提取（构想v11 甜点，doctest 哲学——文档示例必须可信；litprog 学思想造实现）：fenced block 语言标注→提取器路由（py=stdlib ast 真解析（ast.walk BFS 按 (lineno,name) 排序恢复文档序）；ts/js=正则轻量五形状（function/class/interface/type/const-arrow）——树库不引边界记档）→符号（name+类别）与 facts.db symbols（name+label）比对→漂移候选两类：doc-only（db 无同名——改名/删除/虚构 API 嫌疑）+kind-mismatch（仅 py 清晰面 def↔Class（或反向）；Method≈Function 同族不误报；ts label 词表未钉 name-only 诚实边界）；报告非门（langmatrix 先例 rc 恒 0——漂移是发现不是失败）；name 级比对（参数级签名不在 facts.db——content_hash 是摘要非签名）+同名碰撞可能记档；无语言标注/未认知语言块不路由不猜（plain 计数）；排除目录复用 watch.EXCLUDE_DIRS 单源 |
+| `etl-health` | BB4 ETL 健康面（构想v13 甜点，codegraph IndexHealth #2336+CGC repair BUG-005 判定学——健康字段与不变量清单照学，自愈不照抄：owned 表是重建派生面（同 facts.db 字节级同产物红线），修复=重跑 vrp run，本命令只检测+建议）：查询式不变式清单（镜像 deep ref_integrity 断言集作运行时纵深防御层——fid 唯一/六向零孤儿（edges src+dst/usage_hints/test_linkage）/零自环/8 元组全行去重/**symbols_stale_files**（CGC BUG-005 VRP 对偶——符号声称的文件不在 J8 etl_file_state 快照：文件已删或 CBM 索引滞后，facts 陈旧信号；空 file_path 豁免——内建/合成符号合法无文件））；schema 陈旧（表缺失）不炸诚实报告（dogfood 实录：J8 前 facts.db 无 etl_file_state 表→报"重跑 vrp run"而非 traceback）；rc 0 健康/1 违例（健康检查语义 CI 可用） |
+| `xcheck-explain` | Q25 xcheck 差异叙事化（构想v11 甜点，rustc --explain 叙事结构：现象→原因→修法；v11 自注"先收集真实困惑案例再模板化"前置已满足——xcheck.py:103 实录 27.7% agreement 真实案例）：只读 facts.db discrepancy_ledger 四 category 计数+top-3 示例（rowid 序确定性）+meta xcheck_* 汇总→逐类人话模板（ca_only=目标未被 CBM 索引诸因/ca_only_builtin_target=内建 CBM 刻意不索引/cbm_only=usage 弱证据或覆盖差异/cbm_only_test_source=测试源面排除）+总述行（agreement<60% 标 LOW）；xcheck 未跑过（ledger 空+meta 无 xcheck_agreement_pct 键）→诚实提示先跑 vrp xcheck；rc 恒 0（解释面非门） |
 | `secrets` | H1 密钥扫描独立 CLI（构想v11 甜点，gitleaks 形态——规则组织+全 blob 历史遍历；trufflehog 活性验证**不做**——离线红线，只检测不验证）：检测器**单源** render_chain.mask_source_lines（七型 token/URL 凭据/私钥块零复制+`_ANCHOR_SCAN` 保守超集预筛——无锚行 1 次 search 跳过 10 正则，历史面 459s→12s #178 实录，全谱样张锁兜底漏检）；worktree 面 os.walk+IGNORE_DIRS 剪枝（.vrp 内 SECRETS.local.md 是掩蔽产物不扫）+binary 嗅探/4MB 单文件封顶跳过计数；`--history` 历史面（显式 opt-in）=rev-list --objects --all→cat-file --batch-check 过滤（2MB blob 封顶跳过+行数对账截断诚实红）→cat-file --batch 流式扫描（procs.stream_lines——写线程并行喂 stdin 防真仓双管道死锁 #178+耗尽 rc 诚实红），**已删文件的密钥在历史 blob 仍可发现**，按 blob 批量喂（私钥块状态机 blob 内正确运转）；blob 归位=期望头精确匹配锚定，desync 诚实红；text 报告面连续 private-key-body 折叠区间×N（BEGIN 无 END 偏保守状态机的信噪比治理），JSON 事实面全量不折叠；rc 语义 gitleaks 同型：命中 1 零命中 0（CI 可用）；#176 实录修共享检测器量词上界纪律（scheme 无界 `*` 在 2MB 长单行 O(n²) 假挂→有界 {0,15}/{…,4096} 单遍线性，现实输入语义不变） |
 | `index` / `status` | CBM 索引（缓存）/ 状态查询 |
 | `etl` | CBM → facts.db 五级证据路由（J8 文件粒度增量默认自动，`--full` 强制全量） |
@@ -163,9 +165,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 2140 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 2156 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1529 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3669 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3685 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -174,7 +176,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3669 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2140 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2156 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

@@ -30,6 +30,7 @@ from . import gc as gc_mod
 from . import flakes as flakes_mod
 from . import langmatrix as langmatrix_mod
 from . import mdcode as mdcode_mod
+from . import etl_health
 from . import secrets as secrets_mod
 from . import scoring as scoring_mod
 from . import complexity as complexity_mod
@@ -274,6 +275,39 @@ def cmd_xcheck(args) -> int:
     result = xcheck.run_xcheck(repo, facts_db, reindex=args.reindex)
     _print_json(result)
     return 0
+
+
+def cmd_xcheck_explain(args) -> int:
+    """Q25 finding 叙事化——只读 facts.db，rc 恒 0（解释面非门）。"""
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp xcheck' first: {facts_path}")
+    con = dbpath.ro_connect(facts_path)
+    try:
+        result = xcheck.explain(con)
+    finally:
+        con.close()
+    _print_text(xcheck.render_explain(result))
+    return 0
+
+
+def cmd_etl_health(args) -> int:
+    """BB4 ETL 健康面——只读 facts.db；违例 rc=1（健康检查语义，CI 可用）。"""
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = dbpath.ro_connect(facts_path)
+    try:
+        result = etl_health.run_health(con)
+    finally:
+        con.close()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(etl_health.render_text(result))
+    return 0 if result["healthy"] else 1
 
 
 def _run_pipeline(repo: Path, name: str, reindex: bool) -> int:
@@ -1361,6 +1395,37 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_mdcode)
+
+    p = sub.add_parser(
+        "etl-health",
+        help="BB4: ETL health face - query-based invariant checklist over"
+        " facts.db (mirrors deep ref_integrity assertions as a runtime"
+        " defense-in-depth layer: fid unique / six-way zero orphans"
+        " (edges src+dst, usage_hints, test_linkage) / zero self-loops /"
+        " 8-tuple full-row dedup / symbols_stale_files = CGC BUG-005"
+        " analog - symbol claims a file absent from the J8 etl_file_state"
+        " snapshot: deleted file or stale CBM index); detection only,"
+        " NO in-place self-heal (owned tables are rebuild-derived -"
+        " same-facts.db same-bytes red line; repair = rerun 'vrp run');"
+        " stale schema (missing tables) reported honestly, not crashed;"
+        " rc 0 healthy / 1 violations (health-check semantics, CI-usable)",
+    )
+    p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_etl_health)
+
+    p = sub.add_parser(
+        "xcheck-explain",
+        help="Q25: xcheck finding narratization (rustc --explain shape:"
+        " phenomenon -> cause -> fix) - reads discrepancy_ledger four"
+        " categories + meta xcheck_* from facts.db; per-category counts,"
+        " top-3 examples, low-agreement overall line (<60pct flagged LOW);"
+        " real-confusion-case prerequisite met (27.7pct agreement case,"
+        " xcheck.py:103); read-only, rc always 0 (explanation is not a"
+        " gate); 'xcheck not run yet' honest message when ledger empty",
+    )
+    p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
+    p.set_defaults(func=cmd_xcheck_explain)
 
     p = sub.add_parser(
         "secrets",

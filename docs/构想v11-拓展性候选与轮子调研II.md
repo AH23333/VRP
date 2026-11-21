@@ -175,6 +175,7 @@
 - **轮子**：**compiler error explain**（rustc --explain 的叙事结构：现象→原因→修法）。
 - **判定**：**造**（xcheck 差异明细数据已在，差叙事模板）。
 - **成本**：中。优先级：探索（先收集真实困惑案例再模板化）。
+- **状态**：**已完成**（2026-11-21 甜点穿插批 #211）——`vrp xcheck-explain <repo>`（Q25 落地；前置已满足：真实困惑案例已收集——xcheck.py:103 实录 27.7% agreement/159 CA calls 真实仓面）：只读 facts.db（discrepancy_ledger 四 category+meta xcheck_*）→逐类 rustc --explain 形态模板（现象→原因→修法：ca_only=目标未被 CBM 索引诸因/内建=CBM 刻意不索引/cbm_only=usage 弱证据或覆盖差异/测试源=CA 面排除）+top-3 示例（rowid 序）+总述行（agreement<60% 标 LOW）；xcheck 未跑过→诚实提示（ledger 空且 meta 无 xcheck_agreement_pct 键——"None" 值也是跑过，键存在判 ran）；rc 恒 0（解释面非门）。
 
 ## 优先级总表
 

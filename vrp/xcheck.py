@@ -276,3 +276,118 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
     finally:
         ca.close()
         facts.close()
+
+
+# ---- Q25 finding 叙事化（构想v11 §Q25；rustc --explain 形态：现象→原因→修法）----
+# 前置已满足：真实困惑案例已收集（xcheck.py:103 实录 27.7% agreement/
+# vendor archify 4744 CA calls）——v11 自注"先收集真实困惑案例再模板化"。
+
+NARRATIVES: dict = {
+    "ca_only": (
+        "code-atlas 发现 {n} 条调用 CBM 未收录",
+        "目标符号未被 CBM 索引——排除段/语言不支持/收录阈值以下，或动态分发面 CBM 不可见",
+        "抽查示例确认目标文件在 S1 索引面内；属排除段或阈值下的差异是预期，无需处理",
+    ),
+    "ca_only_builtin_target": (
+        "code-atlas 发现 {n} 条内建目标调用 CBM 未收录",
+        "内建符号（print/str 类）CBM 刻意不索引——符号表只收项目内符号",
+        "预期差异，无需处理",
+    ),
+    "cbm_only": (
+        "CBM 有 {n} 条边 code-atlas 未发现",
+        "usage_hints 弱证据匹配（非 CALLS 强证据）或两引擎语言/策略覆盖差异",
+        "查 discrepancy_ledger.detail_json 的 strategy 字段确认证据来源",
+    ),
+    "cbm_only_test_source": (
+        "CBM 有 {n} 条测试源边 code-atlas 未发现",
+        "测试源文件面 code-atlas 排除（覆盖差异）",
+        "预期差异，无需处理",
+    ),
+}
+
+XCHECK_LEDGER_CATEGORIES = tuple(NARRATIVES)
+
+LOW_AGREEMENT_PCT = 60.0
+
+
+def _meta_int(meta: dict, key: str) -> int | None:
+    raw = meta.get(key)
+    if raw is None or raw in ("None", ""):
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def explain(con: sqlite3.Connection) -> dict:
+    """Q25 叙事面：ledger 四 category 计数+示例 → 现象/原因/修法模板。
+
+    只读 facts.db（discrepancy_ledger+meta xcheck_*）；xcheck 未跑过时
+    ran=False 诚实提示（不猜不造）。
+    """
+    rows = con.execute(
+        "SELECT category, src_key, dst_key FROM discrepancy_ledger"
+        f" WHERE category IN ({','.join('?' * len(XCHECK_LEDGER_CATEGORIES))})",
+        XCHECK_LEDGER_CATEGORIES,
+    ).fetchall()
+    categories: dict = {}
+    for cat, src, dst in rows:
+        entry = categories.setdefault(cat, {"count": 0, "examples": []})
+        entry["count"] += 1
+        if len(entry["examples"]) < 3:
+            entry["examples"].append(f"{src} -> {dst}")
+    for cat, (phen, cause, fix) in NARRATIVES.items():
+        if cat in categories:
+            n = categories[cat]["count"]
+            categories[cat]["narrative"] = {
+                "phenomenon": phen.format(n=n),
+                "cause": cause,
+                "fix": fix,
+            }
+    meta = dict(con.execute("SELECT key, value FROM meta WHERE key LIKE 'xcheck_%'").fetchall())
+    raw_pct = meta.get("xcheck_agreement_pct")
+    agreement_pct = None
+    if raw_pct is not None and raw_pct not in ("None", ""):
+        try:
+            agreement_pct = float(raw_pct)
+        except ValueError:
+            agreement_pct = None
+    ran = bool(rows) or "xcheck_agreement_pct" in meta  # meta 键存在=xcheck 跑过（值 "None" 也是跑过——空 ca_edges 面）
+    return {
+        "ran": ran,
+        "agreement_pct": agreement_pct,
+        "agreement": _meta_int(meta, "xcheck_agreement"),
+        "ca_calls": _meta_int(meta, "xcheck_ca_calls"),
+        "low_agreement": agreement_pct is not None and agreement_pct < LOW_AGREEMENT_PCT,
+        "threshold_pct": LOW_AGREEMENT_PCT,
+        "categories": categories,
+    }
+
+
+def render_explain(result: dict) -> str:
+    """text 面：总述+逐 category 现象/原因/修法+示例。"""
+    if not result["ran"]:
+        return (
+            "== xcheck explain ==\n"
+            "xcheck 未运行过（discrepancy_ledger 空且 meta 无 xcheck_* 键）——先跑 'vrp xcheck'"
+        )
+    lines = ["== xcheck explain =="]
+    if result["agreement_pct"] is not None:
+        flag = " LOW" if result["low_agreement"] else ""
+        lines.append(
+            f"overall: agreement {result['agreement_pct']}%"
+            f" ({result['agreement']}/{result['ca_calls']}){flag}"
+        )
+    for cat in XCHECK_LEDGER_CATEGORIES:
+        entry = result["categories"].get(cat)
+        if not entry:
+            continue
+        lines.append(f"[{cat}] {entry['count']} 条")
+        narr = entry["narrative"]
+        lines.append(f"  现象: {narr['phenomenon']}")
+        lines.append(f"  原因: {narr['cause']}")
+        lines.append(f"  修法: {narr['fix']}")
+        if entry["examples"]:
+            lines.append(f"  示例: {'; '.join(entry['examples'])}")
+    return "\n".join(lines)
