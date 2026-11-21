@@ -63,6 +63,7 @@ vrp transact <repo> tx.json --preview   # diff 预览（difflib+difftastic 工�
 vrp verdicts <repo>                     # verdict 历史（open 项自动回馈进 dossier evidence）
 vrp curate <repo>                       # AI 梳理工件验收入库（.vrp/ai/ slices/structure；--reject 用户否决留痕）
 vrp curate-auto <repo>                  # 内置 LLM 梳理循环（零 agent 路径）：配好 .vrp/config.json 的 API key 即自动跑 dossier→slices→structure→enforce→drift（契约 §6；全自动+全留痕 .vrp/auto/）
+vrp fixpropose <repo> <finding_id>      # C9 修复提案闭环（零 agent 路径）：单 finding 单文件 → LLM 产 transact 草案 .vrp/proposals/fix-<n>.json（确定性校验器拒收回执重试≤3；单文件不可修→unfixable 诚实转义；草案永不执行——执行只走 vrp transact 闸门；--force 覆盖已审草案）
 vrp drift <repo>                       # 梳理工件漂移查询面（只读）：stale 原因 + fid_ledger 反查重定位候选 remap；stored active 实际漂移 → rc=1；--history N 追加最近 N 条复验历史事件（drift_history 表，A3 数据积累面）
 vrp remap <repo>                       # 漂移恢复半自动环：drift 的唯一候选 remap 一键写回 .vrp/ai/*.json（unresolved 诚实上报 → rc=1；再跑 vrp curate 复活）
 vrp refresh <repo>                     # 漂移恢复一键环：S0→S1→ETL→xcheck→drift→remap→curate→report（代码变更后工件全链路自动追平）
@@ -121,6 +122,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `verdicts` | verdict 历史查询（`--tid` 单条详情；dossier evidence 自动内嵌 open 项） |
 | `curate` | AI 梳理工件验收（slices/structure 确定性验证全过才入库；`--reject` 否决留痕 decisions 表；复验失效标 stale） |
 | `curate-auto` | 内置 LLM 梳理循环（零 agent 路径，构想v7 §13）：`.vrp/config.json` 配 OpenAI-compatible API key → 自动六步（dossier 取材→slices→structure→enforce→drift→summary）；无 function calling（确定性校验器即工具，拒收回执重试≤3）；循环只走 curate 数据面不触重构事务；全自动+全留痕 `.vrp/auto/`（key 不落盘） |
+| `fixpropose` | C9 修复提案闭环（零 agent 路径，构想v10 C9）：单 finding（须有 file_path）+现文件全文行号檐口材料 → LLM 产 transact 草案 `.vrp/proposals/fix-<n>.json`（事务契约 v1 载体零新 schema；校验器=load_transaction 复用+三加验 WRONG_ID/WRONG_FILE/WRONG_OP 稳定回执码，拒收回执重试≤3；单文件不可修→unfixable 诚实转义 rc=0）；草案永不执行（C9 红线——LLM 输出物理上只能变成草案文件，s6_transact 引用仅 load_transaction 形状校验，源码守卫测试钉死；执行只走 `vrp transact` G0-G6 闸门，preview→transact 两步）；防覆写（`--force` 显式覆盖）；全自动+全留痕 `.vrp/fixpropose/`（key 掩码） |
 | `drift` | 梳理工件漂移统一查询面（只读）：每次 etl/事务 promote/MCP 提交自动复验（F2 假 active 窗口已关）；drift 逐条给 fresh/missing_fids/missing_edges + fid_ledger（fid 身份史，跨 etl 存续）反查重定位候选——qn 未变给 remap 映射，qn 消亡给同文件域候选（cap 10）；remap 是提议不旁路，重提仍全量重验；stored active 实际漂移 → 退出码 1；每次复验落 `drift_history` 历史事件（A3 前置：etl 全量/增量/curate/curate_merge/MCP 五类时刻，git_head 批次锚+统计快照，跨 etl 经 OWNED_TABLES 存续；`--history N` 读出最近 N 条） |
 | `remap` | 漂移恢复半自动环：drift 的唯一候选 remap 一键写回 `.vrp/ai/*.json` 工作工件（只改 fid 引用不触 facts.db）；多候选/无候选/文件缺失 → `unresolved` 诚实上报 rc=1；写回后 `vrp curate` 全量重验复活 active |
 | `refresh` | 漂移恢复一键环：S0→S1→ETL→xcheck→drift→remap→curate→report（代码变更后 curate 工件全链路自动追平；remap unresolved 或 curate 拒收 → rc=1） |
@@ -148,9 +150,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 2060 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 2092 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1529 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3589 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3621 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -159,7 +161,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3589 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2060 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2092 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
@@ -206,6 +208,8 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《设计稿-BB1V17-调用边置信度分层与schema迁移矩阵.md》——批⑦设计稿（用户授权自批 2026-11-21，实施 #205）：调用边置信度分层+schema 迁移矩阵合批——edges.resolution_label 列（confidence 双阈值 0.85/0.70→EXTRACTED/INFERRED/AMBIGUOUS；None→NULL 未知不惩罚；三仓真值探针实证 evidence/strategy 白名单不可枚举故否决）+MIGRATIONS 迁移链（PRAGMA user_version=2，先 ALTER 后 executescript 视图硬约束）+v_dead_code 拆分 AMBIGUOUS 过滤（IS NULL OR 显式防三值逻辑坑）；决策点 D1-D8
 - 《schema版本承诺.md》——V18 政策（#205 rider）：facts.db schema 版本承诺——user_version 语义/N-1 库可迁移承诺/v0.x 破坏性变更随 minor 宽松政策/迁移链工程规则/反向风险记档/v1 保留基线槽说明
 - 《SARIF-CI消费指南.md》——G17 出圈：外部项目 CI 消费 vrp SARIF 指南（GitHub Actions upload-sarif 样例/字段对照表/两层截断诚实链（vrp cap 2000+propertyBag 总数标注 × GitHub 5000 上限）/跨仓 dogfood 实测（lusiem 1064 全量 507KB、tree-sitter-analyzer 15741→2000 截断 979KB）/GitLab 通用 CI 提示；零服务端红线不动——上传动作归消费方）
+- 《设计稿-C9-修复提案闭环.md》——批⑧设计稿（用户授权自批 2026-11-21，实施 #206）：修复提案闭环——单 finding 单文件 → LLM 产 transact 草案（事务契约 v1 载体零新 schema）/校验器 load_transaction 复用+三加验（WRONG_ID/WRONG_FILE/WRONG_OP 稳定回执码，拒收回执重试≤3）/单文件不可修 unfixable 诚实转义/D4 信任边界结构化（LLM 输出物理上只能变成草案文件，s6_transact 引用仅 load_transaction，源码守卫测试钉死）/防覆写 --force+run 目录同秒后缀/BB6 rider 合批；决策点 D1-D8
+- 《A-B评估协议-防侧信道.md》——BB6 rider（#206）：A/B 评估方法论协议——双臂封 CLI 守卫（codegraph WITHOUT 臂 26/28 次 Bash 摸到 CLI"控制臂不是控制臂"教训）/每臂 ≥2 次取中位/三反馈指标（驻留上下文占用/下一步动作充分性/字节分配效率）/低显著度渠道别投入（3 措辞变体全回归教训）/诚实披露（residual-context-occupancy 先例）；脚本面诚实缓议（触发驱动，待首个真实 A/B 验收场景）
 - 构想 v1-v6——历史方案，只读
 
 ## 平台

@@ -50,6 +50,7 @@ from . import impact as impact_mod
 from . import procs
 from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate, s2_mutate_run, s2_p4, s3, s4_freeze, s5_dossier, s6_transact, s7_enforce, xcheck
 from . import auto_curate
+from . import fixpropose as fixpropose_mod
 from . import session as session_mod
 
 
@@ -609,6 +610,24 @@ def cmd_auto_curate(args) -> int:
     _print_step(
         "auto-curate",
         {k: summary[k] for k in ("run_id", "task", "model", "slices", "structure", "enforce", "rc")},
+    )
+    return summary["rc"]
+
+
+def cmd_fixpropose(args) -> int:
+    repo = _repo_arg(args.repo)
+    try:
+        summary = fixpropose_mod.run_fixpropose(
+            repo,
+            args.finding_id,
+            model_override=args.model,
+            force=args.force,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    _print_step(
+        "fixpropose",
+        {k: summary[k] for k in ("run_id", "finding_id", "model", "status", "attempts", "proposal", "rc")},
     )
     return summary["rc"]
 
@@ -1408,6 +1427,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--model", default="", help="override config llm.model for this run")
     p.set_defaults(func=cmd_auto_curate)
+
+    p = sub.add_parser(
+        "fixpropose",
+        help="C9: LLM fix proposal for one finding -> .vrp/proposals/fix-<n>.json (transact draft;"
+        " execution only via 'vrp transact' - the draft is never executed here)",
+    )
+    p.add_argument("repo")
+    p.add_argument("finding_id", type=int, help="findings.id to fix (must have file_path)")
+    p.add_argument("--model", default="", help="override config llm.model for this run")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing proposal file (default: refuse to protect reviewed drafts)",
+    )
+    p.set_defaults(func=cmd_fixpropose)
 
     p = sub.add_parser(
         "transact",
