@@ -31,6 +31,7 @@ from . import flakes as flakes_mod
 from . import langmatrix as langmatrix_mod
 from . import mdcode as mdcode_mod
 from . import etl_health
+from . import layer_metrics
 from . import secrets as secrets_mod
 from . import scoring as scoring_mod
 from . import complexity as complexity_mod
@@ -308,6 +309,24 @@ def cmd_etl_health(args) -> int:
     else:
         _print_text(etl_health.render_text(result))
     return 0 if result["healthy"] else 1
+
+
+def cmd_layermetrics(args) -> int:
+    """C8 层度量与阈值——fan_in/fan_out/instability+structure thresholds 违例 rc=1。"""
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = dbpath.ro_connect(facts_path)
+    try:
+        result = layer_metrics.run_layer_metrics(con)
+    finally:
+        con.close()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(layer_metrics.render_text(result))
+    return 1 if result["violations"] else 0
 
 
 def _run_pipeline(repo: Path, name: str, reindex: bool) -> int:
@@ -1413,6 +1432,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_etl_health)
+
+    p = sub.add_parser(
+        "layermetrics",
+        help="C8: layer metrics & thresholds (JDepend D-metric half-face"
+        " learned + deptrac threshold semantics learned; rules stay in"
+        " structure JSON - no DSL): per-module/per-layer fan_in (Ca)"
+        " / fan_out (Ce) over inter-scope DEDUPED edge pairs"
+        " (class-dependency semantics, not call counts; multi-module fid"
+        " membership counted per pair - s7 precedent; non-structure fids"
+        " excluded as noise floor) + instability I=Ce/(Ca+Ce) (isolated"
+        " scope I=None honest-undefined); abstractness NOT derivable"
+        " (facts.db has no modifier data - BB2 boundary; D=|A+I-1|"
+        " documented half-face, no fabricated A); optional structure"
+        " payload top key 'thresholds' = {'modules'|'layers': {name:"
+        " {max_fan_in, max_fan_out, max_instability}}} (curate tolerates"
+        " unknown keys - pure data face); violations rc=1 (CI-usable),"
+        " no thresholds = metrics report rc=0; structure not curated ="
+        " honest note rc=0 (metrics face, not a gate); naming-convention"
+        " rules deferred (v10: expressiveness on-demand, no over-design)",
+    )
+    p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_layermetrics)
 
     p = sub.add_parser(
         "xcheck-explain",
