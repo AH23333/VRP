@@ -117,7 +117,10 @@ def cmd_cochange(args) -> int:
     con, _ = _open_facts_rw(repo)
     try:
         etl_mod.ensure_schema(con)
-        result = cochange_mod.run_cochange(repo, con, args.min_support, args.min_confidence)
+        result = cochange_mod.run_cochange(
+            repo, con, args.min_support, args.min_confidence,
+            code_only=args.code_only,
+        )
     finally:
         con.close()
     if getattr(args, "json", False):
@@ -1169,6 +1172,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.add_argument("--min-support", type=int, default=cochange_mod.DEFAULT_MIN_SUPPORT, help="display filter: min co-occurrence count (>= boundary, default 3)")
     p.add_argument("--min-confidence", type=float, default=cochange_mod.DEFAULT_MIN_CONFIDENCE, help="display filter: min confidence in either direction (>= boundary, default 0.3)")
+    p.add_argument("--code-only", action="store_true", help="display filter: exclude pairs where either file is documentation (.md/.rst/.adoc) - code-code implicit coupling focus")
     p.set_defaults(func=cmd_cochange)
 
     p = sub.add_parser(

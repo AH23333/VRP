@@ -1,6 +1,14 @@
 id: py-print-debug
 language: Python
 severity: info
-note: print() debug output in code
+note: print() debug output in code; print-named wrapper functions (_print*/print*) are print faces - exempt
 rule:
-  pattern: print($$$ARGS)
+  all:
+    - pattern: print($$$ARGS)
+    - not:
+        inside:
+          stopBy: end
+          kind: function_definition
+          has:
+            kind: identifier
+            regex: "^_?print"

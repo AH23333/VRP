@@ -17,6 +17,13 @@ name/responsibility 人写语义单源直引——**每模块一句话职责**�
 
 rc 语义：报告面恒 0；structure 缺失诚实退出（先跑 curate）。
 确定性：只读查询零写入；同 facts.db → 同输出（无时间戳全排序）。
+
+#215 dogfood 考古演练修复：stale structure 静默回退曾产出全 0 symbols
+骨架 rc=0 零警告（"空曲线是说谎"红线违反——225 fids 100% 失效实测）。
+修复=结构元数据（status/created_at）+fid 解析率显式披露，render 在
+stale 回退与全空解析两情形输出响亮 WARNING（rc 仍 0——报告面语义，
+骨架可读性保留，谎言变披露的 caveat）；repo 路径 resolve（`vrp tour .`
+标题 Path(".").name="" 空置修复）。
 """
 
 from __future__ import annotations
@@ -38,21 +45,24 @@ def _connect_ro(repo: Path) -> sqlite3.Connection:
     return dbpath.ro_connect(db)
 
 
-def _load_structure(con: sqlite3.Connection) -> dict:
-    """active structure 载荷；无 active 回退最新一条；全缺诚实退出。"""
+def _load_structure(con: sqlite3.Connection) -> tuple[dict, dict]:
+    """structure 载荷+元数据（status/created_at）；无 active 回退最新一条
+    （回退不删除披露——status 原样上浮，render 层警告）；全缺诚实退出。"""
     row = con.execute(
-        "SELECT payload_json FROM structure WHERE status='active' ORDER BY id DESC LIMIT 1"
+        "SELECT payload_json, status, created_at FROM structure"
+        " WHERE status='active' ORDER BY id DESC LIMIT 1"
     ).fetchone()
     if row is None:
         row = con.execute(
-            "SELECT payload_json FROM structure ORDER BY id DESC LIMIT 1"
+            "SELECT payload_json, status, created_at FROM structure"
+            " ORDER BY id DESC LIMIT 1"
         ).fetchone()
     if row is None:
         raise SystemExit("no curated structure in facts.db - run curate first")
     payload = json.loads(row[0])
     if not isinstance(payload, dict) or not payload.get("modules"):
         raise SystemExit("curated structure has no modules")
-    return payload
+    return payload, {"status": row[1], "created_at": row[2]}
 
 
 def _layer_order(payload: dict) -> list[str]:
@@ -77,10 +87,10 @@ def _layer_order(payload: dict) -> list[str]:
 
 def run_tour(repo: Path) -> dict:
     """`vrp tour` 入口。"""
-    repo = Path(repo)
+    repo = Path(repo).resolve()
     con = _connect_ro(repo)
     try:
-        payload = _load_structure(con)
+        payload, structure_meta = _load_structure(con)
         modules = payload["modules"]
         fid_mod: dict[str, str] = {}
         for m in modules:
@@ -94,6 +104,8 @@ def run_tour(repo: Path) -> dict:
                 sorted(fid_mod),
             ):
                 members[fid_mod[fid]].append({"name": name or "", "file": fp or ""})
+        structure_meta["fids_total"] = len(fid_mod)
+        structure_meta["fids_resolved"] = sum(len(v) for v in members.values())
         layer_seq = _layer_order(payload)
         layer_rank = {n: i for i, n in enumerate(layer_seq)}
         # 阅读序：层拓扑序 → 层内符号数升序 → module_id 字典序
@@ -125,6 +137,7 @@ def run_tour(repo: Path) -> dict:
             "repo": str(repo),
             "modules": len(ordered),
             "layers": layer_seq,
+            "structure": structure_meta,
             "tour": ordered,
             "note": "newcomer module tour from curated structure - reading order:"
             " layer topo (depended-on first) then ascending symbol count"
@@ -137,13 +150,30 @@ def run_tour(repo: Path) -> dict:
 
 def render_text(result: dict) -> str:
     """人读呈现：导览正文（阅读序+每模块一句话职责+具体锚点）。
-    VS Code Code Tour 步骤化形态：Step N 标号逐模块。"""
+    VS Code Code Tour 步骤化形态：Step N 标号逐模块。
+    诚实披露：非 active structure 回退与全空 fid 解析两情形响亮 WARNING
+    （骨架可读性保留——谎言变披露的 caveat，rc 仍 0 报告面语义）。"""
     lines = [f"# Code tour - {Path(result['repo']).name}"]
     lines.append(
         f"newcomer module tour: {result['modules']} modules,"
         f" {len(result['layers'])} layers (reading order: foundations first,"
         " then small modules before large)"
     )
+    st = result.get("structure") or {}
+    status = st.get("status", "active")
+    if status != "active":
+        created = str(st.get("created_at", ""))[:10]
+        lines.append(
+            f"WARNING: structure status={status} (created {created}) - module"
+            " contents may not match current symbols; re-run 'vrp curate-auto'"
+        )
+    fids_total = st.get("fids_total", 0)
+    fids_resolved = st.get("fids_resolved", 0)
+    if fids_total and not fids_resolved:
+        lines.append(
+            f"WARNING: 0/{fids_total} structure symbol fids resolve in current"
+            " facts.db - tour shows skeleton only; re-run 'vrp curate-auto'"
+        )
     lines.append("")
     for step in result["tour"]:
         lines.append(

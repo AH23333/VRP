@@ -285,3 +285,55 @@ def test_dangerous_rules_safe_forms_not_flagged(tmp_path, facts_db):
         )
     }
     assert lines == {6, 7, 8, 9, 10, 13, 14}, f"unexpected hit lines: {sorted(lines)}"
+
+
+PRINT_FACE_PY = (
+    "def _print_step(title):\n"
+    "    print(f\"== {title} ==\")\n"
+    "\n"
+    "\n"
+    "def print_report(rows):\n"
+    "    print(f\"{len(rows)} rows\")\n"
+    "\n"
+    "\n"
+    "def go(x):\n"
+    "    print('debug', x)\n"
+    "\n"
+    "\n"
+    "def outer():\n"
+    "    def _print_inner(y):\n"
+    "        print(y)\n"
+    "\n"
+    "    _print_inner(1)\n"
+    "    print('debug-outer')\n"
+    "\n"
+    "\n"
+    "def helper():\n"
+    "    return 1\n"
+    "\n"
+    "\n"
+    "print('module-level')\n"
+)
+
+
+@pytest.mark.skipif(BIN is None, reason="ast-grep binary not available")
+def test_print_debug_exempts_print_faced_functions(tmp_path, facts_db):
+    """#215 dogfood 考古演练修复：py-print-debug print-face 豁免——_print_step/
+    print_report（^_?print 命名）内 print 是职责输出非遗留（#10749 P1 误报锚定
+    _print_step 实测）；嵌套 _print_inner 豁免（stopBy: end 祖先链）；go/
+    outer/module-level 的 print 照报——豁免不吞真信号。"""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "printfaces.py").write_text(PRINT_FACE_PY, encoding="utf-8")
+    result = scan(facts_db, tmp_path, bin_path=BIN)
+    assert result["per_rule"]["py-print-debug"] == 3
+    lines = {
+        r[0]
+        for r in facts_db.execute(
+            "SELECT start_line FROM findings WHERE source = ? AND kind = 'debug-print'",
+            (FINDINGS_SOURCE,),
+        )
+    }
+    # go 的 print(10)/outer 的 print(18)/module-level print(25) 照报；
+    # _print_step(2)/print_report(6)/嵌套 _print_inner(15) 豁免。
+    assert lines == {10, 18, 25}, f"unexpected print hits: {sorted(lines)}"

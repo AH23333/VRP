@@ -375,3 +375,56 @@ def test_cli_parser_accepts_cochange():
     assert args.json is True
     assert args.min_support == 5
     assert args.min_confidence == 0.5
+
+
+# ---------- #215 dogfood 考古演练修复：--code-only 呈现过滤 ----------
+
+
+def test_query_pairs_code_only_filters_doc_pairs(facts_db):
+    """--code-only：任一侧为文档（.md/.rst/.adoc）的对被剔除——code-code
+    隐式耦合信号聚焦（dogfood 实测 top 对被 README↔文档 148 共现主导）。
+    呈现过滤语义：表存全量不变，幸存数为过滤后真值。"""
+    facts_db.executemany(
+        "INSERT INTO co_changes VALUES (?,?,?,?,?,?,?,?,?)",
+        [
+            ("a.py", "b.py", 5, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            ("README.md", "docs/x.md", 9, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            ("README.md", "a.py", 7, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            ("a.py", "docs/y.rst", 6, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+            ("c.adoc", "d.py", 4, 10, 10, 0.9, 0.9, "2026-01-01", "2026-03-01"),
+        ],
+    )
+    facts_db.commit()
+    shown_all, surviving_all = coc.query_pairs(facts_db, 3, 0.3)
+    assert surviving_all == 5  # 默认不过滤
+    shown, surviving = coc.query_pairs(facts_db, 3, 0.3, code_only=True)
+    assert surviving == 1
+    assert [(e["file_a"], e["file_b"]) for e in shown] == [("a.py", "b.py")]
+    n_rows = facts_db.execute("SELECT COUNT(*) FROM co_changes").fetchone()[0]
+    assert n_rows == 5  # 表存全量不变（呈现过滤零重挖）
+
+
+def test_run_cochange_code_only_summary_and_render(tmp_path, facts_db):
+    """run_cochange 端到端：--code-only 时 summary.code_only=True 上浮，
+    render 输出 code-only 过滤断言行（诚实披露呈现语义）。"""
+    repo = _init_repo(tmp_path / "repo")
+    _commit(repo, {"a.py": "1", "b.py": "1", "README.md": "doc"}, "c0", "2026-01-01T10:00:00+08:00")
+    _commit(repo, {"a.py": "2", "b.py": "2", "README.md": "doc2"}, "c1", "2026-02-01T10:00:00+08:00")
+    _commit(repo, {"a.py": "3", "b.py": "3", "README.md": "doc3"}, "c2", "2026-03-01T10:00:00+08:00")
+    result = coc.run_cochange(repo, facts_db, min_support=1, min_confidence=0.1)
+    assert result["summary"]["code_only"] is False
+    default_pairs = {e["file_a"] for e in result["pairs"]}
+    assert "README.md" in default_pairs
+    result = coc.run_cochange(repo, facts_db, min_support=1, min_confidence=0.1, code_only=True)
+    assert result["summary"]["code_only"] is True
+    assert result["summary"]["surviving_pairs"] == 1
+    assert [(e["file_a"], e["file_b"]) for e in result["pairs"]] == [("a.py", "b.py")]
+    text = coc.render_text(result)
+    assert "code-only   : doc pairs excluded" in text
+
+
+def test_cli_parser_code_only_flag():
+    args = build_parser().parse_args(["cochange", "somerepo", "--code-only"])
+    assert args.code_only is True
+    args = build_parser().parse_args(["cochange", "somerepo"])
+    assert args.code_only is False

@@ -37,6 +37,14 @@ DEFAULT_MIN_CONFIDENCE = 0.3
 DEFAULT_LIMIT = 50
 GIT_LOG_TIMEOUT = 60
 GIT_LOG_FORMAT = "%x1f%H%x1f%aI"
+# #215 dogfood 修复：top 对被文档对主导（README↔交接 148 共现实测）——
+# code-code 隐式耦合信号被稀释；--code-only 呈现过滤（表存全量对不变）。
+DOC_SUFFIXES = frozenset({".md", ".rst", ".adoc"})
+
+
+def is_doc_path(path: str) -> bool:
+    """文档路径判定（后缀面；呈现过滤用，无扩展名=代码侧）。"""
+    return Path(path).suffix.lower() in DOC_SUFFIXES
 
 
 def parse_log(raw: str) -> list[dict]:
@@ -125,6 +133,7 @@ def query_pairs(
     min_support: int = DEFAULT_MIN_SUPPORT,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     limit: int = DEFAULT_LIMIT,
+    code_only: bool = False,
 ) -> tuple[list[dict], int]:
     """呈现=读路径：阈值过滤（>= 边界含等）→ 排序 → 截断。
 
@@ -132,6 +141,8 @@ def query_pairs(
     任一方向够强即耦合）；浮点仅展示（round 4，#159 同哲学）。
     排序 (support DESC, confidence_max DESC, file_a, file_b)——整数键
     优先，浮点只作次级，字符串键收尾保证确定性。
+    code_only：剔除任一侧为文档路径（.md/.rst/.adoc）的对——呈现过滤，
+    表存全量不变（阈值同哲学——改动零重挖）。
     返回 (展示列表, 阈值后幸存数)——幸存数在截断前计（诚实计数）。
     """
     filtered: list[dict] = []
@@ -141,6 +152,8 @@ def query_pairs(
     ).fetchall():
         cmax = max(cab, cba)
         if s < min_support or cmax < min_confidence:
+            continue
+        if code_only and (is_doc_path(a) or is_doc_path(b)):
             continue
         filtered.append(
             {
@@ -178,6 +191,7 @@ def run_cochange(
     min_support: int = DEFAULT_MIN_SUPPORT,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     limit: int = DEFAULT_LIMIT,
+    code_only: bool = False,
 ) -> dict:
     """`vrp cochange` 入口：挖掘（写）→ 呈现（读）一体，幂等可重跑。
 
@@ -200,7 +214,7 @@ def run_cochange(
         else {"commits": 0, "changes": {}, "pairs": {}}
     )
     stored = persist(con, mined)
-    shown, surviving = query_pairs(con, min_support, min_confidence, limit)
+    shown, surviving = query_pairs(con, min_support, min_confidence, limit, code_only)
     summary = {
         "commits": mined["commits"],
         "files": len(mined["changes"]),
@@ -208,6 +222,7 @@ def run_cochange(
         "surviving_pairs": surviving,
         "min_support": min_support,
         "min_confidence": min_confidence,
+        "code_only": code_only,
     }
     return {
         "repo": str(repo),
@@ -230,6 +245,10 @@ def render_text(result: dict) -> str:
         f" min-confidence {s['min_confidence']}"
         f" -> {s['surviving_pairs']} surviving, showing {result['shown']}"
     )
+    if s.get("code_only"):
+        lines.append(
+            "  code-only   : doc pairs excluded (.md/.rst/.adoc either side)"
+        )
     for e in result["pairs"]:
         lines.append(
             f"  {e['support']:>5}  conf {e['confidence_ab']:.4f}/{e['confidence_ba']:.4f}"

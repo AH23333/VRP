@@ -199,3 +199,55 @@ def test_dogfood_vrp_repo_tour():
     for t in result["tour"]:
         assert t["responsibility"], f"module {t['module_id']} lacks curated responsibility"
         assert t["symbols"] >= 0
+
+
+# ---------- #215 dogfood 考古演练修复：stale 回退披露+空骨架警告+标题 ----------
+
+
+def test_tour_stale_fallback_disclosed(tmp_path):
+    """stale 回退披露：非 active structure 被使用时 status 原样上浮，
+    render 输出响亮 WARNING（rc 仍 0 报告面语义——谎言变披露的 caveat）。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "f1", "a", "a.py")
+    _set_structure(repo, {
+        "modules": [_mod("m1", "M1", "r", "core", ["f1"])],
+        "layers": [{"name": "core", "may_depend_on": []}],
+    }, status="stale")
+    result = tour.run_tour(repo)
+    assert result["structure"]["status"] == "stale"
+    assert result["structure"]["fids_total"] == 1
+    assert result["structure"]["fids_resolved"] == 1
+    text = tour.render_text(result)
+    assert "WARNING: structure status=stale" in text
+    assert "curate-auto" in text
+
+
+def test_tour_all_dead_fids_skeleton_warning(tmp_path):
+    """全空 fid 解析警告：structure fids 在当前符号表零存活（100% 陈旧
+    dogfood 实测形态）→ render 输出 skeleton-only WARNING——"空曲线是
+    说谎"红线修复（此前静默全 0 步骤 rc=0 零警告）。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "live", "real", "a.py")
+    _set_structure(repo, {
+        "modules": [_mod("m1", "M1", "r", "core", ["dead1", "dead2", "dead3"])],
+        "layers": [{"name": "core", "may_depend_on": []}],
+    })
+    result = tour.run_tour(repo)
+    assert result["structure"]["fids_total"] == 3
+    assert result["structure"]["fids_resolved"] == 0
+    assert result["tour"][0]["symbols"] == 0
+    text = tour.render_text(result)
+    assert "WARNING: 0/3 structure symbol fids resolve" in text
+    assert "skeleton only" in text
+
+
+def test_tour_repo_path_resolved_title(tmp_path, monkeypatch):
+    """repo 路径 resolve：`vrp tour .` 场景（相对路径）标题不再空置
+    （Path(".").name="" 修复）——repo 字段上浮绝对路径。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    monkeypatch.chdir(repo)
+    result = tour.run_tour(Path("."))
+    assert result["repo"] == str(repo)
+    text = tour.render_text(result)
+    assert text.startswith("# Code tour - repo")
