@@ -429,6 +429,15 @@ def cmd_s2(args) -> int:
     if not facts_path.exists():
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
 
+    # V17 (#205): deadcode 引擎 SQL 引用 resolution_label——pre-v2 库先经
+    # rw ensure_schema 就地迁移（cmd_dossier 同模式前置；不带 M4 freshness
+    # 检查，s2 语义面不变）。幂等：v2 库重跑零 ALTER。
+    migrate_con = sqlite3.connect(facts_path, timeout=30)
+    try:
+        etl_mod.ensure_schema(migrate_con)
+    finally:
+        migrate_con.close()
+
     # J9 引擎级四并发（设计稿-J9 D1/D2）：四引擎读写面零交叉（各 findings
     # source+各 ledger category），每引擎线程自建连接（timeout=30 显式
     # busy——实际 commit 窗口毫秒级，30s 是病态余量）；引擎序固定

@@ -257,11 +257,25 @@ def test_mutual_cycles_pairs_sorted():
 def test_dead_code_double_filter_alignment(big_repo):
     con = sqlite3.connect(f"file:{big_repo / '.vrp' / 'facts.db'}?mode=ro", uri=True)
     try:
+        # BB1 (#205): the view-level row query must carry the same
+        # has_ambiguous extraction dossier uses, so the expected side of
+        # the tier assertion classifies AMBIGUOUS-only survivors the same
+        # way the actual side does.
+        rows_raw = con.execute(
+            "SELECT v.fid, v.qualified_name, v.label, v.file_path, v.name,"
+            " EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = v.fid AND e.type IN ('CALLS', 'CALL_REFERENCE')"
+            "          AND e.resolution_label = 'AMBIGUOUS') AS has_ambiguous"
+            " FROM v_dead_code v"
+        ).fetchall()
         view_rows = [
-            {"qualified_name": qn, "label": label, "file_path": fp, "name": name}
-            for qn, label, fp, name in con.execute(
-                "SELECT qualified_name, label, file_path, name FROM v_dead_code"
-            )
+            {
+                "qualified_name": qn,
+                "label": label,
+                "file_path": fp,
+                "name": name,
+                "has_ambiguous": bool(ha),
+            }
+            for _fid, qn, label, fp, name, ha in rows_raw
         ]
         filtered = [r for r in view_rows if s2_deadcode.is_candidate(r["name"], r["file_path"])]
         called = s2_deadcode.called_names(con)
@@ -277,7 +291,7 @@ def test_dead_code_double_filter_alignment(big_repo):
         expected = [
             r["qualified_name"]
             for r in filtered
-            if s2_deadcode.classify(r["name"], called)[0] == tier
+            if s2_deadcode.classify(r["name"], called, r["has_ambiguous"])[0] == tier
         ]
         actual = [r["qualified_name"] for r in dossier_dead if r["confidence"] == tier]
         assert expected == actual, f"tier={tier} within-tier order drifted from view order"

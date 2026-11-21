@@ -37,6 +37,33 @@ def call_evidence(strategy: str | None, confidence: float | None) -> str:
     return HEURISTIC
 
 
+EXTRACTED = "EXTRACTED"
+INFERRED = "INFERRED"
+AMBIGUOUS = "AMBIGUOUS"
+
+_EXTRACTED_AT = 0.85
+_INFERRED_AT = 0.70
+
+
+def resolution_label(confidence: float | int | None) -> str | None:
+    """BB1 (#205): CBM-transmitted confidence -> three-value resolution label.
+
+    None (missing / non-numeric confidence) means UNKNOWN, not low -
+    CALL_REFERENCE edges (CBM never annotates them) and un-migrated legacy
+    rows keep their previous v_dead_code behavior: unknown is not punished.
+    Monotone cut at 0.85/0.70 aligns with CGC's confidence_label vocabulary
+    (calls.py EXTRACTED/INFERRED/AMBIGUOUS) as a direction, not a
+    tier-by-tier copy - VRP has no resolver tiers to mirror (CGC's 9-tier
+    enum is its own resolver state, never transmitted through CBM)."""
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return None
+    if confidence >= _EXTRACTED_AT:
+        return EXTRACTED
+    if confidence >= _INFERRED_AT:
+        return INFERRED
+    return AMBIGUOUS
+
+
 def route_edge(edge_type: str, strategy: str | None, confidence: float | None):
     """Returns (table, evidence): table in {edges, usage_hints, history_coupling, test_linkage, findings_p2}."""
     if edge_type in FINDINGS_EDGE_TYPES:

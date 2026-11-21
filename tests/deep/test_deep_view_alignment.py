@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from vrp.s2_deadcode import TARGET_LABELS, USAGE_EDGE_TYPES, is_candidate
+from vrp.s2_deadcode import (
+    ALIVE_CALL_EDGE_TYPES,
+    TARGET_LABELS,
+    UNFILTERED_USAGE_EDGE_TYPES,
+    USAGE_EDGE_TYPES,
+    is_candidate,
+)
 from tests.deep.conftest import ROOT
 
 pytestmark = pytest.mark.deep
@@ -165,10 +171,16 @@ def test_view_has_no_name_level_exclusion():
 
 def test_schema_edge_types_match_python_constant():
     view_sql = SCHEMA_TEXT[SCHEMA_TEXT.find("CREATE VIEW v_dead_code"):]
-    match = re.search(r"type IN \(([^)]*)\)", view_sql)
-    assert match is not None
-    sql_types = {m.strip().strip("'") for m in match.group(1).split(",")}
-    assert sql_types == set(USAGE_EDGE_TYPES)
+    ins = re.findall(r"type IN \(([^)]*)\)", view_sql)
+    # BB1 (#205): the single four-type NOT EXISTS split into two - the
+    # CALLS family (AMBIGUOUS-filtered, NULL survives) and the
+    # MENTIONS/SPAWNS family (unfiltered).
+    assert len(ins) == 2, f"expected exactly 2 type IN sets in v_dead_code, found {len(ins)}"
+    first = {m.strip().strip("'") for m in ins[0].split(",")}
+    second = {m.strip().strip("'") for m in ins[1].split(",")}
+    assert first == set(ALIVE_CALL_EDGE_TYPES)
+    assert second == set(UNFILTERED_USAGE_EDGE_TYPES)
+    assert first | second == set(USAGE_EDGE_TYPES)
 
 
 def test_usage_hints_and_test_linkage_block_view():

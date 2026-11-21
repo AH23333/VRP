@@ -110,13 +110,29 @@ def mutual_cycles(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
 
 
 def dead_code(con: sqlite3.Connection, limit: int = 50) -> list[dict]:
-    rows = _rows(con, "SELECT qualified_name, label, file_path, name FROM v_dead_code", None)
+    # BB1 (#205): fetch fid + has_ambiguous so AMBIGUOUS-only survivors of
+    # the v_dead_code view get classify()'s medium signal; output keys stay
+    # identical to the pre-BB1 dossier shape (no fid/has_ambiguous leak).
+    rows = _rows(
+        con,
+        "SELECT v.fid AS fid, v.qualified_name AS qualified_name, v.label AS label,"
+        " v.file_path AS file_path, v.name AS name,"
+        " EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = v.fid AND e.type IN ('CALLS', 'CALL_REFERENCE')"
+        "          AND e.resolution_label = 'AMBIGUOUS') AS has_ambiguous"
+        " FROM v_dead_code v",
+        None,
+    )
     filtered = [r for r in rows if s2_deadcode.is_candidate(r["name"], r["file_path"])]
     called = s2_deadcode.called_names(con)
     ranked = []
     for r in filtered:
-        confidence, reason = s2_deadcode.classify(r["name"], called)
-        item = dict(r)
+        confidence, reason = s2_deadcode.classify(r["name"], called, bool(r["has_ambiguous"]))
+        item = {
+            "qualified_name": r["qualified_name"],
+            "label": r["label"],
+            "file_path": r["file_path"],
+            "name": r["name"],
+        }
         item["confidence"] = confidence
         item["reason"] = reason
         ranked.append((s2_deadcode.CONFIDENCE_RANK[confidence], item))

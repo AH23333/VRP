@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS edges (
     strategy TEXT,
     confidence REAL,
     line INTEGER,
-    properties_json TEXT
+    properties_json TEXT,
+    resolution_label TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_fid, type);
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_fid, type);
@@ -361,7 +362,9 @@ WHERE NOT (c.norm GLOB 'test_*' OR c.norm GLOB '*/test_*')
   AND c.norm NOT GLOB '*/test/*'
   AND c.norm NOT GLOB 'spec/*'
   AND c.norm NOT GLOB '*/spec/*'
-  AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = c.fid AND e.type IN ('CALLS', 'CALL_REFERENCE', 'MENTIONS', 'SPAWNS'))
+  AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = c.fid AND e.type IN ('CALLS', 'CALL_REFERENCE')
+                    AND (e.resolution_label IS NULL OR e.resolution_label != 'AMBIGUOUS'))
+  AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.dst_fid = c.fid AND e.type IN ('MENTIONS', 'SPAWNS'))
   AND NOT EXISTS (SELECT 1 FROM usage_hints u WHERE u.dst_fid = c.fid)
   AND NOT EXISTS (SELECT 1 FROM test_linkage t WHERE t.target_fid = c.fid);
 
@@ -389,3 +392,9 @@ WHERE sf.file_path != st.file_path
   AND st.file_path NOT GLOB '<*'
   AND st.file_path NOT GLOB '>*'
 GROUP BY sf.file_path, st.file_path;
+
+-- V17 (#205): PRAGMA user_version gates the migration chain in
+-- etl.ensure_schema. 2 = BB1 resolution_label column (v1 is a reserved
+-- pre-tracking baseline slot that no library ever actually held; 0 =
+-- pre-tracking library of any historical shape).
+PRAGMA user_version = 2;

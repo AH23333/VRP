@@ -148,9 +148,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 2036 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 2060 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1529 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3565 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3589 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -159,7 +159,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3565 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2036 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2060 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）
@@ -203,6 +203,8 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 - 《Checklist-并发归并确定性.md》——BB5 新并行代码点必过审查项（归并点显式排序/输出与串行恒等/优先复用 run_thunks/写面零交叉/过 census）+ CGC as_completed 完成序泄漏参照事故锚点 + 现有并行面审计表；census 守卫 tests/test_parallel_merge_census.py
 - 《设计稿-B4-测试覆盖对账.md》——批⑤设计稿（用户授权自批 2026-11-21，实施 #203）：外部 coverage.py JSON 导入（生产者外部零依赖红线）→ test_coverage 表（file_path 键 OWNED 存续/per-label 整批替换）→ test_linkage 静态关联 vs 实际行覆盖五桶对账（body 区间 def 行排除——import 执行非测试执行；linked_not_covered_measured=「静态说有测试但从不执行」假关联强信号）/unresolved_files 诚实上报/决策点 D1-D5
 - 《设计稿-F15BB3-查准查全基准与Golden审计矩阵.md》——批⑥设计稿（用户授权自批 2026-11-21，实施 #204）：Golden 审计矩阵——committed golden JSON 独立真值双面审计（CGC 循环完美门反面：导出与自己比=21/21 PASS 假象，真实 CALLS 准确率 84.6%）；violations 多集匹配（kind/file/line+R-AD payload 条件键）/symbols 五键精确近失成对；missing/spurious 双向计数+precision/recall 分母零→null 诚实；fixture 节一键重建可跑仓；七件真值集（5 s7 语言+2 ETL pin）零新增标注起步（F15 立项承诺兑现）；决策点 D1-D7
+- 《设计稿-BB1V17-调用边置信度分层与schema迁移矩阵.md》——批⑦设计稿（用户授权自批 2026-11-21，实施 #205）：调用边置信度分层+schema 迁移矩阵合批——edges.resolution_label 列（confidence 双阈值 0.85/0.70→EXTRACTED/INFERRED/AMBIGUOUS；None→NULL 未知不惩罚；三仓真值探针实证 evidence/strategy 白名单不可枚举故否决）+MIGRATIONS 迁移链（PRAGMA user_version=2，先 ALTER 后 executescript 视图硬约束）+v_dead_code 拆分 AMBIGUOUS 过滤（IS NULL OR 显式防三值逻辑坑）；决策点 D1-D8
+- 《schema版本承诺.md》——V18 政策（#205 rider）：facts.db schema 版本承诺——user_version 语义/N-1 库可迁移承诺/v0.x 破坏性变更随 minor 宽松政策/迁移链工程规则/反向风险记档/v1 保留基线槽说明
 - 《SARIF-CI消费指南.md》——G17 出圈：外部项目 CI 消费 vrp SARIF 指南（GitHub Actions upload-sarif 样例/字段对照表/两层截断诚实链（vrp cap 2000+propertyBag 总数标注 × GitHub 5000 上限）/跨仓 dogfood 实测（lusiem 1064 全量 507KB、tree-sitter-analyzer 15741→2000 截断 979KB）/GitLab 通用 CI 提示；零服务端红线不动——上传动作归消费方）
 - 构想 v1-v6——历史方案，只读
 

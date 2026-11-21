@@ -116,12 +116,14 @@
 - **轮子**：**Django migrations/alembic**（迁移链思想：线性链+每步测试）；**sqlite3 user_version**（SQLite 原生 schema 版本机制）。
 - **判定**：**学**（迁移链组织）+**造**（旧版库 fixture 集合×迁移路径断言——本仓 schema 变更频率低，成本可控）。
 - **成本**：低-中。优先级：探索（下次 schema 变更时顺势建立）。
+- **状态**：**已完成**（2026-11-21，#205 批⑦ rider）——"下次 schema 变更时顺势建立"触发条件兑现（BB1 动 schema）：`etl.py` `MIGRATIONS` 线性迁移链（学 alembic 链思想零依赖自建——先 ALTER 后 executescript 视图硬约束）+`PRAGMA user_version = 2`+旧版库 fixture 矩阵（tests/test_migrations.py 8 件：v0 升级/幂等/视图替换/链形状/半迁移探测/迁移后写入面）。
 
 ### V18. 只读 API 稳定化
 - **是什么**：facts.db 表结构对外部工具的版本承诺（schema 兼容政策文档化——第三方直接读库的契约）。
 - **轮子**：**semver**（版本语义）；JSON Schema versioning 实践（参照）。
 - **判定**：**造**（政策文档+schema 版本号对外文档化）。**反向风险**：公开承诺=变更成本上升——发布早期（v0.x）宜承诺"破坏性变更随 minor 走"宽松政策。
 - **成本**：低（文档）。优先级：探索。
+- **状态**：**已完成**（2026-11-21，#205 批⑦ rider）——政策文档定稿 docs/schema版本承诺.md：user_version 语义/N-1 库可迁移承诺/v0.x"破坏性变更随 minor"宽松政策（本节反向风险记档落地）/迁移链工程规则/v1 保留基线槽说明。
 
 ### V19. 事件溯源
 - **是什么**：ETL/curate/transact 全操作 append-only 事件流（审计+回放）。

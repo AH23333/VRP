@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from . import __version__
@@ -103,7 +104,30 @@ OWNED_TABLES = (
 )
 
 
+def _migrate_v2_add_resolution_label(con: sqlite3.Connection) -> None:
+    """V17 first column migration (BB1 #205). Idempotent: probes
+    PRAGMA table_info so re-runs and partially-migrated libraries never hit
+    'duplicate column name'. Must run BEFORE the schema executescript -
+    v_dead_code's new view body references resolution_label and CREATE VIEW
+    fails on a library that lacks the column. A brand-new (table-less)
+    library skips the ALTER: the executescript builds the full table with
+    the column already in place."""
+    cols = [row[1] for row in con.execute("PRAGMA table_info(edges)")]
+    if cols and "resolution_label" not in cols:
+        con.execute("ALTER TABLE edges ADD COLUMN resolution_label TEXT")
+    con.commit()
+
+
+MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
+    (2, _migrate_v2_add_resolution_label),
+]
+
+
 def ensure_schema(con: sqlite3.Connection) -> None:
+    current = con.execute("PRAGMA user_version").fetchone()[0]
+    for _target, migrate in MIGRATIONS:
+        if _target > current:
+            migrate(con)
     con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     con.commit()
 
@@ -458,6 +482,7 @@ def _etl_edges(
         elif table == "usage_hints":
             usage_rows.append((src_fid, dst_fid, props_raw))
         else:
+            conf = props.get("confidence")
             edge_rows.append(
                 (
                     src_fid,
@@ -465,9 +490,12 @@ def _etl_edges(
                     etype,
                     level,
                     props.get("strategy"),
-                    props.get("confidence"),
+                    conf,
                     props.get("line"),
                     props_raw,
+                    # BB1 (#205): CALLS-family edges carry the resolution
+                    # label; every other edge type stays NULL (not applicable).
+                    ev.resolution_label(conf) if etype in ev.CALL_EDGE_TYPES else None,
                 )
             )
 
@@ -490,8 +518,8 @@ def _etl_edges(
     for fid in replaced:
         dst.execute("DELETE FROM edges WHERE src_fid = ? OR dst_fid = ?", (fid, fid))
     dst.executemany(
-        "INSERT INTO edges (src_fid, dst_fid, type, evidence, strategy, confidence, line, properties_json)"
-        " VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO edges (src_fid, dst_fid, type, evidence, strategy, confidence, line, properties_json, resolution_label)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
         edge_rows,
     )
     dst.executemany("INSERT INTO usage_hints (src_fid, dst_fid, properties_json) VALUES (?,?,?)", usage_rows)

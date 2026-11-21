@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -8,6 +9,8 @@ import time
 from pathlib import Path
 
 import pytest
+
+from vrp.etl import ensure_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 CBM_CACHE = Path(r"D:\cbm-cache")
@@ -110,6 +113,13 @@ def big_repo():
     repo = VERIFY_DIR / "tree-sitter-analyzer"
     if not (repo / ".vrp" / "facts.db").exists():
         pytest.skip("tree-sitter-analyzer big repo not prepared")
+    # V17 (#205): upgrade the shared library to the current schema version
+    # before any reader sees it - mirrors the real on-open migration path.
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    try:
+        ensure_schema(con)
+    finally:
+        con.close()
     return repo
 
 
@@ -118,4 +128,12 @@ def lusiem_repo():
     repo = VERIFY_DIR / "code-atlas-lusiem"
     if not repo.exists():
         pytest.skip("code-atlas-lusiem verify repo not present")
+    facts = repo / ".vrp" / "facts.db"
+    if facts.exists():
+        # V17 (#205): same on-open upgrade as big_repo.
+        con = sqlite3.connect(facts)
+        try:
+            ensure_schema(con)
+        finally:
+            con.close()
     return repo
