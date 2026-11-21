@@ -131,6 +131,17 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `session` | 全信任模式（构想v7 §3.3）：begin/end 出初末 facts.db 快照（sqlite backup 安全复制），report 出初末计数 diff（四组）+ 双 L0 架构图并排 + 会话窗口 verdict 时间线；不做图 diff（诚实版） |
 | `mcp` | AI 接口层：MCP server over stdio（per-repo；`pip install vrp[mcp]`；0.2.0 破坏性收敛三十→十件：vrp_query 17 类型单强查询工具（search/architecture/module/symbol/facts/callers/callees/slice/path/seams/coverage/impact/drift/curate_slices/curate_structure/curate_receipt/tx_verdicts）/dossier/curate_submit/curate_reject/tx_preview/tx_submit/tx_run/render(3 kind)/session(3 action)/enforce；isError 面归零（_guard 捕 (SystemExit, Exception) 统一成功形状 {"error"}，KI 照传）+五层预算（24K 输出硬顶+JSON 感知确定性收缩（mcp_budget.emit）、静态限额中央表+VRP_TOOL_RESULT_LIMITS env 覆盖、SQL 超时 progress_handler（nav_path 300s/query_facts 10s+VRP_TOOL_QUERY_TIMEOUT）、输入上界 sql/tx_json 1MiB·query 10K；设计稿-AA1AA2 §4）） |
 
+## 场景 skill
+
+`skills/` 目录四件场景操作协议（SKILL.md；agent 接 vrp MCP/CLI 后的消费指南；形状守卫 tests/test_skills.py——frontmatter/name==目录/description 单行 ASCII ≤1024/LF 纯/交叉链防烂链）：
+
+| Skill | 场景 | 一句话 |
+|---|---|---|
+| `vrp-loop` | 重构 | 八步事务循环（定位→下钻→产出→预览→执行→verdict→修复→回归）；T4 不放闸、每事务至多 3 重试 |
+| `vrp-curation` | 梳理 | slices/structure 六步生产线（验证入库+drift remap）；拒收码速查 |
+| `vrp-archaeology` | 考古 | 读懂陌生/遗留仓：事实层→dossier 简报→timeline 腐化时间线（A1 转折点）→cochange 隐式耦合→病理清单→report 交付（E14 批⑨ #207；只读零写场景） |
+| `vrp-review` | 审查 | 证据化审查：findings 开放公式排序→xcheck 引擎交叉→impact 爆炸半径→testcov 假测试关联现形→review 评语（SARIF→review-comments.json）；advisory 非 gate——人决策 |
+
 ## 重构事务与闸门
 
 事务失败即整体回滚（git 原子性），verdict 落 `.vrp/verdicts/`：
@@ -150,9 +161,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 2092 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 2100 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1529 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3621 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3629 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -161,7 +172,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3621 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2092 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2100 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

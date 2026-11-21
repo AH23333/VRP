@@ -77,5 +77,7 @@ Curated artifacts go stale as transactions land. `vrp_query(query_type=drift)` (
 ## Related
 
 - Curation loop (slices/structure) -> `skills/vrp-curation/` (curate_submit validation -> nav_slice drill-down -> drift remap)
+- Read-first scenarios (understand/rot history) -> `skills/vrp-archaeology/`
+- Evidence-based review -> `skills/vrp-review/`
 - Reporting loop -> render tool: `render(kind=verdicts)` (T4 briefing), `render(kind=slice, target=<slice_id>)` (business-line Mermaid source), `render(kind=report)` (full static report at `.vrp/report/` - the user-facing product: how-to-read guide, AI-curated overview, pathology checkup in plain language, deep data folded for agents)
 - Transaction schema authority: `docs/契约/事务契约.md`; curated-artifact schema authority: `docs/契约/梳理工件契约.md`

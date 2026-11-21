@@ -80,3 +80,9 @@ file level: `FILE_NOT_JSON` / `FILE_WRONG_SHAPE`
 | CLI `vrp curate <repo>` / `--reject <id> --note ...` | manual entry points |
 
 Output budget: tool outputs are capped at 24K chars with deterministic JSON-aware shrinking (a `_truncated` note records what was cut - narrow the query or pass a lower `limit` option instead of retrying blindly).
+
+## Related
+
+- Restructuring loop (transactions) -> `skills/vrp-loop/`
+- Read-first scenarios (understand/rot history) -> `skills/vrp-archaeology/`
+- Evidence-based review -> `skills/vrp-review/`
