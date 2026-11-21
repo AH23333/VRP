@@ -1,0 +1,10 @@
+id: py-sql-concat
+language: Python
+severity: warning
+note: SQL string concatenation enables injection (use bound parameters)
+rule:
+  any:
+    - pattern: $CUR.execute($A + $B)
+    - pattern: $CUR.execute($A + $B, $$$REST)
+    - pattern: $CUR.executemany($A + $B)
+    - pattern: $CUR.executemany($A + $B, $$$REST)

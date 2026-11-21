@@ -21,6 +21,9 @@ RULE_META: dict[str, tuple[str, str]] = {
     "py-bare-except": ("P3", "swallowed-error"),
     "py-todo-comment": ("P3", "debris-marker"),
     "py-prototype-name": ("P3", "prototype-name"),
+    "py-eval-exec": ("P5", "dynamic-exec"),
+    "py-unsafe-deserialize": ("P5", "unsafe-deserialize"),
+    "py-sql-concat": ("P5", "sql-concat"),
 }
 
 

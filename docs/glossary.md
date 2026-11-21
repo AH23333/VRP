@@ -37,7 +37,7 @@
 | S1 | CBM（codebase-memory）索引，符号/边来源；缓存库 store_meta 章（db_uid）溯源 | `vrp/s1_cbm.py`；`vrp/gc.py`（缓存治理） |
 | S1.5 ETL | CBM→facts.db 五级证据路由 | `vrp/etl.py` |
 | xcheck | code-atlas 四元组交叉验证（CBM 对账），agreement_pct 汇总 | `vrp/xcheck.py` |
-| S2 病理 | ast-grep 9 规则+死代码（P4）+克隆（jscpd）+变异三引擎 | `vrp/s2_*.py`；`vrp/rules/s2/` |
+| S2 病理 | ast-grep 12 规则（9 基础+3 危险 API 族 P5）+死代码（P4）+克隆（jscpd）+变异三引擎 | `vrp/s2_*.py`；`vrp/rules/s2/` |
 | S3 校验 | 锚定/覆盖率/证据闸门（AI claim 核对面） | `vrp/s3.py` |
 | S4 freeze | 基线快照+变更预筛 | `vrp/s4_freeze.py` |
 | S5 dossier | 五视图装配+repomap+任务型预算（AI 消费面） | `vrp/s5_dossier.py` |

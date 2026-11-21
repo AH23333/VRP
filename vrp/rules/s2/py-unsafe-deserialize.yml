@@ -1,0 +1,17 @@
+id: py-unsafe-deserialize
+language: Python
+severity: warning
+note: unsafe deserialization can execute arbitrary code (pickle payload / yaml without Loader)
+rule:
+  any:
+    - pattern: pickle.loads($$$ARGS)
+    - pattern: pickle.load($$$ARGS)
+    - pattern: yaml.load($$$ARGS)
+      not:
+        has:
+          kind: argument_list
+          has:
+            kind: keyword_argument
+            has:
+              field: name
+              regex: ^Loader$

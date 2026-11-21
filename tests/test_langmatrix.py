@@ -55,9 +55,9 @@ def test_astgrep_face_counts_match_rule_language_fields():
     """规则 yml language 字段→EXT_LANGUAGES 反查→引擎后缀交集归行：
     js-console-log 落 ts 行（TS_SUFFIXES 含 .js）——js 规则不失踪。"""
     counts = langmatrix.astgrep_rules_by_engine()
-    assert counts == {"py": 4, "ts": 5}  # ts=4 ts 规则+1 js 规则归并
+    assert counts == {"py": 7, "ts": 5}  # ts=4 ts 规则+1 js 规则归并；py=4+3 危险 API 规则（H3）
     rule_files = sorted((REPO_ROOT / "vrp" / "rules" / "s2").glob("*.yml"))
-    assert len(rule_files) == len(s2_astgrep.RULE_META) == sum(counts.values()) == 9
+    assert len(rule_files) == len(s2_astgrep.RULE_META) == sum(counts.values()) == 12
 
 
 def test_mutate_face_maps_three_engines():
@@ -85,7 +85,7 @@ def test_testsig_selfbuild_face():
 def test_face_summary_gap_counts():
     summary = langmatrix.face_summary()
     assert summary["enforce"] == {"covered": 21, "total": 21}
-    assert summary["astgrep"]["rules"] == 9  # 4 py+4 ts+1 js 全落行（js 归 ts）
+    assert summary["astgrep"]["rules"] == 12  # 7 py+4 ts+1 js 全落行（js 归 ts）
     assert summary["astgrep"]["covered"] == 2 and summary["astgrep"]["total"] == 21  # py/ts
     assert summary["mutate"]["covered"] == 3  # py/ts/rs（js 归 ts）
     assert summary["deadcode_p4"]["covered"] == 2  # ts/py（js 归 ts）
@@ -114,7 +114,7 @@ def test_cli_end_to_end(capsys):
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert len(out["rows"]) == 21 + len(langmatrix.extra_indexed_languages())
-    assert out["summary"]["astgrep"]["rules"] == 9
+    assert out["summary"]["astgrep"]["rules"] == 12
     rc = cli_main(["langmatrix"])
     text = capsys.readouterr().out
     assert rc == 0 and "vrp langmatrix" in text

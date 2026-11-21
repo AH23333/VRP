@@ -114,7 +114,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `etl` | CBM → facts.db 五级证据路由（J8 文件粒度增量默认自动，`--full` 强制全量） |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
 | `run` | S0→S1→ETL→xcheck 一发；`--watch` I7 变更自动重跑（轮询 mtime（os.walk 快照 mtime_ns+size，产物/噪音目录剪枝——.vrp 不剪即自我触发死循环）+防抖（变更持续窗口滑动，静默 ≥--debounce（默认 1.0s）才触发——编辑器保存风暴不连发；--interval 默认 2.0s）；初始全跑建基线后前台循环，Ctrl+C 干净退出 rc=0；rerun 失败/异常不杀 watch（实时反馈面生存性优先）；J8 增量链（#190）让重跑廉价=成本前提；watchdog/entr/ptw 判定绕——零依赖纯 stdlib；`--reindex` 作用于每次重跑） |
-| `s2` | 病理检测：ast-grep 9 规则 + 死代码（BB2 置信度三级 low/medium/high+reason——五类误报源整词匹配分层非静默丢弃，CGC CONTAINS 事故锁）+ knip/vulture + jscpd |
+| `s2` | 病理检测：ast-grep 12 规则（9 基础+3 危险 API 族 P5（#209，H3：py-eval-exec 动态执行/py-unsafe-deserialize 反序列化（yaml Loader 关键字下钻排除）/py-sql-concat SQL 拼接（execute/executemany 首参二元 +，双 arity）；规则是数据不是代码，m.eval() 方法调用/Loader=SafeLoader/干净 execute 零误报实核）） + 死代码（BB2 置信度三级 low/medium/high+reason——五类误报源整词匹配分层非静默丢弃，CGC CONTAINS 事故锁）+ knip/vulture + jscpd |
 | `mutate-plan` / `mutate-run` | 变异预算采样 / 变异执行（mutmut·Stryker·cargo-mutants） |
 | `validate` / `gate` | 锚定+覆盖率校验 / AI claim 证据闸门 |
 | `freeze` | 基线命令执行 + graph 快照 + 变更预筛 |
@@ -162,9 +162,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 2118 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 2120 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1529 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3647 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3649 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -173,7 +173,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3647 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2118 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2120 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

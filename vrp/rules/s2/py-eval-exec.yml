@@ -1,0 +1,8 @@
+id: py-eval-exec
+language: Python
+severity: warning
+note: dynamic eval/exec executes arbitrary code (RCE risk)
+rule:
+  any:
+    - pattern: eval($$$ARGS)
+    - pattern: exec($$$ARGS)

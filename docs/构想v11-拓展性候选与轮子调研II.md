@@ -23,6 +23,7 @@
 - **轮子**：**semgrep**（规则语法与模式库组织——只学规则思想不引入引擎）、**bandit**（Python 危险 API 清单参照）。
 - **判定**：**绕**引擎（ast-grep yml 已在，规则是数据不是代码）。
 - **成本**：低。优先级：甜点偏后（按需扩规则）。
+- **状态**：**已完成**（2026-11-21 甜点穿插批 #209）——3 条新规则 9→12（规则是数据不是代码，yml 扩展零引擎改动）：`py-eval-exec`（builtin eval/exec 全 arity `$$$ARGS`；方法调用 `m.eval()` callee 是 attribute 不误报）/`py-unsafe-deserialize`（pickle.loads/pickle.load/yaml.load；`yaml.load(Loader=…)` 经 argument_list→keyword_argument name 字段下钻排除——`has` 只看直接子节点，call 直接子是 argument_list，单层下钻够不着）/`py-sql-concat`（execute/executemany 首参二元 + 拼接；`$A + $B, $$$REST` 字面逗号要求第二参——单参/双参双形态各补一模式）；**P5 病理码启用**（dangerous API——render.PATHOLOGY_LEGEND 补位 P1-P4/P8/P9 空档，explain 零复制直引自动流入，色位 #00695c 先前已预留）；semgrep/bandit 判定兑现：只学规则思想（bandit B301/B506 清单参照）零引擎引入；langmatrix astgrep 面 py 4→7 实时跟随；doclint readme-astgrep-rules 标记对账 9→12 同步。
 
 ## I. CLI/交互工程
 

@@ -211,3 +211,77 @@ def test_run_rule_timeout_raises_runtime_error_tree_killed(repo, monkeypatch):
     with pytest.raises(RuntimeError, match="timed out"):
         run_rule(str(exe), rule, repo)
     assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
+
+
+DANGEROUS_PY = """import pickle
+import yaml
+import sqlite3
+
+def risky(data, f):
+    obj = eval(data)
+    exec(data)
+    o = pickle.loads(data)
+    p = pickle.load(f)
+    u = yaml.load(data)
+    safe = yaml.load(data, Loader=yaml.SafeLoader)
+    cur = sqlite3.connect("x").cursor()
+    cur.execute("SELECT * FROM t WHERE id = " + data)
+    cur.executemany("INSERT INTO t VALUES(" + data + ")", [])
+    cur.execute("SELECT 1")
+    return obj
+
+class Model:
+    def eval(self):
+        return 1
+
+m = Model()
+m.eval()
+"""
+
+
+@pytest.mark.skipif(BIN is None, reason="ast-grep binary not available")
+def test_dangerous_rules_detect_anchor_and_pathology(tmp_path, facts_db):
+    """H3 危险 API 规则族（P5）：eval/exec/pickle/yaml/SQL 拼接命中+锚定+病理码。"""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "danger.py").write_text(DANGEROUS_PY, encoding="utf-8")
+    facts_db.execute(
+        "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        ("fid-risky", "proj", "danger.risky", "Function", "risky", "src/danger.py", 5, 16, "h"),
+    )
+    facts_db.commit()
+    result = scan(facts_db, tmp_path, bin_path=BIN)
+    assert result["rejected"] == 0
+    assert result["per_rule"]["py-eval-exec"] == 2
+    assert result["per_rule"]["py-unsafe-deserialize"] == 3
+    assert result["per_rule"]["py-sql-concat"] == 2
+
+    rows = facts_db.execute(
+        "SELECT pathology, kind, anchor_fid FROM findings WHERE source = ?",
+        (FINDINGS_SOURCE,),
+    ).fetchall()
+    assert len(rows) == 7
+    assert {r[0] for r in rows} == {"P5"}
+    kinds = [r[1] for r in rows]
+    assert kinds.count("dynamic-exec") == 2
+    assert kinds.count("unsafe-deserialize") == 3
+    assert kinds.count("sql-concat") == 2
+    assert all(r[2] == "fid-risky" for r in rows), "dangerous hits must anchor inside risky"
+
+
+@pytest.mark.skipif(BIN is None, reason="ast-grep binary not available")
+def test_dangerous_rules_safe_forms_not_flagged(tmp_path, facts_db):
+    """安全形态零误报实核：yaml.load(Loader=SafeLoader)/干净 execute/Model.eval()
+    方法调用（callee 是 attribute 非 builtin eval）不进 findings。"""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "danger.py").write_text(DANGEROUS_PY, encoding="utf-8")
+    scan(facts_db, tmp_path, bin_path=BIN)
+    lines = {
+        r[0]
+        for r in facts_db.execute(
+            "SELECT start_line FROM findings WHERE source = ?", (FINDINGS_SOURCE,)
+        )
+    }
+    assert lines == {6, 7, 8, 9, 10, 13, 14}, f"unexpected hit lines: {sorted(lines)}"

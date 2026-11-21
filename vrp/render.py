@@ -61,6 +61,7 @@ PATHOLOGY_LEGEND: dict[str, str] = {
     "P2": "near-duplicate code - almost identical blocks in different places; candidates to unify",
     "P3": "prototype debris - commented-out or abandoned experiment code",
     "P4": "dead code / dependency bloat - unused symbols, unreachable code or needless dependencies",
+    "P5": "dangerous API - dynamic eval/exec, unsafe deserialization or SQL string concatenation (RCE / injection risk)",
     "P8": "tautological tests - tests whose assertions can hardly fail",
     "P9": "layer violation - a dependency that goes against the declared layer rules",
 }
