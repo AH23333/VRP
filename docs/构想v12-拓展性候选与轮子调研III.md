@@ -55,6 +55,7 @@
 - **轮子**：**scikit-learn validation curve**（超参敏感度曲线概念——只学形态不引入）。
 - **判定**：**造**（阈值扫描=同仓多次跑引擎，输出 finding 数×阈值曲线 JSON+图）。
 - **成本**：低-中。优先级：探索（先攒真实"选阈值难"案例）。
+- **状态**：**已完成**（2026-11-21 甜点穿插批 #213）——`vrp sweep <repo>`（scikit-learn validation curve 只学形态不引库）：离线阈值敏感度扫描——不重跑引擎，纯 findings 落盘 payload 值域重切（读侧直方图）；minTokens 20-200 步长 10/minLines 5-50 步长 5 双网格×计数单调不增曲线（计数=findings 值≥阈值，悬崖点=相邻网格最大绝对落差——选阈值参考：悬崖右侧=噪音快速衰减区）；jscpd 默认 50 在 tokens 曲线标 current；本仓真数据实证：s2-jscpd 1018 条 P2，悬崖 60 tokens 处 -422 落差；**可扫面诚实边界**：仅 jscpd tokens/lines 有数值 payload 可扫，规则面布尔命中/deadcode/vulture 无数值阈值字段→NON_SWEEPABLE_NOTES 记档不硬造；报告非门 rc 恒 0。
 
 ## T. 消费者特化输出
 

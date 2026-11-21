@@ -32,6 +32,8 @@ from . import langmatrix as langmatrix_mod
 from . import mdcode as mdcode_mod
 from . import etl_health
 from . import layer_metrics
+from . import sweep
+from . import migprog
 from . import secrets as secrets_mod
 from . import scoring as scoring_mod
 from . import complexity as complexity_mod
@@ -327,6 +329,38 @@ def cmd_layermetrics(args) -> int:
     else:
         _print_text(layer_metrics.render_text(result))
     return 1 if result["violations"] else 0
+
+
+def cmd_sweep(args) -> int:
+    """S8 阈值敏感度扫描——findings payload 值域重切曲线+悬崖点；rc 恒 0。"""
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = dbpath.ro_connect(facts_path)
+    try:
+        result = sweep.run_sweep(con)
+    finally:
+        con.close()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(sweep.render_text(result))
+    return 0
+
+
+def cmd_migprog(args) -> int:
+    """D11 迁移进度——seams 快照/收缩曲线；rc 恒 0（追踪面非门）。"""
+    repo = _repo_arg(args.repo)
+    if args.snapshot:
+        result = migprog.save_snapshot(repo)
+    else:
+        result = migprog.progress(repo)
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(migprog.render_text(result))
+    return 0
 
 
 def _run_pipeline(repo: Path, name: str, reindex: bool) -> int:
@@ -1455,6 +1489,41 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_layermetrics)
+
+    p = sub.add_parser(
+        "sweep",
+        help="S8: threshold sensitivity scan (validation-curve shape"
+        " learned, scikit-learn NOT imported): threshold x finding-count"
+        " curves + cliff points to help pick jscpd minTokens/minLines;"
+        " OFFLINE - no engine re-run, pure re-cut of stored findings"
+        " payloads (count = findings with value >= threshold, monotone"
+        " non-increasing); sweepable = s2-jscpd tokens/lines (own-repo"
+        " real case: 1000+ P2 findings); non-sweepable honest notes"
+        " (rule hits boolean, deadcode/vulture no numeric field);"
+        " jscpd default 50 marked current on the tokens curve;"
+        " rc always 0 (analysis face, not a gate)",
+    )
+    p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_sweep)
+
+    p = sub.add_parser(
+        "migprog",
+        help="D11: migration progress tracking - cross-seam edge"
+        " snapshots -> strangler completion pct (shrink curve);"
+        " seams single-source = nav_seams (#143, zero reimplementation);"
+        " snapshot appended to .vrp/migprog-history.jsonl (audit-append"
+        " semantics, runtime_evidence precedent; user sets the cadence);"
+        " progress = (baseline - current) / baseline cross edges,"
+        " baseline = first snapshot (migration start), negative ="
+        " coupling grew (honest); zero baseline = pct None honest;"
+        " no snapshot yet = honest note; rc always 0 (tracking face,"
+        " not a gate)",
+    )
+    p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
+    p.add_argument("--snapshot", action="store_true", help="append current seams snapshot to history")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_migprog)
 
     p = sub.add_parser(
         "xcheck-explain",
