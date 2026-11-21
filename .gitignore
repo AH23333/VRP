@@ -12,3 +12,5 @@ work/rust-calc-probe/.git/
 work/rust-calc-probe/.vrp/
 **/.vrp/
 **/.code-atlas/
+.coverage
+coverage.json

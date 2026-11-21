@@ -147,3 +147,35 @@ def test_cli_migprog_snapshot_and_progress(tmp_path, capsys):
     assert rc == 0
     assert "snapshots: 1" in out
     assert "progress: +0.00% seam shrink since baseline" in out
+
+
+def test_history_corrupted_line_tolerant(tmp_path):
+    repo = _repo_with_edges(tmp_path, 3)
+    migprog.save_snapshot(repo)
+    hist = repo / ".vrp" / "migprog-history.jsonl"
+    lines = hist.read_text(encoding="utf-8").splitlines()
+    hist.write_text("\n".join(["{bad json"] + lines) + "\n", encoding="utf-8")
+    result = migprog.progress(repo)
+    assert result["snapshots"] == 1  # 坏行宽容跳过，好行保留
+
+
+def test_render_missing_structure_face(tmp_path):
+    repo = _repo_with_edges(tmp_path, 2, structure=False)
+    text = migprog.render_text(migprog.snapshot(repo))
+    assert text.startswith("== migprog ==")
+    assert "structure: missing" in text
+
+
+def test_render_vs_last_line(tmp_path):
+    repo = _repo_with_edges(tmp_path, 6)
+    migprog.save_snapshot(repo)
+    repo2 = _repo_with_edges(tmp_path / "s2", 6)
+    dst = repo2 / ".vrp" / "migprog-history.jsonl"
+    dst.write_text((repo / ".vrp" / "migprog-history.jsonl").read_text(encoding="utf-8"), encoding="utf-8")
+    migprog.save_snapshot(repo2)
+    repo3 = _repo_with_edges(tmp_path / "s3", 3)
+    dst3 = repo3 / ".vrp" / "migprog-history.jsonl"
+    dst3.write_text(dst.read_text(encoding="utf-8"), encoding="utf-8")
+    text = migprog.render_text(migprog.progress(repo3))
+    assert "vs last snapshot (" in text
+    assert "delta +50.00%" in text

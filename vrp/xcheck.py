@@ -142,7 +142,6 @@ def run_xcheck(repo: Path, facts_db: Path, reindex: bool = False) -> dict:
         return {"index": index_result, "ledger_rows": 0}
 
     ca = dbpath.ro_connect(ca_db)
-    ca.row_factory = sqlite3.Row
     facts = sqlite3.connect(facts_db)
     try:
         ca_sym = {}

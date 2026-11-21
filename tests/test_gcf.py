@@ -78,3 +78,8 @@ def test_emit_gcf_oversized_falls_back_to_json_shrink(monkeypatch):
     parsed = json.loads(out)  # 超帽回退 JSON 收缩链（GCF 面不收缩——诚实边界）
     assert "_truncated" in parsed
     monkeypatch.delenv("VRP_OUTPUT_FORMAT", raising=False)
+
+
+def test_empty_key_rows_fallback_json():
+    out = gcf.dumps([{}, {}])
+    assert json.loads(out) == [{}, {}]  # 空键行不可表头化——回退 JSON 宁缺勿错（:51 面）

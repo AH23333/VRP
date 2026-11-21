@@ -102,3 +102,18 @@ def test_cli_sweep_end_to_end(tmp_path, facts_db, capsys):
     rc = cli_main(["sweep", str(tmp_path)])
     assert rc == 0
     assert "== sweep ==" in capsys.readouterr().out
+
+
+def test_non_dict_payload_skipped(facts_db):
+    _seed(facts_db, [42])
+    facts_db.execute(INS, ("P2", "duplicate", "s2-jscpd", "[1, 2]"))  # 合法 JSON 非 dict
+    facts_db.commit()
+    result = sweep.run_sweep(facts_db)
+    assert result["jscpd_min_tokens"]["findings"] == 1  # 非 dict payload 宽容跳过
+
+
+def test_render_cliff_none_on_flat_or_empty(facts_db):
+    facts_db.executescript(SCHEMA.read_text(encoding="utf-8"))
+    facts_db.commit()
+    text = sweep.render_text(sweep.run_sweep(facts_db))
+    assert "cliff: none on grid (flat or empty)" in text

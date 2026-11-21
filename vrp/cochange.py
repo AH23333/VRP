@@ -30,12 +30,12 @@ from itertools import combinations
 from pathlib import Path
 
 from . import procs
+from . import timeline as timeline_mod
 
 DEFAULT_MIN_SUPPORT = 3
 DEFAULT_MIN_CONFIDENCE = 0.3
 DEFAULT_LIMIT = 50
 GIT_LOG_TIMEOUT = 60
-US = "\x1f"
 GIT_LOG_FORMAT = "%x1f%H%x1f%aI"
 
 
@@ -43,27 +43,12 @@ def parse_log(raw: str) -> list[dict]:
     """git log 原始输出 → commit 列表（git log 序：新→旧）。
 
     每元素 {"date": ISO 时间, "files": [去重+规范化+排序后的路径]}。
-    同 commit 重复路径计一（共现是集合语义）；路径规范化 = 去首尾空白 +
-    反斜杠转正斜杠（etl `_norm` 先例）。US 起始行 = commit 头
-    （US + %H + US + %aI），其余非空行 = 文件路径——对 git 是否在头与
-    文件列表间插空行不敏感。
+    解析单源 = timeline.parse_history（同 US 格式同 GIT_LOG_FORMAT——
+    #214 深度审查统一 jaccard 0.953 重复面）；cochange 面只取
+    date+files（sha 不入共现语义）。
     """
-    commits: list[dict] = []
-    current: dict | None = None
-    for line in raw.splitlines():
-        if line.startswith(US):
-            if current is not None:
-                commits.append(current)
-            parts = line[1:].split(US)
-            current = {"date": parts[1] if len(parts) > 1 else "", "files": set()}
-        elif current is not None and line.strip():
-            path = line.strip().replace("\\", "/")
-            if path:
-                current["files"].add(path)
-    if current is not None:
-        commits.append(current)
     return [
-        {"date": c["date"], "files": sorted(c["files"])} for c in commits
+        {"date": c["date"], "files": c["files"]} for c in timeline_mod.parse_history(raw)
     ]
 
 

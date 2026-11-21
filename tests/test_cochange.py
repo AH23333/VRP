@@ -18,29 +18,15 @@ import pytest
 
 from vrp import cochange as coc
 from vrp import etl as etl_mod
-from vrp import procs
 from vrp.cli import build_parser, cmd_cochange
 from vrp.cli import main as cli_main
+
+from tests.git_helpers import _git, _init_repo
 
 SCHEMA = Path(coc.__file__).parent / "schema" / "facts_schema.sql"
 
 
 # ---------- 合成 git 仓 fixture（设计稿 §7：tmp git init + 脚本化多 commit） ----------
-
-
-def _git(repo: Path, *args: str, env: dict | None = None, ok: bool = True):
-    res = procs.run_tree(["git", *args], cwd=repo, timeout=30, env=env)
-    if ok:
-        assert res["returncode"] == 0, f"git {' '.join(args)} failed: {res['stderr']}"
-    return res
-
-
-def _init_repo(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
-    _git(path, "init", "-q", "-b", "master")
-    _git(path, "config", "user.email", "t@example.com")
-    _git(path, "config", "user.name", "t")
-    return path
 
 
 def _commit(repo: Path, files: dict[str, str], msg: str, date: str | None = None) -> None:

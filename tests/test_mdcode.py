@@ -186,3 +186,34 @@ def test_cli_mdcode_end_to_end(tmp_path, facts_db, capsys):
     assert rc == 0
     assert out["matched"] == 1
     assert {d["name"] for d in out["drift"]} == {"bar", "Baz", "qux", "Iface"}
+
+
+def test_run_mdcode_class_match_and_ts_name_only(tmp_path, facts_db):
+    _seed(facts_db)
+    (tmp_path / "g.md").write_text(
+        "# G\n\n```python\nclass Qux:\n    pass\n```\n\n```ts\nfunction foo(): void {}\n```\n",
+        encoding="utf-8",
+    )
+    result = mdcode.run_mdcode(facts_db, tmp_path)
+    # py Class Qux ↔ db Class（Class 分支）+ ts foo name-only（ts 词表未钉不比对类别）
+    assert result["matched"] == 2
+    assert result["drift"] == []
+
+
+def test_run_mdcode_unclosed_and_parse_error_counters(tmp_path, facts_db):
+    _seed(facts_db)
+    (tmp_path / "bad.md").write_text("```python\ndef broken(:\n", encoding="utf-8")
+    result = mdcode.run_mdcode(facts_db, tmp_path)
+    assert result["unclosed_fences"] == 1  # 未闭合 fence 计数
+    assert result["parse_errors"] == 1  # py 语法错计数（提取器诚实面）
+    assert result["extracted"] == 0
+
+
+def test_render_drift_cap_overflow_line(tmp_path, facts_db, monkeypatch):
+    _seed(facts_db)
+    (tmp_path / "g.md").write_text("```python\ndef zz1():\n    pass\n```\n", encoding="utf-8")
+    result = mdcode.run_mdcode(facts_db, tmp_path)
+    assert len(result["drift"]) == 1  # 数据面全量（cap 只在渲染面）
+    monkeypatch.setattr(mdcode, "DRIFT_CAP", 0)
+    text = mdcode.render_text(result)
+    assert "... and 1 more (use --json)" in text  # 渲染面截断恒真提示

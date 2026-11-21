@@ -220,3 +220,83 @@ def test_cli_layermetrics_rc_semantics(tmp_path, facts_db, capsys):
     out = capsys.readouterr().out
     assert rc == 1  # 阈值违例——deptrac 语义 CI 可用
     assert "[FAIL] module core: fan_out=3 exceeds limit 2" in out
+
+
+def test_structure_bad_payload_json_honest(facts_db):
+    facts_db.executescript(SCHEMA.read_text(encoding="utf-8"))
+    facts_db.execute(
+        "INSERT INTO structure (payload_json, status, created_at) VALUES ('not-json{','active','t')"
+    )
+    facts_db.commit()
+    result = layer_metrics.run_layer_metrics(facts_db)
+    assert result["structure"] is False  # 坏 payload 诚实未 curate 面不炸
+    assert result["modules"] == []
+
+
+def test_malformed_module_entries_tolerated(facts_db):
+    _seed(facts_db)
+    facts_db.execute("DELETE FROM structure")
+    payload = {
+        "modules": [
+            {"module_id": "core", "name": "core", "symbol_fids": [F1, F2], "layer": "bottom"},
+            {"module_id": "api", "name": "api", "symbol_fids": [F3, F4], "layer": "top"},
+            "junk-entry",  # 非 dict 跳过
+            {"module_id": 7, "name": "x", "symbol_fids": []},  # module_id 非 str 跳过
+            {"module_id": "bad", "name": "bad", "symbol_fids": "f1"},  # fids 非 list 跳过
+        ],
+        "layers": [
+            {"name": "top", "may_depend_on": ["bottom"]},
+            {"name": "bottom", "may_depend_on": []},
+        ],
+    }
+    facts_db.execute(
+        "INSERT INTO structure (payload_json, status, created_at) VALUES (?,'active','t')",
+        (json.dumps(payload, ensure_ascii=False),),
+    )
+    facts_db.commit()
+    result = layer_metrics.run_layer_metrics(facts_db)
+    assert {m["name"] for m in result["modules"]} == {"core", "api"}  # 坏条目跳过好条目保留
+    mods = {m["name"]: m for m in result["modules"]}
+    assert mods["core"]["fan_out"] == 3  # 好条目度量不受坏条目影响
+
+
+def test_self_loop_edge_not_counted(facts_db):
+    _seed(facts_db)
+    facts_db.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES (?,?,'CALLS','import')", (F1, F1))
+    facts_db.commit()
+    result = layer_metrics.run_layer_metrics(facts_db)
+    mods = {m["name"]: m for m in result["modules"]}
+    assert mods["core"]["fan_out"] == 3  # 自环不入跨模块边
+
+
+def test_threshold_instability_none_not_judged(facts_db):
+    facts_db.executescript(SCHEMA.read_text(encoding="utf-8"))
+    for fid in (F1, F2):
+        facts_db.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path)"
+            " VALUES (?,'p','p.'||?,'Function',?,'a.py')",
+            (fid, fid, fid),
+        )
+    payload = {
+        "modules": [{"module_id": "iso", "name": "iso", "symbol_fids": [F1, F2], "layer": "l"}],
+        "layers": [{"name": "l", "may_depend_on": []}],
+        "thresholds": {"modules": {"iso": {"max_instability": 0.5}}},
+    }
+    facts_db.execute(
+        "INSERT INTO structure (payload_json, status, created_at) VALUES (?,'active','t')",
+        (json.dumps(payload, ensure_ascii=False),),
+    )
+    facts_db.commit()
+    result = layer_metrics.run_layer_metrics(facts_db)
+    assert result["modules"][0]["instability"] is None  # 孤立 scope I 未定义
+    assert result["thresholds_declared"] is True
+    assert result["violations"] == []  # None 无值不判（:148-149 面补齐）
+
+
+def test_render_no_structure_note(facts_db):
+    facts_db.executescript(SCHEMA.read_text(encoding="utf-8"))
+    facts_db.commit()
+    result = layer_metrics.run_layer_metrics(facts_db)
+    text = layer_metrics.render_text(result)
+    assert text.startswith("== layermetrics ==")
+    assert "structure 未 curate" in text  # 无 structure 渲染面诚实提示（:193-195 补齐）
