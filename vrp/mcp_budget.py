@@ -21,6 +21,8 @@ import copy
 import json
 import os
 
+from . import gcf
+
 MAX_TOOL_OUTPUT_CHARS = 24000  # ~24K 内联硬顶（设计稿 D5；测试钉死）
 MAX_JSON_INPUT_CHARS = 1 << 20  # 1 MiB：JSON 大载荷上界（设计稿 L5）
 MAX_QUERY_INPUT_CHARS = 10_000  # 自由文本上界（设计稿 L5）
@@ -110,7 +112,13 @@ def emit(payload, cap: int = MAX_TOOL_OUTPUT_CHARS) -> str:
     """序列化+输出预算（设计稿 D5）。
 
     收缩序确定性：先序遍历取最长者（并列取先见者）；同输入同输出。
+    AA3：VRP_OUTPUT_FORMAT=gcf → GCF 紧凑编码（键声明一次+值管道分隔）；
+    超帽回退 JSON 收缩链（GCF 面不收缩——收缩算法锚定 JSON 结构，诚实边界）。
     """
+    if os.environ.get("VRP_OUTPUT_FORMAT", "").strip().lower() == "gcf":
+        gcf_text = gcf.dumps(payload)
+        if len(gcf_text) <= cap:
+            return gcf_text
     text = dumps(payload)
     if len(text) <= cap:
         return text

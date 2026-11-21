@@ -29,6 +29,7 @@ from . import smoke as smoke_mod
 from . import gc as gc_mod
 from . import flakes as flakes_mod
 from . import langmatrix as langmatrix_mod
+from . import mdcode as mdcode_mod
 from . import secrets as secrets_mod
 from . import scoring as scoring_mod
 from . import complexity as complexity_mod
@@ -417,6 +418,23 @@ def cmd_langmatrix(args) -> int:
     else:
         _print_text(langmatrix_mod.render_text())
     return langmatrix_mod.matrix_rc()
+
+
+def cmd_mdcode(args) -> int:
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = dbpath.ro_connect(facts_path)
+    try:
+        result = mdcode_mod.run_mdcode(con, repo)
+    finally:
+        con.close()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(mdcode_mod.render_text(result))
+    return 0
 
 
 def cmd_secrets(args) -> int:
@@ -1327,6 +1345,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_langmatrix)
+
+    p = sub.add_parser(
+        "mdcode",
+        help="N20: markdown code-block extraction - fenced blocks -> symbol"
+        " extractors (py=stdlib ast true parse, ts/js=regex light) ->"
+        " name+label match against facts.db symbols -> drift candidates"
+        " (doc-only = renamed/removed/fictional API; kind-mismatch on the"
+        " clear py face, Method~=Function same family; ts is name-only -"
+        " label vocab unpinned, honest boundary); report not gate"
+        " (langmatrix precedent, rc always 0); name-level match (params"
+        " not in facts.db), common-name collisions possible - noted;"
+        " excludes reuse watch.EXCLUDE_DIRS single source",
+    )
+    p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_mdcode)
 
     p = sub.add_parser(
         "secrets",

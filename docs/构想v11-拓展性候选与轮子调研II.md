@@ -139,6 +139,7 @@
 - **轮子**：**doctest**（文档内代码可验证先例——stdlib）；**litprog/literate programming**（文档即代码思想）。
 - **判定**：**学**（doctest 的"文档示例必须可执行"哲学）+**造**（ fenced block 语言标注→对应引擎轻量解析→签名比对）。dogfood 受益：本项目文档全是示例代码。
 - **成本**：低-中。优先级：甜点偏后。
+- **状态**：**已完成**（2026-11-21 甜点穿插批 #210）——`vrp mdcode <repo>`（报告非门 rc 恒 0——langmatrix 先例）：fence 解析（未闭合照提取 closed 计数暴露）→路由 py（stdlib ast 真解析；ast.walk 是 BFS——按 (lineno,name) 排序恢复文档序）/ts·js（正则轻量五形状，树库不引边界记档）→name+label 对账：doc-only（db 无同名——改名/删除/虚构 API 嫌疑）/kind-mismatch（仅 py 清晰面 def↔Class；Method≈Function 同族不误报；ts 词表未钉 name-only 诚实边界）；name 级比对（参数级签名不在 facts.db——content_hash 是摘要非签名）+同名碰撞可能记档；无语言标注/未认知语言块不路由不猜；排除目录复用 watch.EXCLUDE_DIRS 单源；doctest 哲学落地=文档示例与 facts.db 可信度对账。
 
 ## O. 契约互操作（降低接入成本）
 
