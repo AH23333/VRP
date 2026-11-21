@@ -52,6 +52,7 @@ from . import s0_precheck, s1_cbm, s2_astgrep, s2_deadcode, s2_jscpd, s2_mutate,
 from . import auto_curate
 from . import fixpropose as fixpropose_mod
 from . import session as session_mod
+from . import watch as watch_mod
 
 
 def _repo_arg(value: str) -> Path:
@@ -274,10 +275,8 @@ def cmd_xcheck(args) -> int:
     return 0
 
 
-def cmd_run(args) -> int:
-    repo = _repo_arg(args.repo)
-    name = args.cbm_name or repo.name
-
+def _run_pipeline(repo: Path, name: str, reindex: bool) -> int:
+    """run 单次全链（S0→S1→S1.5→xcheck）——cmd_run 与 watch 重跑共用。"""
     # J10：四阶段 monotonic 计时——run 结束自动落档 .vrp/perf.jsonl（零额外命令）。
     t0 = time.monotonic()
     pre = s0_precheck.precheck(repo)
@@ -304,7 +303,7 @@ def cmd_run(args) -> int:
         return 0
 
     t1 = time.monotonic()
-    idx = s1_cbm.index_repository(repo, name, reindex=args.reindex)
+    idx = s1_cbm.index_repository(repo, name, reindex=reindex)
     t_index = time.monotonic() - t1
     _print_step("S1 cbm index", idx)
 
@@ -329,10 +328,25 @@ def cmd_run(args) -> int:
         repo,
         stages,
         git_head=(pre.get("git") or {}).get("head"),
-        meta={"reindex": bool(args.reindex)},
+        meta={"reindex": bool(reindex)},
     )
     _print_step("facts.db", {"facts_db": str(repo / ".vrp" / "facts.db")})
     return 0
+
+
+def cmd_run(args) -> int:
+    repo = _repo_arg(args.repo)
+    name = args.cbm_name or repo.name
+    # I7：watch 模式——初始全跑建基线后轮询 mtime 防抖重跑（前台循环，
+    # Ctrl+C 退出；J8 增量链让重跑廉价）。--reindex 同样作用于每次重跑。
+    if getattr(args, "watch", False):
+        return watch_mod.run_watch(
+            repo,
+            interval=args.interval,
+            debounce=args.debounce,
+            run_once=lambda: _run_pipeline(repo, name, reindex=args.reindex),
+        )
+    return _run_pipeline(repo, name, reindex=args.reindex)
 
 
 def cmd_perf(args) -> int:
@@ -1351,6 +1365,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo")
     p.add_argument("--reindex", action="store_true", help="force CBM re-index")
     p.add_argument("--cbm-name", "--name", dest="cbm_name", help="CBM project name override")
+    p.add_argument(
+        "--watch",
+        action="store_true",
+        help="I7: keep watching after the initial run - poll file mtimes and re-run"
+        " the pipeline on changes (debounced; foreground loop, Ctrl+C stops;"
+        " reruns ride the J8 incremental chain; --reindex applies to every rerun)",
+    )
+    p.add_argument("--interval", type=float, default=2.0, help="watch poll interval in seconds (default 2.0)")
+    p.add_argument("--debounce", type=float, default=1.0, help="watch quiet window in seconds before re-running (default 1.0)")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("s2", help="S2: ast-grep pathology scan -> findings")
