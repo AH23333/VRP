@@ -83,7 +83,7 @@ def _row_set(db_path, sql):
 
 
 TABLE_SQLS = {
-    "symbols": "SELECT fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash, properties_json FROM symbols",
+    "symbols": "SELECT fid, project, qualified_name, label, name, file_path, start_line, end_line, content_hash, properties_json, signature, return_type, param_count FROM symbols",
     "edges": "SELECT * FROM edges",
     "usage_hints": "SELECT * FROM usage_hints",
     "history_coupling": "SELECT * FROM history_coupling",
@@ -131,6 +131,40 @@ def test_first_run_full_then_incremental_noop(world):
     assert (s2["files_changed"], s2["files_new"], s2["files_deleted"]) == (0, 0, 0)
     assert _row_set(db, TABLE_SQLS["symbols"]) == v1_symbols
     assert _fids_by_qn(db) == v1_fids  # no-op 零 fid 轮换
+
+
+# ---- #218 守面：增量重提取集的签名三列不回退 NULL ----
+# #217 增量路径曾漏并三列（10 列 INSERT）——重提取文件的 param_count 被抹
+# NULL，仅深测 test_etl_idempotent 抓到（<python-builtins> 每轮重提取）。
+
+def test_reextracted_symbols_keep_signature_columns(world):
+    db = world / ".vrp" / "facts.db"
+    cbm = world.parent / "proj.db"
+    sig_props = '{"signature": "(x)", "return_type": "int", "param_count": 1}'
+    nodes = [n for n in V1_NODES if n[0] != 1] + [
+        (1, "proj", "Function", "f", "p.a.f", "a.py", 1, 2, sig_props),
+    ]
+    _mk_cbm(cbm, nodes, V1_EDGES, V1_HASHES, V1_COV)
+
+    def sig_row(qn):
+        con = sqlite3.connect(db)
+        try:
+            return con.execute(
+                "SELECT signature, return_type, param_count FROM symbols WHERE qualified_name = ?",
+                (qn,),
+            ).fetchone()
+        finally:
+            con.close()
+
+    etl.run_etl(world, "repo")
+    assert sig_row("p.a.f") == ("(x)", "int", 1)
+
+    # a.py 变更 + CBM gen 轮换 → 增量重提取 a.py 节点（修复前三列回退 NULL）
+    (world / "a.py").write_text("def f():\n    return 9\n\ndef helper():\n    return 2\n", encoding="utf-8", newline="\n")
+    _mk_cbm(cbm, nodes, V1_EDGES, V1_HASHES, V1_COV, gen="8")
+    out = etl.run_etl(world, "repo")
+    assert out["mode"] == "incremental"
+    assert sig_row("p.a.f") == ("(x)", "int", 1)
 
 
 # ---- 等价对拍（D6 本件最重要）----

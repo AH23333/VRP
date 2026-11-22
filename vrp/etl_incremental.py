@@ -246,8 +246,10 @@ def _patch(
             if prev is not None and prev != fid:
                 replaced.add(prev)  # M1：同 qn 后扫描者幸存，先者入 replaced
             surviving[key] = fid
+            sig, ret_type, param_count = etl._extract_signature(props)
             symbol_rows.append(
-                (fid, project, qn or name, label, name, rel, start_line, end_line, content_hash, props)
+                (fid, project, qn or name, label, name, rel, start_line, end_line, content_hash, props,
+                 sig, ret_type, param_count)
             )
         else:
             u_nodes.setdefault(key, []).append(node_id)
@@ -279,7 +281,8 @@ def _patch(
     # ---- 符号落库（重提取集）+ F1 ledger 增行 ----
     dst.executemany(
         "INSERT OR REPLACE INTO symbols (fid, project, qualified_name, label, name, file_path,"
-        " start_line, end_line, content_hash, properties_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        " start_line, end_line, content_hash, properties_json, signature, return_type, param_count)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         symbol_rows,
     )
     now = etl._now()
