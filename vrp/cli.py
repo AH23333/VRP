@@ -30,6 +30,7 @@ from . import gc as gc_mod
 from . import flakes as flakes_mod
 from . import langmatrix as langmatrix_mod
 from . import mdcode as mdcode_mod
+from . import argcheck as argcheck_mod
 from . import etl_health
 from . import layer_metrics
 from . import sweep
@@ -524,6 +525,23 @@ def cmd_mdcode(args) -> int:
         _print_json(result)
     else:
         _print_text(mdcode_mod.render_text(result))
+    return 0
+
+
+def cmd_argcheck(args) -> int:
+    repo = _repo_arg(args.repo)
+    facts_path = repo / ".vrp" / "facts.db"
+    if not facts_path.exists():
+        raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
+    con = dbpath.ro_connect(facts_path)
+    try:
+        result = argcheck_mod.run_argcheck(con)
+    finally:
+        con.close()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_text(argcheck_mod.render_text(result))
     return 0
 
 
@@ -1436,6 +1454,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_langmatrix)
+
+    p = sub.add_parser(
+        "argcheck",
+        help="N19: CALLS edge args x callee signature reconciliation -"
+        " caller face = edge properties args[{i,e,k,v}] (CBM verbatim),"
+        " callee face = symbols.signature (schema v3; the signature STRING"
+        " is the only trusted base - CBM param_count counts type-annotated"
+        " params only, ~21%% disagreement measured, reference not base);"
+        " arity: required <= n_args <= total (positional+keyword; default-"
+        " valued / ts-'?' params optional, *args suppresses the upper"
+        " bound, **kwargs suppresses the kwarg-name check); unknown_kwarg"
+        " = keyword key not among signature names; Method leading self/cls"
+        " stripped; builtins.* and no-signature callees skipped and"
+        " counted (no guessing); report not gate (mdcode/langmatrix"
+        " precedent, rc always 0)",
+    )
+    p.add_argument("repo", help="repo root (must contain .vrp/facts.db)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_argcheck)
 
     p = sub.add_parser(
         "mdcode",
