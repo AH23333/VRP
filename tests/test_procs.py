@@ -199,3 +199,80 @@ def test_run_tree_survived_kill_returns_honest_dict(monkeypatch):
     assert rr["timed_out"] is True
     assert rr["returncode"] == -1
     assert "survived kill" in rr["stderr"]
+
+
+# ---- #221：Stryker/vitest worker 泄漏孤儿收割（坑驱动，#220 事故锚点）----
+
+def test_is_stryker_orphan_cmd_matches_windows_paths():
+    assert procs.is_stryker_orphan_cmd(
+        r'"D:\Visual Studio Code\Something\vibe-restruct-pipe\work\stryker\node_modules\.bin\..\core\bin\stryker.js" run'
+    )
+    assert procs.is_stryker_orphan_cmd(
+        "node D:/x/work/_deep_stryker/node_modules/vitest/vitest.mjs run"
+    )
+
+
+def test_is_stryker_orphan_cmd_case_and_slash_insensitive():
+    assert procs.is_stryker_orphan_cmd(r"D:\X\WORK\STRYKER\node_modules\.bin\node.cmd")
+    assert procs.is_stryker_orphan_cmd("D:/x/Work/Stryker/dist/src/stryker.js")
+
+
+def test_is_stryker_orphan_cmd_rejects_unrelated_node_processes():
+    # #220 实录的误杀面候选：deveco/qoder/npm 等常驻 node 一律不命中
+    assert not procs.is_stryker_orphan_cmd(
+        r'"D:\NVM\nvm\nodejs\node.exe" D:\NVM\nvm\nodejs\node_global/node_modules/@deveco/deveco/cli.js'
+    )
+    assert not procs.is_stryker_orphan_cmd(
+        "node D:/Qoder/resources/extensions/qoder.computer-control/dist/cli/computerUseWindows/index.js"
+    )
+    assert not procs.is_stryker_orphan_cmd("npm install --no-audit --no-fund")
+
+
+def test_is_stryker_orphan_cmd_empty_and_none():
+    assert not procs.is_stryker_orphan_cmd(None)
+    assert not procs.is_stryker_orphan_cmd("")
+    assert not procs.is_stryker_orphan_cmd("   ")
+
+
+def test_reap_stray_stryker_nodes_posix_returns_empty(monkeypatch):
+    monkeypatch.setattr(procs.sys, "platform", "linux")
+    assert procs.reap_stray_stryker_nodes() == []
+
+
+def test_reap_stray_stryker_nodes_kills_only_orphans(monkeypatch):
+    """枚举面只收割判定命中的 PID——非命中进程零触碰（误杀红线）。"""
+    monkeypatch.setattr(procs.sys, "platform", "win32")
+    kills: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "powershell":
+            class _R:
+                returncode = 0
+                stdout = (
+                    "111|node D:/deveco/cli.js\n"
+                    r'222|node "D:\x\vibe-restruct-pipe\work\stryker\node_modules\stryker.js" run'
+                    "\n"
+                    "333|node D:/Qoder/qoder.js\n"
+                    "not-a-pid-line\n"
+                )
+            return _R()
+        kills.append(" ".join(cmd))
+        class _K:
+            returncode = 0
+        return _K()
+
+    monkeypatch.setattr(procs.subprocess, "run", fake_run)
+    reaped = procs.reap_stray_stryker_nodes()
+    assert reaped == [222]
+    assert len(kills) == 1 and "222" in kills[0]
+
+
+def test_reap_stray_stryker_nodes_tolerates_enum_failure(monkeypatch):
+    """PowerShell 枚举失败/超时 → 诚实 [] 不抛（诊断面降级，rmtree 退避兜底）。"""
+    monkeypatch.setattr(procs.sys, "platform", "win32")
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=60)
+
+    monkeypatch.setattr(procs.subprocess, "run", fake_run)
+    assert procs.reap_stray_stryker_nodes() == []

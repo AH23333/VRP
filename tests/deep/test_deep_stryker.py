@@ -19,6 +19,7 @@ import subprocess
 
 import pytest
 
+from vrp import procs
 from tests.deep.conftest import CBM_CACHE, ROOT, git, rmtree_retry, run_vrp
 
 pytestmark = pytest.mark.deep
@@ -30,6 +31,13 @@ SHIM = ROOT / "work" / "stryker" / "node_modules" / ".bin" / "stryker.cmd"
 def stryker_repo():
     if not SHIM.is_file():
         pytest.skip("work/stryker sandbox not installed")
+    # #220 坑驱动：上轮泄漏的 stryker/vitest worker node 孤儿持沙箱
+    # 目录句柄，rmtree 六轮退避全败（PermissionError 三轮实录）——
+    # setup 先收割再清场（此刻本 session 尚未 spawn stryker，扫到的
+    # work/stryker 路径 node 铁定是上轮孤儿）。
+    reaped = procs.reap_stray_stryker_nodes()
+    if reaped:
+        print(f"\n[stryker_repo] reaped stray stryker nodes: {reaped}")
     repo = ROOT / "work" / "_deep_stryker"
     if repo.exists():
         rmtree_retry(repo)
@@ -104,6 +112,8 @@ def stryker_repo():
     yield repo
     if cache_db.exists():
         cache_db.unlink()
+    # teardown 同收割：本轮泄漏的 worker 不留给下轮（#220 坑闭环）。
+    procs.reap_stray_stryker_nodes()
     rmtree_retry(repo)
 
 

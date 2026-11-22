@@ -274,3 +274,75 @@ def run_thunks(thunks: list, max_workers: int | None = None) -> list:
         # 逐序 result()：先到序先取——首个失败任务序的异常被抛出时，
         # 更高序任务已在池中跑完或随 with 退出等完，永不裸奔。
         return [f.result() for f in futures]
+
+
+def is_stryker_orphan_cmd(command_line: str | None) -> bool:
+    """纯判定：node 命令行是否指向 stryker 深测沙箱路径片段。
+
+    #220 坑驱动（真实事故锚点）：Stryker/vitest worker 泄漏实录——
+    stryker.cmd 正常返回（run_tree 无超时不杀树，依赖上游自清）后
+    孙 node 进程存活，持 work/stryker / work/_deep_stryker 的沙箱
+    目录句柄；下轮 fixture rmtree 六轮退避全 PermissionError（孤儿
+    锁是永久的——AV 扫描窗口型重试救不了，坑实录三轮 3 errors）。
+    路径归一（反斜杠→正斜杠+lower）后片段匹配；work/stryker 安装
+    沙箱与 work/_deep_stryker fixture 副本均系深测专属路径（正常
+    环境无用户进程命中）。
+    """
+    c = (command_line or "").replace("\\", "/").lower()
+    return "work/stryker" in c or "work/_deep_stryker" in c
+
+
+def reap_stray_stryker_nodes() -> list[int]:
+    """收割泄漏的 stryker/vitest node 孤儿（深测 fixture setup/teardown 用）。
+
+    零依赖：PowerShell CIM 枚举 node.exe 的 PID+CommandLine（wmic 已
+    弃用），is_stryker_orphan_cmd 判定后 taskkill /F 逐个收割。杀失败
+    逐个容错（孤儿恰在退出竞态/权限面）；枚举失败整体诚实返回 []
+    （诊断面降级不阻塞 fixture——rmtree_retry 退避仍兜底 AV 型锁）。
+    仅 win32；POSIX 返回 []（run_tree 的 killpg 语义下无此坑实录，
+    平台差异诚实边界）。返回收割 PID 清单（调用方日志/诊断用，契约
+    不抛异常）。
+    """
+    if sys.platform != "win32":
+        return []
+    query = (
+        "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
+        "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", query],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    reaped: list[int] = []
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if "|" not in line:
+            continue
+        pid_s, _, cmd = line.partition("|")
+        if not is_stryker_orphan_cmd(cmd):
+            continue
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F"],
+                capture_output=True,
+                timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            reaped.append(pid)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return reaped
