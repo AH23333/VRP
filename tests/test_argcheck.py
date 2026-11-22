@@ -235,3 +235,137 @@ def test_render_text_mentions_counters():
     assert "argcheck" in text
     assert "too_few" in text
     assert "rc always 0" in text
+
+
+# ---- N19 跨语言面 (#220)：HTTP_CALLS 双轴 ----
+
+def _add_http(con, src, dst, props):
+    con.execute("INSERT INTO edges VALUES (?,?,?,?)", (src, dst, "HTTP_CALLS", json.dumps(props)))
+
+
+def test_normalize_url_strips_query_hash_slash():
+    assert argcheck.normalize_url("https://a.b/x?u=1#frag") == "https://a.b/x"
+    assert argcheck.normalize_url("/v1/messages/") == "/v1/messages"
+    assert argcheck.normalize_url("/") == "/"
+    assert argcheck.normalize_url("?only") == ""
+
+
+def test_run_http_check_axis1_args_reconciliation():
+    con = _mk_db()
+    _add_sym(con, "h-caller", "m.h_caller", "(self)", "Method")
+    _add_sym(con, "h-sig", "m.h_two", "(path: Path, payload)", "Function")
+    _add_http(con, "h-caller", "h-sig", {"args": [{"i": 0, "e": "p"}]})  # too_few
+    _add_http(
+        con,
+        "h-caller",
+        "h-sig",
+        {"args": [{"i": 0, "e": "a"}, {"i": 1, "e": "b"}], "url_path": "/ok", "method": "GET"},
+    )  # ok
+    try:
+        result = argcheck.run_http_check(con)
+    finally:
+        con.close()
+    c = result["counters"]
+    assert c["total_http"] == 2
+    assert c["checked"] == 2
+    assert c["ok"] == 1
+    assert c["too_few"] == 1
+    assert result["samples"]["too_few"][0]["callee"] == "m.h_two"
+
+
+def test_run_http_check_axis2_multi_method_inventory():
+    con = _mk_db()
+    _add_sym(con, "h-a", "m.a", "(self)", "Method")
+    _add_sym(con, "h-b", "m.b", "(self)", "Method")
+    _add_http(con, "h-a", "h-b", {"url_path": "/videogen/init", "method": "POST"})
+    _add_http(con, "h-a", "h-b", {"url_path": "/videogen/init/?x=1", "method": "post"})  # 归一+upper 后同面复用
+    _add_http(con, "h-a", "h-b", {"url_path": "/videogen/init", "method": "DELETE"})  # REST 常态多 method
+    _add_http(con, "h-a", "h-b", {"url_path": "/stable", "method": "GET"})
+    _add_http(con, "h-a", "h-b", {"url_path": "/stable", "method": "GET"})  # 同 method 复用
+    try:
+        result = argcheck.run_http_check(con)
+    finally:
+        con.close()
+    c = result["counters"]
+    assert c["multi_method_endpoints"] == 1
+    s = result["multi_method_samples"][0]
+    assert s["url"] == "/videogen/init"
+    assert sorted(s["methods"]) == ["DELETE", "POST"]  # post 已 upper 归一并面
+
+
+def test_run_http_check_method_missing_and_no_url():
+    con = _mk_db()
+    _add_sym(con, "h-a", "m.a", "(self)", "Method")
+    _add_sym(con, "h-b", "m.b", "(self)", "Method")
+    _add_http(con, "h-a", "h-b", {"url_path": "/nomethod"})  # method 缺席
+    _add_http(con, "h-a", "h-b", {"method": "GET"})  # url 缺席
+    _add_http(con, "h-a", "h-b", {"callee": "fetch"})  # 双缺
+    try:
+        result = argcheck.run_http_check(con)
+    finally:
+        con.close()
+    c = result["counters"]
+    assert c["method_missing"] == 1
+    assert c["no_url_skipped"] == 2
+    assert c["multi_method_endpoints"] == 0
+
+
+def test_run_http_check_skip_classes_mirror_calls_face():
+    con = _mk_db()
+    _add_sym(con, "h-caller", "m.caller", "(self)", "Method")
+    _add_sym(con, "h-builtin", "builtins.fetch", "()", "Function")
+    _add_sym(con, "h-nosig", "m.nosig", None, "Function")
+    _add_http(con, "h-caller", "h-builtin", {"args": [{"i": 0, "e": "x"}]})
+    _add_http(con, "h-caller", "h-nosig", {"args": [{"i": 0, "e": "x"}]})
+    _add_http(con, "h-caller", "h-nosig", {"callee": "fetch", "url_path": "/u", "method": "GET"})
+    try:
+        result = argcheck.run_http_check(con)
+    finally:
+        con.close()
+    c = result["counters"]
+    assert c["builtins_skipped"] == 1
+    assert c["no_signature_skipped"] == 2
+    assert c["no_args_skipped"] == 0
+    assert c["checked"] == 0
+    # axis 2 独立于 axis 1 skip：/u GET 仍进 by_url（无冲突）
+    assert c["multi_method_endpoints"] == 0
+
+
+def test_run_http_check_empty_and_bad_props():
+    con = _mk_db()
+    _add_sym(con, "h-a", "m.a", "(self)", "Method")
+    con.execute("INSERT INTO edges VALUES ('h-a','h-a','HTTP_CALLS','not-json')")
+    con.execute("INSERT INTO edges VALUES ('h-a','h-a','HTTP_CALLS','null')")
+    try:
+        result = argcheck.run_http_check(con)
+    finally:
+        con.close()
+    c = result["counters"]
+    assert c["total_http"] == 2
+    assert c["no_signature_skipped"] == 0  # self 有签名（Method (self)）
+    assert c["no_args_skipped"] == 2  # 坏 props 无 args 键 -> 显式 skip
+    assert c["no_url_skipped"] == 2  # axis 2：坏 props 无可比 key
+
+
+def test_run_http_check_no_http_edges_at_all():
+    con = _mk_db()
+    _add_sym(con, "f-x", "m.x", "(a)", "Function")
+    _add_call(con, "f-x", "f-x", [{"i": 0, "e": "y"}])
+    try:
+        result = argcheck.run_http_check(con)
+    finally:
+        con.close()
+    assert result["counters"]["total_http"] == 0
+
+
+def test_render_http_text_mentions_axes():
+    con = _mk_db()
+    try:
+        result = argcheck.run_http_check(con)
+    finally:
+        con.close()
+    text = argcheck.render_http_text(result)
+    assert "http face" in text
+    assert "multi-method urls" in text
+    assert "method missing" in text
+    assert "rc always 0" in text

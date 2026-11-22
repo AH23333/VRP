@@ -233,6 +233,173 @@ def run_argcheck(con: sqlite3.Connection) -> dict:
     return {"counters": counters, "samples": samples}
 
 
+# ---- N19 cross-language face (#220): HTTP_CALLS edges ----
+# HTTP_CALLS edge properties (CBM verbatim, #216 six-repo probe):
+#   callee / url_path / method (GET|POST|..., coverage partial) /
+#   args (same shape as CALLS edges: [{i,e,k?,v?}]).
+# Two axes, both report-not-gate:
+# - axis 1 (arity/kwarg): args x callee signature - identical
+#   semantics to the CALLS face (same skip classes, same verdicts).
+#   Real-chain caveat (#220, restruct-music-player 82 edges): HTTP
+#   callees are client-library functions (fetch/axios.get), whose
+#   signatures are usually absent -> axis 1 is a weak face for HTTP
+#   edges (0/82 checked there) and stays for completeness;
+# - axis 2 (endpoint inventory): same normalized url_path aggregated
+#   over methods. Multi-method endpoints are REST-NORMAL (GET+POST on
+#   one path is a resource, not drift - real chain: /api/download_queue
+#   DELETE+GET+POST), so this axis is an INVENTORY face (what the
+#   caller side actually touches, url x method x count), not a
+#   reconciliation verdict. Normalization is deliberately conservative:
+#   strip query/hash and trailing slash only - full-URL match, so two
+#   services sharing a path are never merged; '{}' placeholder hosts
+#   (CBM already collapsed '${base}' -> '{}') can still cross-service
+#   alias - samples are for human adjudication.
+# Edges without a method are counted method_missing (fetch(url) with
+#   no init object - real chain 45/82) and stay OUT of the inventory
+#   - honest skip, no guessing. Edges without url_path are
+#   no_url_skipped.
+
+
+def normalize_url(url: str) -> str:
+    """url_path -> comparable endpoint key (query/hash/trailing slash off)."""
+    u = url.split("#", 1)[0].split("?", 1)[0]
+    if len(u) > 1 and u.endswith("/"):
+        u = u[:-1]
+    return u
+
+
+def run_http_check(con: sqlite3.Connection) -> dict:
+    """HTTP_CALLS sweep: axis 1 args x signature, axis 2 endpoint inventory."""
+    rows = con.execute(
+        "SELECT e.src_fid, e.dst_fid, e.properties_json,"
+        " src.qualified_name AS src_qn, dst.qualified_name AS dst_qn,"
+        " dst.signature AS sig, dst.label AS label"
+        " FROM edges e"
+        " JOIN symbols dst ON dst.fid = e.dst_fid"
+        " LEFT JOIN symbols src ON src.fid = e.src_fid"
+        " WHERE e.type = 'HTTP_CALLS'"
+    ).fetchall()
+    counters = {
+        "total_http": len(rows),
+        "builtins_skipped": 0,
+        "no_signature_skipped": 0,
+        "no_args_skipped": 0,
+        "no_url_skipped": 0,
+        "checked": 0,
+        "ok": 0,
+        "too_few": 0,
+        "too_many": 0,
+        "unknown_kwarg": 0,
+        "method_missing": 0,
+        "multi_method_endpoints": 0,
+    }
+    samples: dict[str, list] = {"too_few": [], "too_many": [], "unknown_kwarg": []}
+    by_url: dict[str, dict] = {}
+    multi_samples: list = []
+    for r in rows:
+        src_qn, dst_qn, props, sig, label = r[3], r[4], r[2], r[5], r[6]
+        d = None
+        if props:
+            try:
+                d = json.loads(props)
+            except ValueError:
+                d = None
+        if not isinstance(d, dict):
+            d = {}
+        # axis 2 bookkeeping runs on every edge (independent of axis 1 skips)
+        method = d.get("method")
+        url_path = d.get("url_path")
+        norm = normalize_url(str(url_path)) if url_path else None
+        if method:
+            if not norm:
+                counters["no_url_skipped"] += 1
+            else:
+                bucket = by_url.setdefault(norm, {})
+                hit = bucket.setdefault(str(method).upper(), [])
+                if len(hit) < 2:
+                    hit.append(src_qn or "?")
+        elif norm or url_path:
+            if not norm:
+                counters["no_url_skipped"] += 1
+            else:
+                counters["method_missing"] += 1
+        else:
+            counters["no_url_skipped"] += 1
+        # axis 1: same classes and verdicts as the CALLS face
+        if dst_qn.startswith("builtins."):
+            counters["builtins_skipped"] += 1
+            continue
+        model = parse_signature(sig, label)
+        if model is None:
+            counters["no_signature_skipped"] += 1
+            continue
+        args = d.get("args") if d else None
+        if args is None:
+            counters["no_args_skipped"] += 1
+            continue
+        if not isinstance(args, list):
+            args = []
+        counters["checked"] += 1
+        verdict = reconcile_call(args, model)
+        if verdict is None:
+            counters["ok"] += 1
+            continue
+        counters[verdict] += 1
+        if len(samples[verdict]) < 8:
+            samples[verdict].append(
+                {
+                    "caller": src_qn,
+                    "callee": dst_qn,
+                    "signature": _normalize(sig or ""),
+                    "n_args": sum(1 for a in args if isinstance(a, dict)),
+                    "param_names": model["names"],
+                }
+            )
+    for norm in sorted(by_url):
+        methods = by_url[norm]
+        if len(methods) < 2:
+            continue
+        counters["multi_method_endpoints"] += 1
+        if len(multi_samples) < 8:
+            multi_samples.append(
+                {"url": norm, "methods": {m: v for m, v in sorted(methods.items())}}
+            )
+    return {
+        "counters": counters,
+        "samples": samples,
+        "multi_method_samples": multi_samples,
+    }
+
+
+def render_http_text(result: dict) -> str:
+    c = result["counters"]
+    lines = [
+        "N19 argcheck http face: HTTP_CALLS args x signature + endpoint inventory (advisory)",
+        "  total HTTP_CALLS  : %d" % c["total_http"],
+        "  builtins skipped  : %d" % c["builtins_skipped"],
+        "  no-signature skip : %d (client-library callees usually unsigned - real chain 82/82)" % c["no_signature_skipped"],
+        "  no-args skip      : %d" % c["no_args_skipped"],
+        "  no-url skip       : %d (inventory axis needs url_path)" % c["no_url_skipped"],
+        "  checked           : %d (axis 1: args x callee signature)" % c["checked"],
+        "  ok                : %d" % c["ok"],
+        "  too_few           : %d" % c["too_few"],
+        "  too_many          : %d" % c["too_many"],
+        "  unknown_kwarg     : %d" % c["unknown_kwarg"],
+        "  method missing    : %d (no init object - stays out of inventory)" % c["method_missing"],
+        "  multi-method urls : %d (REST-normal inventory, not drift)" % c["multi_method_endpoints"],
+    ]
+    for kind in ("too_few", "too_many", "unknown_kwarg"):
+        for s in result["samples"].get(kind, [])[:4]:
+            lines.append(
+                "  [%s] %s -> %s%s args=%d names=%s"
+                % (kind, s["caller"] or "?", s["callee"], s["signature"], s["n_args"], s["param_names"])
+            )
+    for s in result.get("multi_method_samples", [])[:4]:
+        lines.append("  [multi] %s methods=%s" % (s["url"], sorted(s["methods"])))
+    lines.append("cross-language face: full-url match (services never merged); rc always 0")
+    return "\n".join(lines)
+
+
 def render_text(result: dict) -> str:
     c = result["counters"]
     lines = [

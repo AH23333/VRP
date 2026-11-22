@@ -535,13 +535,19 @@ def cmd_argcheck(args) -> int:
         raise SystemExit(f"facts.db missing - run 'vrp run' first: {facts_path}")
     con = dbpath.ro_connect(facts_path)
     try:
-        result = argcheck_mod.run_argcheck(con)
+        calls_result = argcheck_mod.run_argcheck(con)
+        http_result = argcheck_mod.run_http_check(con)
     finally:
         con.close()
+    result = {"calls": calls_result, "http": http_result}
     if getattr(args, "json", False):
         _print_json(result)
     else:
-        _print_text(argcheck_mod.render_text(result))
+        _print_text(
+            argcheck_mod.render_text(calls_result)
+            + "\n\n"
+            + argcheck_mod.render_http_text(http_result)
+        )
     return 0
 
 
