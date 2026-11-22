@@ -118,8 +118,23 @@ def _migrate_v2_add_resolution_label(con: sqlite3.Connection) -> None:
     con.commit()
 
 
+def _migrate_v3_add_symbol_signature(con: sqlite3.Connection) -> None:
+    """Schema v3 (#217): symbol signature columns. Same idempotent
+    column-probe pattern as v2 (BB1). No view references the new columns,
+    so executescript ordering carries no extra constraint here."""
+    cols = [row[1] for row in con.execute("PRAGMA table_info(symbols)")]
+    if cols and "signature" not in cols:
+        con.execute("ALTER TABLE symbols ADD COLUMN signature TEXT")
+    if cols and "return_type" not in cols:
+        con.execute("ALTER TABLE symbols ADD COLUMN return_type TEXT")
+    if cols and "param_count" not in cols:
+        con.execute("ALTER TABLE symbols ADD COLUMN param_count INTEGER")
+    con.commit()
+
+
 MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (2, _migrate_v2_add_resolution_label),
+    (3, _migrate_v3_add_symbol_signature),
 ]
 
 
@@ -362,6 +377,30 @@ def _similar_to_payload(props: dict) -> str:
     return json.dumps({"jaccard": props.get("jaccard"), "same_file": props.get("same_file")})
 
 
+def _extract_signature(props: str | None) -> tuple[str | None, str | None, int | None]:
+    """#217: pull (signature, return_type, param_count) out of CBM
+    nodes.properties JSON. Pure function of the properties string
+    (determinism red line). Absent / non-JSON / non-dict / wrong-typed
+    values degrade to NULL columns - verbatim properties_json remains the
+    source of truth; columns are the queryable face."""
+    if not props:
+        return (None, None, None)
+    try:
+        d = json.loads(props)
+    except (TypeError, ValueError):
+        return (None, None, None)
+    if not isinstance(d, dict):
+        return (None, None, None)
+    sig = d.get("signature")
+    ret = d.get("return_type")
+    pc = d.get("param_count")
+    return (
+        sig if isinstance(sig, str) else None,
+        ret if isinstance(ret, str) else None,
+        pc if isinstance(pc, int) and not isinstance(pc, bool) else None,
+    )
+
+
 def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _ContentHasher, project: str, repo: Path):
     rows = src.execute(
         "SELECT id, label, name, qualified_name, file_path, start_line, end_line, properties"
@@ -396,6 +435,7 @@ def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _Cont
         if prev is not None and prev != fid:
             replaced.add(prev)
         surviving[key] = fid
+        sig, ret_type, param_count = _extract_signature(props)
         symbol_rows.append(
             (
                 fid,
@@ -408,11 +448,15 @@ def _etl_symbols(dst: sqlite3.Connection, src: sqlite3.Connection, hasher: _Cont
                 end_line,
                 content_hash,
                 props,
+                sig,
+                ret_type,
+                param_count,
             )
         )
     dst.executemany(
         "INSERT OR REPLACE INTO symbols (fid, project, qualified_name, label, name, file_path,"
-        " start_line, end_line, content_hash, properties_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        " start_line, end_line, content_hash, properties_json, signature, return_type, param_count)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         symbol_rows,
     )
     # F1 (fid identity ledger): record every fid ever seen (fid -> qn/file) so

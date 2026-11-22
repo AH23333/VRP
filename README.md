@@ -117,7 +117,7 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 | `migprog` | D11 迁移进度追踪（构想v10 甜点，strangler 完成度）：seams 跨界边快照（**单源 nav_seams #143 零重复实现**，只消费 active structure）→ `--snapshot` 追加 `.vrp/migprog-history.jsonl` 审计流（不清理——runtime_evidence/perf.jsonl 追加先例；ts 含在审计流不违反产物确定性红线——facts.db 派生产物不含 ts）；progress=（基线-当前）/基线×100 跨界边收缩% + vs_last 环比 delta_pct（正号=收缩）；基线=history 首条（迁移起点）；零基线 None 诚实未定义/无快照诚实提示/耦合增长负值诚实（迁移倒退可见）；tracking 面 rc 恒 0 非门 |
 | `secrets` | H1 密钥扫描独立 CLI（构想v11 甜点，gitleaks 形态——规则组织+全 blob 历史遍历；trufflehog 活性验证**不做**——离线红线，只检测不验证）：检测器**单源** render_chain.mask_source_lines（七型 token/URL 凭据/私钥块零复制+`_ANCHOR_SCAN` 保守超集预筛——无锚行 1 次 search 跳过 10 正则，历史面 459s→12s #178 实录，全谱样张锁兜底漏检）；worktree 面 os.walk+IGNORE_DIRS 剪枝（.vrp 内 SECRETS.local.md 是掩蔽产物不扫）+binary 嗅探/4MB 单文件封顶跳过计数；`--history` 历史面（显式 opt-in）=rev-list --objects --all→cat-file --batch-check 过滤（2MB blob 封顶跳过+行数对账截断诚实红）→cat-file --batch 流式扫描（procs.stream_lines——写线程并行喂 stdin 防真仓双管道死锁 #178+耗尽 rc 诚实红），**已删文件的密钥在历史 blob 仍可发现**，按 blob 批量喂（私钥块状态机 blob 内正确运转）；blob 归位=期望头精确匹配锚定，desync 诚实红；text 报告面连续 private-key-body 折叠区间×N（BEGIN 无 END 偏保守状态机的信噪比治理），JSON 事实面全量不折叠；rc 语义 gitleaks 同型：命中 1 零命中 0（CI 可用）；#176 实录修共享检测器量词上界纪律（scheme 无界 `*` 在 2MB 长单行 O(n²) 假挂→有界 {0,15}/{…,4096} 单遍线性，现实输入语义不变） |
 | `index` / `status` | CBM 索引（缓存）/ 状态查询 |
-| `etl` | CBM → facts.db 五级证据路由（J8 文件粒度增量默认自动，`--full` 强制全量） |
+| `etl` | CBM → facts.db 五级证据路由（J8 文件粒度增量默认自动，`--full` 强制全量）；symbols 落 signature/return_type/param_count 三列（schema v3，#217——CBM nodes.properties 提取为可查询列，N19 参数级对账 callee 面；caller 面=CALLS 边 properties_json args 原样转存；迁移链 [2,3] 见 docs/schema版本承诺.md） |
 | `xcheck` | code-atlas 四元组交叉验证 → 差异登记簿 |
 | `run` | S0→S1→ETL→xcheck 一发；`--watch` I7 变更自动重跑（轮询 mtime（os.walk 快照 mtime_ns+size，产物/噪音目录剪枝——.vrp 不剪即自我触发死循环）+防抖（变更持续窗口滑动，静默 ≥--debounce（默认 1.0s）才触发——编辑器保存风暴不连发；--interval 默认 2.0s）；初始全跑建基线后前台循环，Ctrl+C 干净退出 rc=0；rerun 失败/异常不杀 watch（实时反馈面生存性优先）；J8 增量链（#190）让重跑廉价=成本前提；watchdog/entr/ptw 判定绕——零依赖纯 stdlib；`--reindex` 作用于每次重跑） |
 | `s2` | 病理检测：ast-grep 12 规则（9 基础+3 危险 API 族 P5（#209，H3：py-eval-exec 动态执行/py-unsafe-deserialize 反序列化（yaml Loader 关键字下钻排除）/py-sql-concat SQL 拼接（execute/executemany 首参二元 +，双 arity）；规则是数据不是代码，m.eval() 方法调用/Loader=SafeLoader/干净 execute 零误报实核）） + 死代码（BB2 置信度三级 low/medium/high+reason——五类误报源整词匹配分层非静默丢弃，CGC CONTAINS 事故锁）+ knip/vulture + jscpd |
@@ -168,9 +168,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 2206 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 2216 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1529 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3735 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3745 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -179,7 +179,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3735 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2206 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2216 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

@@ -1,9 +1,11 @@
-"""V17 (#205): schema 迁移矩阵——旧版库 fixture × 迁移路径断言全覆盖。
+"""V17 (#205) / #217：schema 迁移矩阵——旧版库 fixture × 迁移路径断言全覆盖。
 
 学 Django migrations / alembic 线性迁移链思想（零依赖自建：MIGRATIONS
 有序表 + PRAGMA user_version 原生机制）。V0 快照=pre-tracking 库形态
 （edges 无 resolution_label 列、无 user_version、v_dead_code 单四型
-NOT EXISTS）——即 BB1 前任何真实构建产物。
+NOT EXISTS）——即 BB1 前任何真实构建产物。链现状 [2, 3]：v2=edges
+resolution_label（BB1），v3=symbols signature/return_type/param_count
+（#217 签名入库）。
 """
 
 import sqlite3
@@ -96,12 +98,17 @@ def _edge_cols(con):
     return [row[1] for row in con.execute("PRAGMA table_info(edges)")]
 
 
-def test_new_db_reaches_v2(tmp_path):
+def _sym_cols(con):
+    return [row[1] for row in con.execute("PRAGMA table_info(symbols)")]
+
+
+def test_new_db_reaches_v3(tmp_path):
     con = sqlite3.connect(tmp_path / "facts.db")
     try:
         etl.ensure_schema(con)
-        assert _user_version(con) == 2
+        assert _user_version(con) == 3
         assert "resolution_label" in _edge_cols(con)
+        assert {"signature", "return_type", "param_count"} <= set(_sym_cols(con))
         # 视图可查（新定义引用新列）
         assert con.execute("SELECT COUNT(*) FROM v_dead_code").fetchone()[0] == 0
     finally:
@@ -116,7 +123,8 @@ def test_v0_library_upgraded_in_place(tmp_path):
         assert _user_version(con) == 0
         etl.ensure_schema(con)
         assert "resolution_label" in _edge_cols(con)
-        assert _user_version(con) == 2
+        assert {"signature", "return_type", "param_count"} <= set(_sym_cols(con))
+        assert _user_version(con) == 3
         # 数据保留：种子行原样
         assert con.execute("SELECT value FROM meta WHERE key = 'git_head'").fetchone()[0] == "abc123"
         assert con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] == 2
@@ -139,7 +147,7 @@ def test_migration_idempotent(tmp_path):
             con.close()
     con = sqlite3.connect(db)
     try:
-        assert _user_version(con) == 2
+        assert _user_version(con) == 3
         assert con.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 1
         assert con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] == 2
     finally:
@@ -184,14 +192,14 @@ def test_v2_rerun_is_noop(tmp_path):
             con.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
             con.execute("SELECT COUNT(*) FROM findings").fetchone()[0],
         )
-        etl.ensure_schema(con)  # v2 库重跑：无迁移步、executescript 幂等
+        etl.ensure_schema(con)  # v3 库重跑：无迁移步、executescript 幂等
         after = (
             con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
             con.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
             con.execute("SELECT COUNT(*) FROM findings").fetchone()[0],
         )
         assert before == after
-        assert _user_version(con) == 2
+        assert _user_version(con) == 3
     finally:
         con.close()
 
@@ -205,9 +213,28 @@ def test_half_migrated_library_survives(tmp_path):
         con.execute("ALTER TABLE edges ADD COLUMN resolution_label TEXT")
         con.commit()
         etl.ensure_schema(con)
-        assert _user_version(con) == 2
+        assert _user_version(con) == 3
         assert _edge_cols(con).count("resolution_label") == 1  # 未重复加列
         assert con.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 1
+    finally:
+        con.close()
+
+
+def test_half_migrated_v3_symbols_survives(tmp_path):
+    """v3 半迁移态（symbols 已手工补 signature 列但 user_version 仍 0）——
+    幂等探测不重复加列。"""
+    db = tmp_path / "facts.db"
+    _build_v0(db)
+    con = sqlite3.connect(db)
+    try:
+        con.execute("ALTER TABLE symbols ADD COLUMN signature TEXT")
+        con.commit()
+        etl.ensure_schema(con)
+        assert _user_version(con) == 3
+        cols = _sym_cols(con)
+        assert cols.count("signature") == 1
+        assert "return_type" in cols
+        assert "param_count" in cols
     finally:
         con.close()
 
@@ -217,6 +244,7 @@ def test_migrations_chain_shape():
     assert targets == sorted(targets), "MIGRATIONS 必须按目标版本升序"
     assert all(t2 > t1 for t1, t2 in zip(targets, targets[1:])), "版本严格递增无重复"
     assert targets[0] == 2, "首个迁移=v2（BB1 resolution_label，v1 为保留基线槽）"
+    assert targets == [2, 3], "链现状：v2 resolution_label + v3 symbol signature"
 
 
 def test_v0_migration_then_new_insert_shape(tmp_path):

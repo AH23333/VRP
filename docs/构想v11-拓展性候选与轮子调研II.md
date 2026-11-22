@@ -130,7 +130,8 @@
 
 ### N19. 跨语言 API 边界对账
 
-> **状态注记**：**触发条件验证完成（2026-11-22 #216 本机样例战役，6 真实仓实测）**：HTTP_CALLS 面=MarketTwin 572/restruct-music-player 82（JS→Go 路由跨界+测试打路由）/archify 109/excalidraw 8/StarMarkDesktop 1/CookMyFridge 0——方法标注边（GET/POST/DELETE+真实路由符号）质量达标；噪音面记档：ANY 方法边把路径形字符串（.env/文件系统路径/URL/打包产物/嵌码压缩文件）误判为路由（excalidraw 8 条中 5 条、archify findChrome→/Applications/...）。**参数级对账前置未满足**：签名数据不在 facts.db（content_hash 是摘要非签名——N20 mdcode 同边界记档）；路由符号已可经 nav callers/callees 通用导航。**维持探索**：锐化前置=facts.db 签名落地后参数级漂移检测再立项；上游边噪音（ANY 路由误判）归 CBM 上游记档非本仓修复面。
+> **状态注记**：**触发条件验证完成（2026-11-22 #216 本机样例战役，6 真实仓实测）**：HTTP_CALLS 面=MarketTwin 572/restruct-music-player 82（JS→Go 路由跨界+测试打路由）/archify 109/excalidraw 8/StarMarkDesktop 1/CookMyFridge 0——方法标注边（GET/POST/DELETE+真实路由符号）质量达标；噪音面记档：ANY 方法边把路径形字符串（.env/文件系统路径/URL/打包产物/嵌码压缩文件）误判为路由（excalidraw 8 条中 5 条、archify findChrome→/Applications/...）。路由符号已可经 nav callers/callees 通用导航。
+> **前置已满足（2026-11-22 #217 签名数据入库，schema v3）**：callee 面=symbols.signature/return_type/param_count 三列（CBM nodes.properties 提取，覆盖 Function/Method ~99%——MarketTwin 407/407、CookMyFridge 1092/1094 实测）；caller 面=CALLS 边 properties_json 的 args[{i,e,k,v}]（CBM 原样转存本就在库，#216 记档"签名不在 facts.db"不准确——原始 JSON 一直在，真差距是可查询列，已补）。**参数级对账双面就绪可立项**：映射=CALLS 边实参（args）对被调方签名（signature/param_count）的参数数/键名核对；上游边噪音（ANY 路由误判）归 CBM 上游记档非本仓修复面。
 
 - **是什么**：py↔ts 的 HTTP/FFI 调用点参数对账（调用方传参与被调方签名漂移检测）。
 - **轮子**：**OpenAPI spec 验证**（契约对账思想）；**grpcurl/proto 校验**（强契约先例）。
@@ -142,7 +143,7 @@
 - **轮子**：**doctest**（文档内代码可验证先例——stdlib）；**litprog/literate programming**（文档即代码思想）。
 - **判定**：**学**（doctest 的"文档示例必须可执行"哲学）+**造**（ fenced block 语言标注→对应引擎轻量解析→签名比对）。dogfood 受益：本项目文档全是示例代码。
 - **成本**：低-中。优先级：甜点偏后。
-- **状态**：**已完成**（2026-11-21 甜点穿插批 #210）——`vrp mdcode <repo>`（报告非门 rc 恒 0——langmatrix 先例）：fence 解析（未闭合照提取 closed 计数暴露）→路由 py（stdlib ast 真解析；ast.walk 是 BFS——按 (lineno,name) 排序恢复文档序）/ts·js（正则轻量五形状，树库不引边界记档）→name+label 对账：doc-only（db 无同名——改名/删除/虚构 API 嫌疑）/kind-mismatch（仅 py 清晰面 def↔Class；Method≈Function 同族不误报；ts 词表未钉 name-only 诚实边界）；name 级比对（参数级签名不在 facts.db——content_hash 是摘要非签名）+同名碰撞可能记档；无语言标注/未认知语言块不路由不猜；排除目录复用 watch.EXCLUDE_DIRS 单源；doctest 哲学落地=文档示例与 facts.db 可信度对账。
+- **状态**：**已完成**（2026-11-21 甜点穿插批 #210）——`vrp mdcode <repo>`（报告非门 rc 恒 0——langmatrix 先例）：fence 解析（未闭合照提取 closed 计数暴露）→路由 py（stdlib ast 真解析；ast.walk 是 BFS——按 (lineno,name) 排序恢复文档序）/ts·js（正则轻量五形状，树库不引边界记档）→name+label 对账：doc-only（db 无同名——改名/删除/虚构 API 嫌疑）/kind-mismatch（仅 py 清晰面 def↔Class；Method≈Function 同族不误报；ts 词表未钉 name-only 诚实边界）；无语言标注/未认知语言块不路由不猜；排除目录复用 watch.EXCLUDE_DIRS 单源；doctest 哲学落地=文档示例与 facts.db 可信度对账。**参数级比对前置已解锁**（#217 修档+补路）：原文"name 级比对（参数级签名不在 facts.db）"不准确——签名 JSON 一直在 symbols.properties_json，#217 提取为 signature/return_type/param_count 三列（schema v3）后参数级比对可立项（扩面归 N19 参数级对账同批评估，不在 mdcode 单独扩）。同名碰撞可能记档照旧。
 
 ## O. 契约互操作（降低接入成本）
 

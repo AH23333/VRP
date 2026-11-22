@@ -300,13 +300,27 @@ def nav_symbol(repo: Path, fid: str) -> dict:
     fid = fid.strip()
     con = _connect_ro(repo)
     try:
-        row = con.execute(
-            """
-            SELECT fid, qualified_name, label, name, file_path, start_line, end_line, content_hash
-            FROM symbols WHERE fid = ?
-            """,
-            (fid,),
-        ).fetchone()
+        # #217 签名列（schema v3）探测回退：pre-v3 facts.db 上三列缺席——
+        # 诚实降级为旧 8 列面（NULL 语义），不炸不迁移（nav 保持 ro 纯）。
+        sym_cols = {r[1] for r in con.execute("PRAGMA table_info(symbols)")}
+        if {"signature", "return_type", "param_count"} <= sym_cols:
+            row = con.execute(
+                """
+                SELECT fid, qualified_name, label, name, file_path, start_line, end_line,
+                       content_hash, signature, return_type, param_count
+                FROM symbols WHERE fid = ?
+                """,
+                (fid,),
+            ).fetchone()
+        else:
+            row = con.execute(
+                """
+                SELECT fid, qualified_name, label, name, file_path, start_line, end_line,
+                       content_hash
+                FROM symbols WHERE fid = ?
+                """,
+                (fid,),
+            ).fetchone()
         if row is None:
             raise SystemExit(f"nav_symbol: unknown fid: {fid[:16]}...")
         symbol = dict(row)

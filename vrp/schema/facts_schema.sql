@@ -16,6 +16,14 @@ CREATE TABLE IF NOT EXISTS symbols (
     end_line INTEGER,
     content_hash TEXT NOT NULL DEFAULT '',
     properties_json TEXT,
+    -- #217 签名数据入库（schema v3）：CBM nodes.properties 的 signature/
+    -- return_type/param_count 提取为可查询列（原样转存的 properties_json
+    -- 保留不动——列是查询面正名非数据源切换）。参数级对账（N19）的 callee
+    -- 面：caller 面在 edges.properties_json 的 args（CBM 原样）。提取是
+    -- properties 字符串的纯函数——确定性保持。
+    signature TEXT,
+    return_type TEXT,
+    param_count INTEGER,
     UNIQUE (project, qualified_name)
 );
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
@@ -396,5 +404,6 @@ GROUP BY sf.file_path, st.file_path;
 -- V17 (#205): PRAGMA user_version gates the migration chain in
 -- etl.ensure_schema. 2 = BB1 resolution_label column (v1 is a reserved
 -- pre-tracking baseline slot that no library ever actually held; 0 =
--- pre-tracking library of any historical shape).
-PRAGMA user_version = 2;
+-- pre-tracking library of any historical shape). 3 = #217 symbol signature
+-- columns (signature/return_type/param_count).
+PRAGMA user_version = 3;

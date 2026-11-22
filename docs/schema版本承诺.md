@@ -5,10 +5,11 @@
 
 ## 1. 版本机制
 
-- facts.db 用 SQLite 原生 `PRAGMA user_version` 记录 schema 版本（当前 **2**）。
+- facts.db 用 SQLite 原生 `PRAGMA user_version` 记录 schema 版本（当前 **3**）。
 - `0` = pre-tracking 旧库（schema 版本机制引入前）——打开时探测并迁移，见 §3。
 - 版本号只增不减；每次不兼容变更 +1。
-- v1 为理论基线槽：从未有库真实处于 user_version=1（批⑦ D7 决策点记档——SCHEMA_VERSION=2 起步），迁移链从 0 直达 2，v1 槽保留给未来回溯测试用途，不代表历史发布版本。
+- v1 为理论基线槽：从未有库真实处于 user_version=1（批⑦ D7 决策点记档——SCHEMA_VERSION=2 起步），迁移链从 0 直达当前版本，v1 槽保留给未来回溯测试用途，不代表历史发布版本。
+- 版本史：**v2** = edges.resolution_label（BB1 #205，调用边置信度分层）；**v3** = symbols.signature/return_type/param_count（#217 签名数据入库——CBM nodes.properties 提取为可查询列，N19 参数级对账 callee 面）。
 
 ## 2. v0.x 政策（宽松）
 
@@ -33,4 +34,5 @@
 ## 5. 消费者指南（速览）
 
 - 第三方只读消费 facts.db：读 `PRAGMA user_version` 判断兼容性；user_version 高于自身预期时不要臆测列含义。
-- 只读连接请走版本探测而非硬编码列清单；未迁移旧行的 `resolution_label` 为 NULL（未知），与显式低置信值严格区分——NULL 不参与任何"必死"类判定（与 v_dead_code 语义一致）。
+- 只读连接请走版本探测而非硬编码列清单（nav_symbol 的 PRAGMA table_info 探测回退是仓内先例）；未迁移旧行的 `resolution_label` 为 NULL（未知），与显式低置信值严格区分——NULL 不参与任何"必死"类判定（与 v_dead_code 语义一致）。
+- pre-v3 库的 symbols 无 signature/return_type/param_count 三列——消费前探测列存在性；三列 NULL/缺席语义=该符号无签名面（CBM 未提供），非「签名在但未知」。
