@@ -76,7 +76,7 @@ vrp impact <repo> [--base B] [--path P ...] [--depth N] [--direction D] [--no-te
 vrp testcov <repo> --file coverage.json [--label L]  # 测试覆盖对账（B4，#203，traces #144 独立表+对账模式第三次复用；学 coverage.py JSON 出口+diff-cover 行区间映射）：导入外部 coverage.py JSON 报告（pytest --cov 生产者外部——VRP 只记录外部观测零依赖红线）→ test_coverage 独立表（file_path 键跨 etl 稳定，per label 整批替换，OWNED 存续）+ test_linkage 静态关联 vs 实际行覆盖对账收据——符号执行判定=body 区间 (start_line, end_line] 命中 executed/missing（def 声明行不计——coverage.py 对未调用函数恒报 def 行 executed，import 执行非测试执行）；五桶：linked_and_covered/linked_not_covered_measured（**「静态说有测试但从不执行」假关联现形**，B4 核心动机）/linked_not_covered_unmeasured（范围信号弱桶不混）/linked_undetermined（单行符号诚实未定）/covered_not_linked（静态漏关联假阴性面）+linked_unresolved 悬挂锚计数；unresolved_files=覆盖文件不在 facts 诚实上报；class 符号 import 体执行记档（Function 语义最准）；写入经 _open_facts_rw（M4 硬闸）
 vrp golden <repo> --file truth.json      # Golden 审计矩阵（F15+BB3，#204，CGC 循环完美门反面教训——审计必须对独立 committed 真值，禁止导出与自己比）：golden JSON（format/provenance 非空/fixture 可选/truth 双面/samples cap 5 严格形状守卫）双面审计 facts.db——①violations 面：truth 期望违例多集匹配 s7 findings（kind/file/line 三键，R-AD 违例 payload 守卫提取 importer/imported 条件键，source 过滤多集），missing（漏报）+spurious（误报）双向计数；②symbols 面：truth 期望符号五键（qn/kind/file/start/end）严格精确匹配，近失两侧成对报（scope=truth 文件域有界枚举）；precision/recall 分母零→null 诚实（空数组=期望零有效面）；fixture 节（repo_name+files+symbols 9 元组 seed）一键重建可跑 fixture 仓（写盘 newline='' + seed 库，repo 已存在拒覆盖）；rc 恒 0（审计面不是门面——假信号是发现不是命令失败）；只读 ro URI
 vrp enforce <repo>                      # S7 架构执法：curate 入库的 structure 按语言路由执行（.py→import-linter；.ts/.js→dependency-cruiser；.go→go list 原生导入图；.rs→内置 use 解析器；.java→内置 package/import 解析器；.cs→内置 namespace/using 解析器；.kt→内置 package/import 解析器；.c/.cc/.cpp→内置 #include 解析器；.php→内置 namespace/use 解析器；.scala→内置 package/import 解析器；.rb→内置 module/require 解析器；.dart→内置 import 解析器；.swift→内置 Package.swift target 解析器；.zig→内置 @import 解析器；.lua→内置 require 解析器；.m/.mm→内置 #import 解析器），违例落 P9 findings
-vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SARIF+Mermaid+archify html+fusion.html 融合报告（构想v9 V-2：六风格单页总览——仪表盘/叙事/结构图/下钻/双引擎对账/数据切片，vendored ECharts 零外链，chain 同批联动行级跳转 #L{n}，主题令牌与 chain 同源三预设）；R7' 多级颗粒度——archify 图链成功出 chain/（替代 L1/L2），否则 L1 模块页+L2 符号页；archify 缺失降级不阻塞；用户产物信息架构——How to read/Project overview（AI 梳理职责+层规则）/Pathology checkup（P 码人话体检）/Deep data 折叠（AI 材料归拢）；报告产物密钥卫生——chain 源码页命中高置信密钥探测器（云 token/JWT/私钥块/URL 凭据）渲染层掩蔽 [VRP-MASKED:type:preview…]（行数不变 #L 锚点保持），命中清单落 .vrp/SECRETS.local.md 本地勿提交；finding 影响面——切片行锚定符号调用图 BFS 直达/传递可达（dc/dx/uc/xc+top 调用方/被调名单），BFS 帽截断下界诚实注记，无锚行注记不可算））
+vrp report <repo>                       # S8 静态报告（.vrp/report/：IR+SARIF+Mermaid+archify html+fusion.html 融合报告（构想v9 V-2：六风格单页总览——仪表盘/叙事/结构图/下钻/双引擎对账/数据切片，vendored ECharts 零外链，chain 同批联动行级跳转 #L{n}，主题令牌与 chain 同源三预设）；R7' 多级颗粒度——archify 图链成功出 chain/（替代 L1/L2），否则 L1 模块页+L2 符号页；archify 缺失降级不阻塞；用户产物信息架构——Bottom line（结论先行一屏健康摘要：findings 计数/top 病理/行动项，archify v3.3.0 explainer 概念吸收，节标题稳定锚点 slug `#pathology-checkup` 等节内导航）/How to read/Project overview（AI 梳理职责+层规则）/Pathology checkup（P 码人话体检）/Deep data 折叠（AI 材料归拢）；报告产物密钥卫生——chain 源码页命中高置信密钥探测器（云 token/JWT/私钥块/URL 凭据）渲染层掩蔽 [VRP-MASKED:type:preview…]（行数不变 #L 锚点保持），命中清单落 .vrp/SECRETS.local.md 本地勿提交；finding 影响面——切片行锚定符号调用图 BFS 直达/传递可达（dc/dx/uc/xc+top 调用方/被调名单），BFS 帽截断下界诚实注记，无锚行注记不可算））
 vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 facts.db 快照 → 计数 diff + 双 L0 图并排 + verdict 时间线
 ```
 
@@ -169,9 +169,9 @@ vrp session <repo> begin|end|report     # 全信任模式（§3.3）：初末 fa
 ## 测试
 
 ```powershell
-python -m pytest -q                        # 快速层 2257 例 ~4-8min（默认排除 deep）
+python -m pytest -q                        # 快速层 2262 例 ~4-8min（默认排除 deep）
 python -m pytest -m deep -q                # 深度层 1529 例 ~15-30min（真实工具全外链 E2E）
-python -m pytest -m "deep or not deep" -q  # 全量 3786 例（阶段性完工验收）
+python -m pytest -m "deep or not deep" -q  # 全量 3791 例（阶段性完工验收）
 ```
 
 深度层含：双仓基准（TS 1887 符号 / Python 66132 符号·25 万边）、序贯事务 E2E、闸门假阳性性质（合法 rename 零误报×15、丢边加边必抓×25）、fuzz、五视图污染清扫、freeze 字节级复现、三语言变异执行 E2E、difftastic G4 E2E。
@@ -180,7 +180,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3786 例（阶段性完工�
 
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
-- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2257 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
+- **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2262 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
 - **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
 
 ## 外部工具（可选，缺失则降级）

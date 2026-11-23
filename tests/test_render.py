@@ -351,6 +351,89 @@ def test_render_report_degraded_no_archify(tmp_path, monkeypatch):
     assert "needs_confirmation" in report
 
 
+# ------------------------------------------- Bottom line（#222 结论先行）
+
+
+def test_bottom_line_counts_top_pathology_and_actions(tmp_path, monkeypatch):
+    """底线节端到端：计数/top 病理/verdict 分解/行动项 + 结论先行位序。"""
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)  # 1 件 P1
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute(
+        "INSERT INTO findings (pathology, kind, source, file_path, start_line, payload_json)"
+        " VALUES ('P1', 'k', 's2-astgrep', 'pkg/y.py', 1, '{}')"
+    )
+    con.execute(
+        "INSERT INTO findings (pathology, kind, source, file_path, start_line, payload_json)"
+        " VALUES ('P9', 'k', 'etl', 'pkg/z.py', 1, '{}')"
+    )
+    con.commit()
+    con.close()
+    _mk_verdict(repo, "tx-1", status="needs_confirmation")
+    _mk_verdict(repo, "tx-2", status="committed")
+    res = render.render_report(repo)
+    html_text = Path(res["report"]).read_text(encoding="utf-8")
+    assert "3 finding(s) across 2 pathology type(s)" in html_text
+    assert "most frequent: P1 (2).</b>" in html_text
+    assert ("2 refactor verdict(s): 1 committed, 1 open "
+            "(1 awaiting your confirmation).") in html_text
+    assert 'href="#verdict-list-t4-pending-first"' in html_text
+    # 结论先行：Bottom line 节在引导节之前
+    assert html_text.index("Bottom line") < html_text.index("How to read this report")
+
+
+def test_bottom_line_clean_state(tmp_path, monkeypatch):
+    """空态诚实：无 findings/verdicts 不编造；降级注记（archify 缺失）进行动项。"""
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    res = render.render_report(repo)
+    html_text = Path(res["report"]).read_text(encoding="utf-8")
+    assert "No findings recorded." in html_text
+    assert "rendering note(s) recorded" in html_text  # archify 缺失等降级注记行动项
+    assert 'href="#deep-data-for-ai-agents-auditing"' in html_text
+    # "无事可做"分支：零行动项时显式表达（单元面——archify 在场才有）
+    section = render._bottom_line_section(0, [], [], [])
+    assert "Nothing needs your attention right now." in section["body"]
+
+
+def test_bottom_line_all_committed_verdicts(tmp_path, monkeypatch):
+    """全 committed verdicts：all committed 措辞，不出确认行动项。"""
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _mk_verdict(repo, "tx-1", status="committed")
+    res = render.render_report(repo)
+    html_text = Path(res["report"]).read_text(encoding="utf-8")
+    assert "1 refactor verdict(s), all committed." in html_text
+    assert "awaiting your confirmation - see" not in html_text
+
+
+def test_bottom_line_unlisted_pathology_honest():
+    """单元面：未知 P 码（不在 PATHOLOGY_LEGEND）诚实标注，不 KeyError。"""
+    section = render._bottom_line_section(
+        2, [{"pathology": "P777", "c": 2}], [], [])
+    assert "<b>P777</b>" in section["body"]
+    assert "(code not in legend)" in section["body"]
+    assert section["title"] == "Bottom line"
+
+
+def test_report_section_anchor_slugs(tmp_path, monkeypatch):
+    """节标题稳定锚点：slug 折叠确定性（#bottom-line/#pathology-checkup 等）。"""
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    res = render.render_report(repo)
+    html_text = Path(res["report"]).read_text(encoding="utf-8")
+    assert '<h2 id="bottom-line">' in html_text
+    assert '<h2 id="how-to-read-this-report">' in html_text
+    assert '<h2 id="pathology-checkup">' in html_text
+    assert '<h2 id="verdict-list-t4-pending-first">' in html_text
+
+
 def test_render_report_reproducible_no_timestamp(tmp_path, monkeypatch):
     monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
     monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
@@ -711,6 +794,9 @@ def test_interlink_integrity_all_targets_exist(tmp_path, monkeypatch):
         text = page.read_text(encoding="utf-8")
         for target in re.findall(r'href="([^"]+)"', text):
             if target.startswith(("http://", "https://")):
+                continue
+            if target.startswith("#"):  # 页内锚点：必须命中本页实存 id（#222）
+                assert f'id="{target[1:]}"' in text, f"{page.name}: 断锚 {target}"
                 continue
             assert (page.parent / target).exists(), f"{page.name}: 断链 {target}"
 

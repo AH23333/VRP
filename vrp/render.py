@@ -8,7 +8,9 @@
   `archify render`；缺失/失败单件降级 Mermaid-only
 - Mermaid 降级链：IR → .mmd 源文本（零依赖，核心红线内）
 - SARIF 2.1.0：findings 手写 JSON（不引 sarif-om，零依赖）
-- report.html：目录页 + T4/open 清单 + Mermaid 内嵌（CDN script，无网显源码）
+- report.html：目录页 + T4/open 清单 + Mermaid 内嵌（CDN script，无网显源码）；
+  结论先行底线节（Bottom line，archify v3.3.0 explainer 概念吸收）+ 节标题
+  稳定锚点 slug（#pathology-checkup 等节内导航）
 - R7' 多级颗粒度：report.html（L0）→ modules/m{i}-{arch_id}.html（L1 模块页）
   → symbols/{fid}.html（L2 符号页 + 源码片段），静态多页互链（主链优先）
 - R7'(2) 模块交互图链：archify 可用且链成功 → chain/（index → 模块图链
@@ -26,6 +28,7 @@ import hashlib
 import html as html_mod
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -1179,6 +1182,87 @@ def _active_structure_payload(con: sqlite3.Connection) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _section_slug(title: str) -> str:
+    """节标题 → 稳定锚点 slug（小写；非字母数字折叠为 -）。
+
+    确定性纯函数：同标题恒同 slug（报告内导航锚点可复现）。
+    """
+    s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return s or "section"
+
+
+def _bottom_line_section(findings_total: int, path_per_code: list,
+                         verdicts: list[dict], degraded_reasons: list[str]) -> dict:
+    """结论先行底线节（archify v3.3.0 explainer "one-page answers" 概念吸收）。
+
+    一屏回答"我的仓库健康状况如何、最要紧的是什么"。计数与 top 病理
+    直接来自 facts.db 聚合（同 facts.db 字节级同节，无时间戳）；findings
+    表无 severity 列——计数是唯一诚实轴，不发明评分/严重度。空态诚实
+    （不编造）；未知 P 码不进 PATHOLOGY_LEGEND 硬查（KeyError 红线），
+    诚实标注 unlisted。
+    """
+    esc = html_mod.escape
+    open_items = [v for v in verdicts if v.get("status") != "committed"]
+    t4 = [v for v in open_items if v.get("status") == "needs_confirmation"]
+    sentences: list[str] = []
+    if findings_total > 0 and path_per_code:
+        top = path_per_code[0]
+        sentences.append(
+            f"<b>{findings_total} finding(s) across {len(path_per_code)} pathology "
+            f"type(s), most frequent: {esc(str(top['pathology']))} ({top['c']}).</b>"
+        )
+    else:
+        sentences.append("<b>No findings recorded.</b>")
+    if verdicts:
+        committed = len(verdicts) - len(open_items)
+        if open_items:
+            sentences.append(
+                f"{len(verdicts)} refactor verdict(s): {committed} committed, "
+                f"{len(open_items)} open ({len(t4)} awaiting your confirmation)."
+            )
+        else:
+            sentences.append(f"{len(verdicts)} refactor verdict(s), all committed.")
+    actions: list[str] = []
+    if t4:
+        actions.append(
+            f"<li>{len(t4)} refactor(s) awaiting your confirmation - see "
+            '<a href="#verdict-list-t4-pending-first">Verdict list</a>.</li>'
+        )
+    if degraded_reasons:
+        actions.append(
+            f"<li>{len(degraded_reasons)} rendering note(s) recorded - see "
+            '<a href="#deep-data-for-ai-agents-auditing">Deep data</a> '
+            "for what degraded and why.</li>"
+        )
+    if not actions:
+        actions.append("<li>Nothing needs your attention right now.</li>")
+    top_table = ""
+    if findings_total > 0 and path_per_code:
+        rows = "".join(
+            "<tr>"
+            f"<td><b>{esc(str(r['pathology']))}</b></td>"
+            f"<td>{r['c']}</td>"
+            f"<td>{esc(PATHOLOGY_LEGEND.get(str(r['pathology']),
+                                            '(code not in legend)'))}</td>"
+            "</tr>"
+            for r in path_per_code[:3]
+        )
+        top_table = (
+            "<h3>Top pathology types (most frequent first)</h3>"
+            "<table><tr><th>code</th><th>findings</th><th>meaning</th></tr>"
+            f"{rows}</table>"
+            '<p class="meta">Full plain-language breakdown: '
+            '<a href="#pathology-checkup">Pathology checkup</a>.</p>'
+        )
+    body = (
+        "<p>" + " ".join(sentences) + "</p>"
+        "<h3>What to do next</h3>"
+        f"<ul>{''.join(actions)}</ul>"
+        + top_table
+    )
+    return {"title": "Bottom line", "body": body}
+
+
 def _how_to_read_section() -> dict:
     """引导节：阅读路径 + P 码图例 + 术语速查（小白第一屏，用户产物定位）。"""
     esc = html_mod.escape
@@ -1190,6 +1274,8 @@ def _how_to_read_section() -> dict:
         "<p>This report is how the AI has organized and health-checked your repository. "
         "Read it in this order:</p>"
         "<ol>"
+        "<li><b>Bottom line</b> - the one-screen health summary: how many findings, "
+        "which pathology dominates, and what (if anything) needs your action.</li>"
         "<li><b>Project overview</b> - your repo as the AI curated it: modules, layers, "
         "one-line responsibilities.</li>"
         "<li><b>Architecture</b> - the same structure as a diagram.</li>"
@@ -1387,7 +1473,7 @@ def _report_html(repo: Path, ir_hash: str, git_head: str, sections: list[dict], 
         _stale_banner_html(staleness),
     ]
     for section in sections:
-        parts.append(f"<h2>{esc(section['title'])}</h2>")
+        parts.append(f'<h2 id="{_section_slug(section["title"])}">{esc(section["title"])}</h2>')
         parts.append(section["body"])
     parts.append("</body></html>")
     return "\n".join(parts) + "\n"
@@ -1718,6 +1804,7 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
                      '<a href="html/timeline.html">html/timeline.html</a></p>'
                      if "html/timeline.html" in archify_html else "")
     sections = [
+        _bottom_line_section(findings_total, path_per_code, verdicts, degraded_reasons),
         _how_to_read_section(),
         ({
             "title": "Fusion 总览（融合报告）",

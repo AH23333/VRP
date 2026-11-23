@@ -109,8 +109,8 @@ def _mk_verdict(repo: Path, tid: str) -> None:
 
 
 def _section(html_text: str, title: str) -> str:
-    """按 <h2> 切节，返回 title 节正文（含下一 <h2> 前全部内容）。"""
-    for part in html_text.split("<h2>")[1:]:
+    """按 <h2>（含 #222 锚点 id 属性形态）切节，返回 title 节正文。"""
+    for part in re.split(r"<h2[^>]*>", html_text)[1:]:
         if part.startswith(f"{title}</h2>"):
             return part
     raise AssertionError(f"section not found: {title}")
