@@ -550,18 +550,29 @@ def _write_refresh_receipt(repo: Path, receipt: dict) -> None:
     path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
 
 
-def _current_project(con: sqlite3.Connection) -> str:
-    """当前项目名：meta.cbm_project 优先，缺则 symbols 唯一 project 域兜底。"""
+def _resolve_project(con: sqlite3.Connection) -> str | None:
+    """当前项目名（可缺）：meta.cbm_project 优先，缺则 symbols 唯一 project 域兜底。
+
+    读出面安全版（#226 drift 桥用）：不可定 → None（桥跳过），不炸只读面。
+    """
     row = con.execute("SELECT value FROM meta WHERE key = 'cbm_project'").fetchone()
     if row is not None and row[0]:
         return row[0]
     rows = con.execute("SELECT DISTINCT project FROM symbols").fetchall()
     if len(rows) == 1:
         return rows[0][0]
-    raise SystemExit(
-        "curate-refresh: cannot determine current project"
-        " (meta.cbm_project missing and symbols project ambiguous - re-run etl)"
-    )
+    return None
+
+
+def _current_project(con: sqlite3.Connection) -> str:
+    """当前项目名（写路径必需版）：不可定 → SystemExit 诚实拒绝。"""
+    project = _resolve_project(con)
+    if project is None:
+        raise SystemExit(
+            "curate-refresh: cannot determine current project"
+            " (meta.cbm_project missing and symbols project ambiguous - re-run etl)"
+        )
+    return project
 
 
 def _qn_candidates(qn: str, ledger_project: str, cur_project: str) -> list[str]:
@@ -743,6 +754,8 @@ def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
 # - fid_ledger 身份史：旧 fid → (project, qualified_name, file_path) 反查，
 #   再按 (project, qn) 正查现行 symbols 得唯一新 fid（remap）；
 #   qn 消失（改名/删除）→ ledger 的文件域补位（cap，供 AI 人工判读）
+# - 项目名派生变更桥（#226）：ledger 正查 miss 后按 _qn_candidates 候选序
+#   以当前项目名再正查（与 curate-refresh 写路径同桥），remap 提议不再全盲
 # - remap 只是提议：边/acts 仍在 curate_submit 提交时全量重验，不构成旁路
 
 SAME_FILE_CANDIDATE_CAP = 10
@@ -780,6 +793,21 @@ def _missing_fid_entry(
     if cur is not None:
         entry["candidates"] = [{"fid": cur[0], "file_path": cur[1], "match": "qualified_name"}]
         return entry
+    # 项目名派生变更桥（#226）：ledger 正查 miss 后，按 qn 候选序以当前项目名
+    # 再正查（与 curate-refresh 写路径同桥 _qn_candidates——读出面对项目名
+    # 变更不再全盲掉进 same_file 截断；当前项目名不可定则桥诚实跳过）
+    bridge_project = _resolve_project(con)
+    if bridge_project is not None:
+        for cand_qn in _qn_candidates(qn, project, bridge_project):
+            bridged = con.execute(
+                "SELECT fid, file_path FROM symbols WHERE project = ? AND qualified_name = ?",
+                (bridge_project, cand_qn),
+            ).fetchone()
+            if bridged is not None:
+                entry["candidates"] = [
+                    {"fid": bridged[0], "file_path": bridged[1], "match": "qualified_name"}
+                ]
+                return entry
     # qn 已消亡（改名/删除）：ledger 记录的文件域补位（确定性排序，cap 诚实截断）
     same_file: list[dict] = []
     for r in con.execute(

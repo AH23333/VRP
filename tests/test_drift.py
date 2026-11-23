@@ -178,6 +178,117 @@ def test_drift_report_same_file_fallback_lists_symbols(tmp_path):
     assert miss["candidates"][0]["qualified_name"] == "pkg.a"
 
 
+# ------------------------------------- 项目名派生变更桥（#226，F1 读出面）
+
+
+def _seed_project_change(repo: Path) -> tuple[str, str]:
+    """项目名派生变更世界：旧时代 fid（ledger 记旧项目前缀 qn）+ 新时代符号
+    （symbols 全在当前项目名下，meta.cbm_project 已写）。返回 (旧 fid, 新 fid)。"""
+    con = _con(repo)
+    try:
+        con.execute("INSERT INTO meta (key, value) VALUES ('cbm_project', 'new-proj')")
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path,"
+            " start_line, end_line, content_hash) VALUES"
+            " ('fid-a2', 'new-proj', 'new-proj.pkg.a', 'Function', 'a', 'pkg/x.py', 1, 3, 'h2')"
+        )
+        con.execute(
+            "INSERT INTO fid_ledger (fid, project, qualified_name, file_path, first_seen_at)"
+            " VALUES ('fid-a1', 'old-proj', 'old-proj.pkg.a', 'pkg/x.py', '2026-11-05T00:00:00Z')"
+        )
+        con.commit()
+    finally:
+        con.close()
+    return "fid-a1", "fid-a2"
+
+
+def test_drift_report_project_name_bridge_remap(tmp_path):
+    """#226 桥：ledger 正查 miss（项目名派生变更）→ qn 候选序当前项目正查 →
+    唯一候选 qualified_name + remap 直给（读出面不再全盲掉进 same_file 截断）。"""
+    repo = _mk_repo(tmp_path)
+    old_fid, new_fid = _seed_project_change(repo)
+    _insert_slice(repo, [old_fid])
+    report = _drift(repo)
+    item = report["slices"][0]
+    assert item["fresh"] is False
+    miss = item["missing_fids"][0]
+    assert miss["fid"] == old_fid
+    assert miss["ledger"] is True
+    assert miss["ledger_qn"] == "old-proj.pkg.a"  # ledger 原样记旧项目前缀（诚实 provenance）
+    assert miss["candidates"] == [
+        {"fid": new_fid, "file_path": "pkg/x.py", "match": "qualified_name"}
+    ]
+    assert item["remap"] == {old_fid: new_fid}
+
+
+def test_drift_report_project_name_bridge_structure(tmp_path):
+    """#226 桥 structure 面：模块死 fid 同桥重定位，remap 提议流出。"""
+    repo = _mk_repo(tmp_path)
+    old_fid, new_fid = _seed_project_change(repo)
+    _insert_structure(repo, [old_fid])
+    report = _drift(repo)
+    st = report["structure"]
+    assert st["fresh"] is False
+    assert st["remap"] == {old_fid: new_fid}
+    assert st["modules"] == [{"module_id": "m1", "missing": 1}]
+
+
+def test_drift_report_bridge_falls_back_to_unique_symbols_domain(tmp_path):
+    """无 meta.cbm_project 但 symbols 项目域唯一：唯一域兜底桥仍通
+    （cbm_project 写入前时代的 DB 覆盖）。"""
+    repo = _mk_repo(tmp_path)
+    con = _con(repo)
+    try:
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path,"
+            " start_line, end_line, content_hash) VALUES"
+            " ('fid-a2', 'new-proj', 'new-proj.pkg.a', 'Function', 'a', 'pkg/x.py', 1, 3, 'h2')"
+        )
+        con.execute(
+            "INSERT INTO fid_ledger (fid, project, qualified_name, file_path, first_seen_at)"
+            " VALUES ('fid-a1', 'old-proj', 'old-proj.pkg.a', 'pkg/x.py', '2026-11-05T00:00:00Z')"
+        )
+        con.commit()
+    finally:
+        con.close()
+    _insert_slice(repo, ["fid-a1"])
+    report = _drift(repo)
+    assert report["slices"][0]["remap"] == {"fid-a1": "fid-a2"}
+
+
+def test_drift_report_bridge_skipped_when_project_unresolvable(tmp_path):
+    """当前项目名不可定（无 cbm_project + symbols 项目域歧义）：桥诚实跳过
+    不炸只读面，降级 same_file 补位，不构 remap。"""
+    repo = _mk_repo(tmp_path)
+    con = _con(repo)
+    try:
+        # 两项目并存且无 cbm_project：唯一域兜底失效 → 桥跳过
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path,"
+            " start_line, end_line, content_hash) VALUES"
+            " ('fid-x', 'p2', 'p2.pkg.a', 'Function', 'a', 'pkg/x.py', 1, 3, 'h2')"
+        )
+        con.execute(
+            "INSERT INTO symbols (fid, project, qualified_name, label, name, file_path,"
+            " start_line, end_line, content_hash) VALUES"
+            " ('fid-y', 'p3', 'p3.pkg.a', 'Function', 'a', 'pkg/y.py', 1, 3, 'h2')"
+        )
+        con.execute(
+            "INSERT INTO fid_ledger (fid, project, qualified_name, file_path, first_seen_at)"
+            " VALUES ('fid-gone', 'p2', 'p2.pkg.gone', 'pkg/x.py', '2026-11-05T00:00:00Z')"
+        )
+        con.commit()
+    finally:
+        con.close()
+    _insert_slice(repo, ["fid-gone"])
+    report = _drift(repo)
+    miss = report["slices"][0]["missing_fids"][0]
+    assert miss["ledger"] is True
+    assert [c["fid"] for c in miss["candidates"]] == ["fid-x"]
+    assert miss["candidates"][0]["match"] == "same_file"
+    assert "remap" not in report["slices"][0]
+
+
 def test_drift_report_missing_edge_both_fids_alive(tmp_path):
     """两端 fid 存活但边消亡：missing_edges 单列。"""
     repo = _mk_repo(tmp_path)
@@ -503,6 +614,24 @@ def test_remap_rewrites_ai_files_then_curate_reingests(tmp_path):
         assert con.execute("SELECT status FROM structure").fetchone()[0] == "active"
     finally:
         con.close()
+
+
+def test_remap_applies_project_bridge_to_ai_files(tmp_path):
+    """#226 写回面受益：项目名派生变更场景的桥 remap 提议 → .vrp/ai 文件
+    旧→新 fid 一键重写（F1 提议→写回闭环，unresolved 清零）。"""
+    repo = _mk_repo(tmp_path)
+    old_fid, new_fid = _seed_project_change(repo)
+    _insert_slice(repo, [old_fid], status="stale")
+    _insert_structure(repo, [old_fid], status="stale")
+    _write_ai(repo, slices=[_slice([old_fid])], structure=_structure([old_fid]))
+    report = _drift(repo)
+    result = curate_mod.apply_remap_to_ai(repo, report)
+    assert result["total_remapped"] == 2  # structure + slices 各 1 fid
+    assert result["unresolved_total"] == 0
+    slices = json.loads((repo / ".vrp" / "ai" / "slices.json").read_text(encoding="utf-8"))
+    assert [s["fid"] for s in slices[0]["steps"]] == [new_fid]
+    structure = json.loads((repo / ".vrp" / "ai" / "structure.json").read_text(encoding="utf-8"))
+    assert structure["modules"][0]["symbol_fids"] == [new_fid]
 
 
 def test_remap_unresolved_when_no_unique_candidate(tmp_path):
