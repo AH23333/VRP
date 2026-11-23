@@ -446,7 +446,8 @@ def build_server(repo: Path) -> "MCPServer":
         "verdicts = T4 decision-point briefing (verdict timeline + open/T4 list; T4 release only via manual CLI vrp transact --confirm); "
         "slice = single business-line briefing as Mermaid sequence source (target=slice_id, get ids via vrp_query curate_slices; "
         "paste into mermaid.live to render); "
-        "report = S8 full static report -> .vrp/report/ (report.html + IR + SARIF + Mermaid; "
+        "report = S8 full static report family -> .vrp/report/ (report.html + tour.html newcomer walkthrough "
+        "(skipped, honestly noted, when no curated structure) + IR + SARIF + Mermaid; "
         "auto-degrades to Mermaid-only when archify is missing); no timestamps, traceable via facts.git_head",
     )
     server.add_tool(

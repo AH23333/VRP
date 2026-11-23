@@ -38,6 +38,7 @@ from . import render_chain
 from . import dbpath
 from . import procs
 from . import s6_transact
+from . import tour as tour_mod
 
 REPORT_DIR = ".vrp/report"
 ARCHIFY_TIMEOUT = 120
@@ -1572,7 +1573,7 @@ def _clean_render_out(out: Path) -> None:
         d = out / sub
         if d.is_dir():
             shutil.rmtree(d)
-    for pattern in ("*.mmd", "findings.sarif", "report.html", "fusion.html"):
+    for pattern in ("*.mmd", "findings.sarif", "report.html", "fusion.html", "tour.html"):
         for f in out.glob(pattern):
             f.unlink()
 
@@ -1795,6 +1796,24 @@ def render_report(repo: Path, out_dir: Path | None = None) -> dict:
         degraded_reasons.extend(fusion_res.get("notes", []))
     except Exception as exc:  # 融合层意外失败不阻塞报告
         degraded_reasons.append(f"fusion crashed: {exc}")
+    # #224 报告家族整合（archify story #1036 walkthrough+cross-drilldown
+    # #281 概念吸收）：tour 与报告同批产出互链——walkthrough 是报告一等
+    # 公民非独立命令；structure 缺失/损坏诚实跳过（degraded 注记不阻塞，
+    # rc 语义不变——#215 同诚实面）；字节与 `vrp tour --html` 独立产出
+    # 一致（同 render_html 纯函数+同 facts.db）。
+    tour_html: str | None = None
+    try:
+        tour_html = tour_mod.render_html(tour_mod.run_tour(repo))
+    except SystemExit as exc:
+        degraded_reasons.append(f"code tour skipped: {exc}")
+    if tour_html is not None:
+        (out / "tour.html").write_text(tour_html, encoding="utf-8", newline="\n")
+        artifacts.append("tour.html")
+        modules_section = {**modules_section, "body": modules_section["body"] + (
+            '<p class="meta">Newcomer walkthrough (suggested reading order,'
+            " one-line responsibility per module):"
+            ' <a href="tour.html">tour.html</a></p>'
+        )}
     # 用户产物信息架构：引导 → 总览（AI 梳理）→ 模块链 → 架构 → 体检 →
     # findings 全清单（折叠）→ 重构决定 → 业务线 → 深层数据（折叠）
     esc = html_mod.escape

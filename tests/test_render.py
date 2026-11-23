@@ -18,6 +18,7 @@ from vrp import procs
 from vrp import render
 from vrp import render_chain
 from vrp import s6_transact
+from vrp import tour
 
 SCHEMA = Path(__file__).parent.parent / "vrp" / "schema" / "facts_schema.sql"
 
@@ -349,6 +350,49 @@ def test_render_report_degraded_no_archify(tmp_path, monkeypatch):
     assert "facts.git_head" in report
     assert "tx-1" in report  # verdict 清单进报告
     assert "needs_confirmation" in report
+
+
+# ------------------------------------- #224 报告家族整合（tour 同批产出互链）
+
+
+def test_render_report_emits_tour_html(tmp_path, monkeypatch):
+    """tour 同批产出互链：structure 在 → tour.html 落盘+report.html 模块节
+    互链+artifacts 记档；字节与 `vrp tour --html` 独立产出一致（同源纯函数）。"""
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    result = render.render_report(repo)
+    out = repo / ".vrp" / "report"
+    assert (out / "tour.html").is_file()
+    assert "tour.html" in result["artifacts"]
+    assert not any("code tour skipped" in r for r in result["degraded"])
+    report = (out / "report.html").read_text(encoding="utf-8")
+    assert '<a href="tour.html">tour.html</a>' in report
+    standalone = tour.render_html(tour.run_tour(repo))
+    assert (out / "tour.html").read_text(encoding="utf-8") == standalone
+
+
+def test_render_report_tour_skipped_no_structure(tmp_path, monkeypatch):
+    """structure 缺失诚实跳过：无 tour.html、无互链、degraded 注记记档
+    （不阻塞 rc=0——#215 同诚实面）；上轮残留 tour.html 被清（R6' 病根四
+    同守：孤儿产物不混入本轮快照）。"""
+    monkeypatch.delenv("VRP_ARCHIFY_MJS", raising=False)
+    monkeypatch.setattr(render, "find_archify_mjs", lambda: None)
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    con = sqlite3.connect(repo / ".vrp" / "facts.db")
+    con.execute("DELETE FROM structure")
+    con.commit()
+    con.close()
+    out = repo / ".vrp" / "report"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "tour.html").write_text("stale from previous run", encoding="utf-8")
+    result = render.render_report(repo)
+    assert not (out / "tour.html").exists()
+    assert any("code tour skipped" in r for r in result["degraded"])
+    report = (out / "report.html").read_text(encoding="utf-8")
+    assert 'href="tour.html"' not in report
 
 
 # ------------------------------------------- Bottom line（#222 结论先行）
