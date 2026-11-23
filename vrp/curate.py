@@ -532,6 +532,211 @@ def reject(con: sqlite3.Connection, kind: str, target_id: str, note: str = "") -
     return {"kind": kind, "target_id": target_id, "status": "rejected", "note": note}
 
 
+# ---------------------------------------------------------- curate refresh
+# F4 确定性 fid 重映射写路径：drift_report 的 remap 提议（F1/F3）在此执行落库。
+# fid 轮换两大根因均经 fid_ledger qn 稳定键桥接（qn 跨 etl 稳定，与 schema
+# 注释同源）：content_hash 变（文件编辑，同项目 qn 正查即得）与项目名派生
+# 变更（qn 剥 ledger 旧项目前缀换当前前缀再正查）。语义原样保留（模块名/
+# 职责/层/slice 文案），仅 fid 指针刷新；不可唯一重映射者诚实剔除并计数，
+# 空模块剔除，全灭拒做（不产出空 structure）。验证零旁路：重映射载荷走
+# _validate_structure/_validate_one_slice 全量重验后才入库。
+
+REFRESH_RECEIPT_NAME = ".vrp/curate-refresh-receipt.json"
+
+
+def _write_refresh_receipt(repo: Path, receipt: dict) -> None:
+    path = repo / REFRESH_RECEIPT_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
+
+
+def _current_project(con: sqlite3.Connection) -> str:
+    """当前项目名：meta.cbm_project 优先，缺则 symbols 唯一 project 域兜底。"""
+    row = con.execute("SELECT value FROM meta WHERE key = 'cbm_project'").fetchone()
+    if row is not None and row[0]:
+        return row[0]
+    rows = con.execute("SELECT DISTINCT project FROM symbols").fetchall()
+    if len(rows) == 1:
+        return rows[0][0]
+    raise SystemExit(
+        "curate-refresh: cannot determine current project"
+        " (meta.cbm_project missing and symbols project ambiguous - re-run etl)"
+    )
+
+
+def _qn_candidates(qn: str, ledger_project: str, cur_project: str) -> list[str]:
+    """qn 查找候选序：原样（内容轮换根因）→ 剥 ledger 旧项目前缀换当前前缀
+    （项目名派生变更根因——qn 后缀跨项目名稳定）。"""
+    cands = [qn]
+    if ledger_project and qn.startswith(ledger_project + "."):
+        cands.append(cur_project + "." + qn[len(ledger_project) + 1:])
+    return cands
+
+
+def _refresh_remap_fid(con: sqlite3.Connection, fid: str, cur_project: str) -> str | None:
+    """死 fid → 活 fid（唯一确定者）；不可唯一重映射 → None（诚实剔除）。
+
+    查找序：仍活→原样；(当前项目, qn 候选序) 正查；多候选时 ledger 记录的
+    file_path 唯一同文件者胜；仍歧义/无 → None。
+    """
+    if con.execute("SELECT 1 FROM symbols WHERE fid = ?", (fid,)).fetchone() is not None:
+        return fid
+    row = con.execute(
+        "SELECT project, qualified_name, file_path FROM fid_ledger WHERE fid = ?", (fid,)
+    ).fetchone()
+    if row is None:
+        return None
+    ledger_project, qn, file_path = row
+    for cand_qn in _qn_candidates(qn, ledger_project, cur_project):
+        rows = con.execute(
+            "SELECT fid, file_path FROM symbols WHERE project = ? AND qualified_name = ?",
+            (cur_project, cand_qn),
+        ).fetchall()
+        if len(rows) == 1:
+            return rows[0][0]
+        if len(rows) > 1:
+            same = [r for r in rows if r[1] == file_path]
+            if len(same) == 1:
+                return same[0][0]
+    return None
+
+
+def _refresh_structure_payload(con: sqlite3.Connection, raw: dict) -> dict:
+    """structure 重映射单件：模块 fid 刷新（空模块剔除/查重重映射去重），
+    全量重验通过才入库；fresh（无可重映射改动）不重入库。"""
+    cur_project = _current_project(con)
+    mods_out: list[dict] = []
+    stats = {"kept_live": 0, "remapped": 0, "dropped": 0, "deduped": 0, "modules_dropped": 0}
+    for mod in raw.get("modules", []):
+        new_fids: list[str] = []
+        for fid in mod.get("symbol_fids") or []:
+            new = _refresh_remap_fid(con, fid, cur_project)
+            if new is None:
+                stats["dropped"] += 1
+                continue
+            if new == fid:
+                stats["kept_live"] += 1
+            else:
+                stats["remapped"] += 1
+            if new in new_fids:
+                stats["deduped"] += 1
+                continue
+            new_fids.append(new)
+        if not new_fids:
+            stats["modules_dropped"] += 1
+            continue
+        fresh_mod = dict(mod)
+        fresh_mod["symbol_fids"] = new_fids
+        mods_out.append(fresh_mod)
+    struct_item: dict = {"action": "refreshed", "project": cur_project, **stats}
+    if stats["remapped"] == 0 and stats["dropped"] == 0 and stats["deduped"] == 0 \
+            and stats["modules_dropped"] == 0:
+        struct_item["action"] = "fresh"
+    elif not mods_out:
+        struct_item["action"] = "failed"
+        struct_item["errors"] = ["all modules unremappable - structure left untouched"]
+    else:
+        payload = {"modules": mods_out, "layers": raw.get("layers"), "rules": raw.get("rules")}
+        errors = _validate_structure(con, payload)
+        if errors:
+            struct_item["action"] = "failed"
+            struct_item["errors"] = errors
+        else:
+            _ingest_structure(con, payload)
+    return struct_item
+
+
+def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
+    """确定性 fid 重映射：structure/slices 死 fid → 活 fid，语义原样保留。
+
+    只动 active/stale 工件（rejected 用户已裁决出列），两者独立处理
+    （slices-only 仓合法：structure missing 不拦 slice 刷新）；
+    structure 全模块不可重映射时拒做不落库（action=failed 诚实计数）；
+    slice 逐步 fid 全可重映射且全量重验通过才刷新，否则原样保留
+    （action=skipped 计数）。收据落 .vrp/curate-refresh-receipt.json；
+    drift_history 记 event=curate-refresh 事件（与其他写路径同构）。
+    """
+    receipt: dict = {"refreshed_at": _now(), "structure": None, "slices": []}
+    row = con.execute(
+        "SELECT payload_json FROM structure WHERE status IN ('active', 'stale')"
+        " ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    struct_item: dict
+    if row is None:
+        struct_item = {"action": "missing"}
+    else:
+        try:
+            raw = json.loads(row[0])
+        except json.JSONDecodeError:
+            raw = None
+        if not isinstance(raw, dict):
+            struct_item = {"action": "failed", "errors": ["structure payload unparseable"]}
+        else:
+            struct_item = _refresh_structure_payload(con, raw)
+    receipt["structure"] = struct_item
+    slice_rows = con.execute(
+        "SELECT slice_id, name, status, payload_json FROM slices"
+        " WHERE status IN ('active', 'stale') ORDER BY slice_id"
+    ).fetchall()
+    # 项目名仅在有待刷新工件时求值（空仓收据路径不触发 SystemExit）
+    cur_project = _current_project(con) if slice_rows else ""
+    slices_payloads: list[dict] = []
+    for slice_id, name, status, payload_json in slice_rows:
+        item: dict = {"slice_id": slice_id, "status": status, "action": "skipped"}
+        try:
+            sraw = json.loads(payload_json)
+        except json.JSONDecodeError:
+            sraw = None
+        if not isinstance(sraw, dict):
+            item["reason"] = "payload unparseable"
+        else:
+            new_steps: list[dict] = []
+            ok = True
+            changed = False
+            for step in sraw.get("steps", []):
+                new = _refresh_remap_fid(con, step.get("fid", ""), cur_project)
+                if new is None:
+                    ok = False
+                    break
+                if new != step.get("fid"):
+                    changed = True
+                fresh_step = dict(step)
+                fresh_step["fid"] = new
+                new_steps.append(fresh_step)
+            if not ok:
+                item["reason"] = "unremappable step fid"
+            elif not changed:
+                item["action"] = "fresh"
+            else:
+                fresh_slice = dict(sraw)
+                fresh_slice["steps"] = new_steps
+                slice_errors = _validate_one_slice(con, fresh_slice)
+                if slice_errors:
+                    item["reason"] = slice_errors[0].get("code", "validation error")
+                else:
+                    item["action"] = "refreshed"
+                    slices_payloads.append(fresh_slice)
+        receipt["slices"].append(item)
+    if slices_payloads:
+        _ingest_slices(con, slices_payloads)
+    _record_drift_history(
+        con,
+        _meta_git_head(con),
+        "curate-refresh",
+        {
+            "structure_action": struct_item["action"],
+            "structure_remapped": struct_item.get("remapped", 0),
+            "structure_dropped": struct_item.get("dropped", 0),
+            "slices_refreshed": sum(1 for s in receipt["slices"] if s["action"] == "refreshed"),
+            "slices_fresh": sum(1 for s in receipt["slices"] if s["action"] == "fresh"),
+            "slices_skipped": sum(1 for s in receipt["slices"] if s["action"] == "skipped"),
+        },
+    )
+    con.commit()
+    _write_refresh_receipt(repo, receipt)
+    return receipt
+
+
 # ------------------------------------------------------------- drift report
 # F3 统一漂移查询面 + F1 读出辅助（R6' 诚实发现，构想v7 §12）：
 # - 只读：不改任何 status，标记永远发生在写路径（curate/run_etl/MCP submit）

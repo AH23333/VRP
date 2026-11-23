@@ -12,12 +12,13 @@ from vrp import mcp_server
 
 SCHEMA = Path(__file__).parent.parent / "vrp" / "schema" / "facts_schema.sql"
 
-# AA1（设计稿 D1）：30→10 分族收敛。
+# AA1（设计稿 D1）：30→10 分族收敛；#225 +curate_refresh=11。
 TOOL_NAMES = {
     "vrp_query",
     "dossier",
     "curate_submit",
     "curate_reject",
+    "curate_refresh",
     "tx_preview",
     "tx_submit",
     "tx_run",
@@ -107,7 +108,7 @@ async def _call(session: ClientSession, name: str, args: dict):
         return {"_raw": text, "_isError": result.is_error}
 
 
-def test_list_tools_ten_and_no_confirm_param(tmp_path):
+def test_list_tools_census_and_no_confirm_param(tmp_path):
     repo = _mk_repo(tmp_path)
     tools = _run(_drive(repo, {"tools": _tools}))["tools"]
     assert set(tools) == TOOL_NAMES

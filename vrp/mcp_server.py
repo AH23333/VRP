@@ -298,6 +298,13 @@ def build_server(repo: Path) -> "MCPServer":
         finally:
             con.close()
 
+    def curate_refresh() -> dict:
+        con = _open_facts_rw(repo)
+        try:
+            return curate_mod.curate_refresh(repo, con)
+        finally:
+            con.close()
+
     def tx_preview(tx_json: str) -> dict:
         mcp_budget.check_input("tx_json", tx_json, mcp_budget.MAX_JSON_INPUT_CHARS)
         tmp = _write_temp(tx_json)
@@ -419,6 +426,16 @@ def build_server(repo: Path) -> "MCPServer":
         "for structure a numeric target_id vetoes that exact row id (unknown id errors), "
         "non-numeric vetoes the latest version; "
         "status→rejected + decision logged; veto is the conservative direction, the agent may relay the user's decision",
+    )
+    server.add_tool(
+        _guard(curate_refresh),
+        name="curate_refresh",
+        description="Deterministically remap dead fids in ingested structure/slices to live fids "
+        "(content churn and project rename both bridged via the fid_ledger stable qualified_name key); "
+        "semantics (module names/responsibilities/layers, slice step roles/notes/acts) preserved verbatim, "
+        "only fid pointers refreshed; unremappable fids honestly dropped and counted, empty modules dropped, "
+        "all-dead structures refused (action=failed); refreshed payloads fully re-validated before ingest; "
+        "receipt at .vrp/curate-refresh-receipt.json",
     )
     server.add_tool(
         _guard(tx_preview),

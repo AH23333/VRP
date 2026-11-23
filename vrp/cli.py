@@ -904,6 +904,27 @@ def cmd_curate_merge(args) -> int:
     return 1 if result["slices"]["conflict"] or result["structure"]["action"] == "conflict" else 0
 
 
+def cmd_curate_refresh(args) -> int:
+    repo = _repo_arg(args.repo)
+    con, _ = _open_facts_rw(repo)
+    try:
+        result = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+    if getattr(args, "json", False):
+        _print_json(result)
+    else:
+        _print_step("S2.5 curate-refresh", result)
+    # rc=1 = structure 刷新失败（failed）或零成果（无任何 refreshed/fresh 工件
+    # ——slices-only 仓的 structure missing 仍可 rc=0）；slice 部分跳过
+    # （unremappable）属诚实部分成果，收据可查，rc 不拦
+    action = (result.get("structure") or {}).get("action")
+    did_work = action in ("refreshed", "fresh") or any(
+        s.get("action") in ("refreshed", "fresh") for s in result.get("slices", [])
+    )
+    return 0 if did_work and action != "failed" else 1
+
+
 def cmd_drift(args) -> int:
     repo = _repo_arg(args.repo)
     facts_path = repo / ".vrp" / "facts.db"
@@ -1332,6 +1353,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--theirs", required=True, help="their payload: directory (slices.json/structure.json) or single JSON file")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_curate_merge)
+
+    p = sub.add_parser(
+        "curate-refresh",
+        help="S2.5: deterministically remap dead fids in structure/slices via"
+        " fid_ledger qn (content churn + project rename both bridged by the"
+        " stable qualified_name key; module/slice semantics preserved verbatim,"
+        " only fid pointers refreshed; unremappable fids honestly dropped and"
+        " counted, empty modules dropped, all-dead structures refused);"
+        " receipt at <repo>/.vrp/curate-refresh-receipt.json;"
+        " rc=1 when structure is missing/failed",
+    )
+    p.add_argument("repo")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.set_defaults(func=cmd_curate_refresh)
 
     p = sub.add_parser(
         "groups",
