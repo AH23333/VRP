@@ -202,6 +202,13 @@ def cmd_scaffold(args) -> int:
 
 def cmd_tour(args) -> int:
     result = tour_mod.run_tour(args.repo)
+    if getattr(args, "html", False):
+        # #223 archify v3.3.0 story #1036 概念吸收：opt-in 唯一写面
+        # （默认路径仍只读零写入不变量）。
+        out = Path(result["repo"]) / ".vrp" / "report" / "tour.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(tour_mod.render_html(result).encode("utf-8"))
+        _print_text(f"tour.html written: {out}")
     if getattr(args, "json", False):
         _print_json(result)
     else:
@@ -1302,6 +1309,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("repo")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument(
+        "--html", action="store_true",
+        help="write static HTML walkthrough to <repo>/.vrp/report/tour.html"
+        " (archify v3.3.0 story #1036 form absorption; opt-in write surface -"
+        " default remains read-only)",
+    )
     p.set_defaults(func=cmd_tour)
 
     p = sub.add_parser(

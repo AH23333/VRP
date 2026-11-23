@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -251,3 +252,87 @@ def test_tour_repo_path_resolved_title(tmp_path, monkeypatch):
     assert result["repo"] == str(repo)
     text = tour.render_text(result)
     assert text.startswith("# Code tour - repo")
+
+
+# ---------- #223 tour --html：archify v3.3.0 story #1036 概念吸收 ----------
+
+
+def test_render_html_steps_and_in_page_anchors(tmp_path):
+    """HTML walkthrough：Step N 步骤卡+顶部导航页内锚点 #step-N；
+    互链断锚强校验（#222 slug 纪律——每个 href="#step-N" 必命中本页实存
+    id="step-N"）。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    page = tour.render_html(tour.run_tour(repo))
+    assert page.startswith("<!DOCTYPE html>")
+    assert '<h2 id="step-1">Step 1: 工具 (util)' in page
+    assert '<a href="#step-2">' in page
+    assert "小工具集" in page and "src/util.py (1)" in page
+    ids = set(re.findall(r'id="(step-\d+)"', page))
+    hrefs = set(re.findall(r'href="#(step-\d+)"', page))
+    assert hrefs and hrefs <= ids  # 断锚强校验：无悬空页内锚点
+
+
+def test_render_html_warnings_disclosed(tmp_path):
+    """HTML 诚实面=render_text 同条件同文案：stale 回退与全空解析两
+    WARNING 原样进 HTML（零谎面——同数据两形态）。"""
+    repo = _mk_repo(tmp_path / "stale")
+    _add_symbol(repo, "f1", "a", "a.py")
+    _set_structure(repo, {
+        "modules": [_mod("m1", "M1", "r", "core", ["f1"])],
+        "layers": [{"name": "core", "may_depend_on": []}],
+    }, status="stale")
+    page = tour.render_html(tour.run_tour(repo))
+    assert 'class="warning"' in page
+    assert "WARNING: structure status=stale" in page
+    repo2 = _mk_repo(tmp_path / "dead")
+    _add_symbol(repo2, "live", "real", "a.py")
+    _set_structure(repo2, {
+        "modules": [_mod("m1", "M1", "r", "core", ["dead1", "dead2"])],
+        "layers": [{"name": "core", "may_depend_on": []}],
+    })
+    page2 = tour.render_html(tour.run_tour(repo2))
+    assert "WARNING: 0/2 structure symbol fids resolve" in page2
+    assert "skeleton only" in page2
+
+
+def test_render_html_escapes_curated_content(tmp_path):
+    """人写语义安全嵌入：模块名含 HTML 特殊字符全转义（防注入面）。"""
+    repo = _mk_repo(tmp_path)
+    _add_symbol(repo, "f1", "a", "a.py")
+    _set_structure(repo, {
+        "modules": [_mod("m1", "<x>&\"M\"", "<b>r</b>", "core", ["f1"])],
+        "layers": [{"name": "core", "may_depend_on": []}],
+    })
+    page = tour.render_html(tour.run_tour(repo))
+    assert "<x>&\"M\"" not in page
+    assert "&lt;x&gt;&amp;&quot;M&quot;" in page
+    assert "<b>r</b>" not in page and "&lt;b&gt;r&lt;/b&gt;" in page
+
+
+def test_render_html_deterministic_no_timestamp(tmp_path):
+    """确定性：同 facts.db 两次渲染字节级相等（无时间戳——同产物红线）。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    p1 = tour.render_html(tour.run_tour(repo))
+    p2 = tour.render_html(tour.run_tour(repo))
+    assert p1 == p2
+
+
+def test_cli_tour_html_writes_file(tmp_path, capsys):
+    """CLI E2E：--html 写 .vrp/report/tour.html（opt-in 唯一写面），
+    rc 0，stdout 确认行；文件 LF 纯（无 CR）。"""
+    repo = _mk_repo(tmp_path)
+    _seed(repo)
+    rc = cli.main(["tour", str(repo), "--html"])
+    assert rc == 0
+    assert "tour.html written" in capsys.readouterr().out
+    page = (repo / ".vrp" / "report" / "tour.html").read_bytes()
+    assert b"\r" not in page
+    assert '<h2 id="step-1">' in page.decode("utf-8")
+
+
+def test_cli_parser_accepts_tour_html():
+    parser = cli.build_parser()
+    args = parser.parse_args(["tour", "some/repo", "--html"])
+    assert args.html and not args.json

@@ -18,6 +18,12 @@ name/responsibility 人写语义单源直引——**每模块一句话职责**�
 rc 语义：报告面恒 0；structure 缺失诚实退出（先跑 curate）。
 确定性：只读查询零写入；同 facts.db → 同输出（无时间戳全排序）。
 
+#223 archify v3.3.0 story #1036 概念吸收：`--html` opt-in 写静态
+walkthrough 页（.vrp/report/tour.html）——**唯一写面**（CLI flag
+显式触发，默认路径仍只读零写入不变量）；render_html 与 render_text
+同数据同诚实面（stale 回退/全空解析两 WARNING 原样进 HTML）；页内
+锚点 #step-N（#222 slug 纪律）；无时间戳确定性（同 facts.db 同字节）。
+
 #215 dogfood 考古演练修复：stale structure 静默回退曾产出全 0 symbols
 骨架 rc=0 零警告（"空曲线是说谎"红线违反——225 fids 100% 失效实测）。
 修复=结构元数据（status/created_at）+fid 解析率显式披露，render 在
@@ -28,6 +34,7 @@ stale 回退与全空解析两情形输出响亮 WARNING（rc 仍 0——报告�
 
 from __future__ import annotations
 
+import html
 import json
 import sqlite3
 from pathlib import Path
@@ -191,3 +198,81 @@ def render_text(result: dict) -> str:
         lines.append(" | ".join(bits))
         lines.append("")
     return "\n".join(lines)
+
+
+def render_html(result: dict) -> str:
+    """HTML walkthrough 形态（#223 archify v3.3.0 story #1036 概念吸收）。
+
+    静态单页（report.html 同家族极简 system-ui CSS）；Step N 步骤卡纵向
+    序列=导览 walkthrough；顶部步骤导航页内锚点 #step-N（#222 slug 纪律：
+    互链断锚强校验同守）。诚实披露与 render_text 同条件同文案（stale 回退/
+    全空 fid 解析两 WARNING）——同数据两形态零谎面。确定性：无时间戳，
+    同 facts.db → 同字节（内容全转义，人写语义安全嵌入）。"""
+    esc = html.escape
+    st = result.get("structure") or {}
+    warnings: list[str] = []
+    if st.get("status", "active") != "active":
+        created = str(st.get("created_at", ""))[:10]
+        warnings.append(
+            f"WARNING: structure status={st.get('status', '')} (created {created})"
+            " - module contents may not match current symbols; re-run"
+            " 'vrp curate-auto'"
+        )
+    if st.get("fids_total", 0) and not st.get("fids_resolved", 0):
+        warnings.append(
+            f"WARNING: 0/{st.get('fids_total', 0)} structure symbol fids resolve"
+            " in current facts.db - tour shows skeleton only; re-run"
+            " 'vrp curate-auto'"
+        )
+    repo_name = esc(Path(result["repo"]).name)
+    parts = [
+        "<!DOCTYPE html>",
+        '<html lang="en">',
+        "<head>",
+        '<meta charset="utf-8">',
+        f"<title>Code tour - {repo_name}</title>",
+        "<style>",
+        "body{font-family:system-ui,sans-serif;max-width:960px;"
+        "margin:2rem auto;padding:0 1rem;color:#222}",
+        "h1,h2{border-bottom:2px solid #ddd;padding-bottom:.3rem}",
+        ".meta{color:#666;font-size:.9rem}",
+        ".warning{background:#fff6e0;border:1px solid #e8c46a;"
+        "padding:.5rem .8rem;border-radius:6px}",
+        "ol.steps li{margin:.2rem 0}",
+        "</style>",
+        "</head>",
+        "<body>",
+        f"<h1>Code tour - {repo_name}</h1>",
+        f'<p class="meta">newcomer module tour: {result["modules"]} modules,'
+        f" {len(result['layers'])} layers (reading order: foundations first,"
+        " then small modules before large)</p>",
+    ]
+    parts.extend(f'<p class="warning">{esc(w)}</p>' for w in warnings)
+    parts.append('<ol class="steps">')
+    for step in result["tour"]:
+        parts.append(
+            f'<li><a href="#step-{step["reading_step"]}">'
+            f"Step {step['reading_step']}: {esc(step['name'])}"
+            f" ({esc(step['module_id'])})</a></li>"
+        )
+    parts.append("</ol>")
+    for step in result["tour"]:
+        resp = step["responsibility"] or "(no curated responsibility yet)"
+        bits = [f"{step['symbols']} symbols"]
+        if step["top_files"]:
+            bits.append(
+                "main files: "
+                + ", ".join(f"{f['file']} ({f['count']})" for f in step["top_files"])
+            )
+        if step["representatives"]:
+            bits.append("representatives: " + ", ".join(step["representatives"]))
+        parts.append(
+            f'<h2 id="step-{step["reading_step"]}">'
+            f"Step {step['reading_step']}: {esc(step['name'])}"
+            f" ({esc(step['module_id'])})"
+            f' <span class="meta">[{esc(step["layer"] or "no layer")}]</span></h2>'
+        )
+        parts.append(f"<p>{esc(resp)}</p>")
+        parts.append(f'<p class="meta">{esc(" | ".join(bits))}</p>')
+    parts.extend(["</body>", "</html>", ""])
+    return "\n".join(parts)
