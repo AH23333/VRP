@@ -966,6 +966,13 @@ def drift_history(con: sqlite3.Connection, limit: int = 50) -> dict:
     旧库无表（批④前构建、尚未经 rw 连接 ensure_schema 自愈）→ 空结果+
     note 诚实标注；payload_json 损坏（用户可写 DB，R-X 族）→ payload_raw
     原样给出不崩。
+
+    #227 A3 到点看盘计数：nonzero_drift_events=全表非零漂移观测数
+    （slices_new_stale>0 或 structure_new_stale——revalidate 形态事件专有键；
+    curate-refresh 形态（remap 动作收据）无此二键天然不计数；损坏 payload
+    诚实跳过）。事件计数是无信号假阳性触发器（12 事件全零实录，交接 #227），
+    A3 信号条件（非零观测 ≥5 后再看）只看本值；计数全表非 limit 窗口
+    ——看盘问的是积累总量。
     """
     try:
         total = con.execute("SELECT COUNT(*) FROM drift_history").fetchone()[0]
@@ -978,6 +985,7 @@ def drift_history(con: sqlite3.Connection, limit: int = 50) -> dict:
         return {
             "total": 0,
             "events": [],
+            "nonzero_drift_events": 0,
             "note": "drift_history 表不存在（批④前构建的 facts.db；下次 rw 连接/etl 自动建表）",
         }
     events: list[dict] = []
@@ -997,7 +1005,18 @@ def drift_history(con: sqlite3.Connection, limit: int = 50) -> dict:
                 "payload": payload,
             }
         )
-    return {"total": total, "events": events}
+    nonzero = 0
+    for (payload_json,) in con.execute("SELECT payload_json FROM drift_history"):
+        try:
+            p = json.loads(payload_json)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(p, dict):
+            continue
+        n = p.get("slices_new_stale")
+        if (isinstance(n, int) and n > 0) or p.get("structure_new_stale") is True:
+            nonzero += 1
+    return {"total": total, "events": events, "nonzero_drift_events": nonzero}
 
 
 # ------------------------------------------------------------- remap apply

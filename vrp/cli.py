@@ -1826,7 +1826,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("repo")
     p.add_argument("--history", type=int, default=0, metavar="N",
-                   help="also print the last N drift_history revalidation events (A3 data-accumulation face; 0 = off)")
+                   help="also print the last N drift_history revalidation events (A3 data-accumulation face; includes nonzero_drift_events full-table signal count for the A3 check-in gate; 0 = off)")
     p.set_defaults(func=cmd_drift)
 
     p = sub.add_parser(

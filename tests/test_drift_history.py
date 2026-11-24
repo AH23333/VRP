@@ -3,7 +3,8 @@
 drift_history 表（facts_schema.sql + OWNED_TABLES 注册跨 etl 存续）+
 _revalidate_ingested 五类时刻落库（etl-full/etl-incremental/curate/
 curate-merge/mcp）+ drift_history 读出面 + CLI --history 面。
-A3 外推本体留触发池（≥10 批数据后启动），本面只守数据积累。
+A3 外推本体留触发池（#227 到点看盘实录细化门槛：非零漂移观测 ≥5 后再看
+——事件计数是无信号假阳性触发器，12 事件全零实录），本面守数据积累+信号计数。
 """
 
 import json
@@ -229,10 +230,46 @@ def test_drift_history_reader(tmp_path):
         con.close()
     assert out["total"] == 2
     assert len(out["events"]) == 1
+    assert out["nonzero_drift_events"] == 0  # 两次复验均零漂移（fresh）
     first = out["events"][0]
     assert first["git_head"] == "h2"  # 倒序最近在前
     assert first["event"] == "etl-incremental"
     assert first["payload"]["slices_checked"] == 1
+
+
+def test_drift_history_nonzero_count(tmp_path):
+    """#227 A3 看盘计数：非零漂移观测全表计数（limit 窗口外也计——看盘问积累
+    总量）；slices_new_stale>0 与 structure_new_stale 双键各计一次；curate-refresh
+    形态（remap 动作收据，无此二键）与损坏 payload 天然不计数。"""
+    repo = _mk_repo(tmp_path)
+    _seed_symbol(repo, "fid-a")
+    _insert_active_slice(repo, ["fid-a"])
+    con = _con(repo)
+    try:
+        curate_mod._revalidate_ingested(con, git_head="h0", event="etl-full")  # 零漂移
+        for head, payload in [
+            ("h1", {"slices_checked": 1, "slices_new_stale": 1,
+                    "new_stale_slice_ids": ["s9"], "structure_new_stale": False}),
+            ("h2", {"slices_checked": 1, "slices_new_stale": 0,
+                    "new_stale_slice_ids": [], "structure_new_stale": True}),
+            ("h3", {"structure_action": "fresh", "slices_refreshed": 1}),  # curate-refresh 形态
+        ]:
+            con.execute(
+                "INSERT INTO drift_history (created_at, git_head, event, payload_json)"
+                " VALUES ('t', ?, ?, ?)",
+                (head, "etl-full", json.dumps(payload, ensure_ascii=False)),
+            )
+        con.execute(
+            "INSERT INTO drift_history (created_at, git_head, event, payload_json)"
+            " VALUES ('t', 'h4', 'etl-full', 'not-json')"
+        )
+        con.commit()
+        out = curate_mod.drift_history(con, limit=2)  # 窗口截断仍全表计数
+    finally:
+        con.close()
+    assert out["total"] == 5
+    assert len(out["events"]) == 2
+    assert out["nonzero_drift_events"] == 2  # h1 (slices_new_stale=1) + h2 (structure_new_stale)
 
 
 def test_drift_history_reader_corrupt_payload_tolerant(tmp_path):
@@ -249,6 +286,7 @@ def test_drift_history_reader_corrupt_payload_tolerant(tmp_path):
     finally:
         con.close()
     assert out["total"] == 1
+    assert out["nonzero_drift_events"] == 0  # 损坏 payload 诚实跳过不计数
     assert out["events"][0]["payload"] == {"payload_raw": "not-json"}
 
 
@@ -263,6 +301,7 @@ def test_drift_history_reader_old_db_tolerant(tmp_path):
     finally:
         con.close()
     assert out["events"] == []
+    assert out["nonzero_drift_events"] == 0
     assert "note" in out
 
 
@@ -283,6 +322,7 @@ def test_cmd_drift_history_flag(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "S2.5 drift history" in out
+    assert "nonzero_drift_events" in out  # A3 看盘信号面（#227）
     assert "etl-full" in out
 
 
