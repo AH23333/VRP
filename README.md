@@ -193,45 +193,66 @@ CBM（索引）、code-atlas（交叉验证/MCP）、ast-grep、mutmut 2.4.5 / S
 
 ## 文档（docs/）
 
+**入口（接手即读）**
+
 - 《产品目标.md》——定位与成功判据（主流程四环）
+- 《交接文档.md》——接手即读（环境/E2E 基准数字/代码地图/下一步）
+- 《踩坑历史.md》——实测坑与纪律
+- 《glossary.md》——Q24：术语表（Diátaxis reference 面；fid/remap/drift/verdict/evidence chain/OWNED_TABLES 等散落概念一站式，详处指针锚点锁 test_glossary 守卫）
+- 《理论出处.md》——W21：概念↔经典书/论文映射（glossary 姊妹篇理论维度；Clean Architecture/POSA/Martin 度量论文/变异测试 1978/克隆检测 1995/ACID 1983 等，无出处原创面诚实标注）
+
+**契约与承诺（AI 生产方必读）**
+
+- 《契约/事务契约.md》——事务 schema/G 码对照/生产指南（AI 生产方必读）
+- 《契约/梳理工件契约.md》——梳理工件（slices/structure）schema 唯一权威格式说明（AI 生产方必读，配置 skills/vrp-curation/ 生产指南）
+- 《schema版本承诺.md》——V18 政策（#205 rider）：facts.db schema 版本承诺——user_version 语义/N-1 库可迁移承诺/v0.x 破坏性变更随 minor 宽松政策/迁移链工程规则/反向风险记档/v1 保留基线槽说明
+
+**当前权威定稿**
+
 - 《构想v6-核验后S1-S5定稿.md》——S1-S5 权威技术方案（§12-13 为实测/实施记录）
 - 《构想v7-AI梳理层与S7-S8定稿.md》——**当前权威**：主流程四环/MCP 接口层/curate/S7-S8/批次 R1'-R4'
-- 《构想v8-多层级下钻展示层.md》——展示层历史：多层级下钻（网格/代码页/rel 条/目录树），V-0→V-0.9 全程实录
 - 《构想v9-融合报告形态.md》——**展示层当前权威（定稿候选）**：六风格融合报告形态（仪表盘+叙事+力导向图+下钻+对比+数据切片，单 HTML 静态），V-9 原型待拍板
+
+**触发池与排期（未立项候选）**
+
 - 《构想v10-拓展性候选与轮子调研.md》——拓展性发散清单（未立项）：18 项候选（时间维度/证据源/混仓分治执法/修复闭环/查准查全基准/SARIF 出圈等）逐项轮子调研+优先级总表（短期甜点四项/中期硬核六项/探索八项）
 - 《构想v11-拓展性候选与轮子调研II.md》——拓展性发散清单第二批（未立项，与 v10 正交）：25 项候选（安全合规/CLI 工程/增量性能/发布工程/数据治理/多代理协作/语言深化/契约互操作/活文档防漂移/可解释性）逐项轮子调研+优先级总表（亮点 P23 活文档防漂移/甜点十一项/硬核四项）
 - 《构想v12-拓展性候选与轮子调研III.md》——拓展性发散清单第三批（未立项，与前两批正交）：28 项候选（分析科学/管道智能化/消费者特化输出/部署分发/Schema 演进/定位对照/极端规模/交互探索/运营健康）逐项轮子调研+三批 71 项全景+跨批依赖链（亮点 R1 网络科学×propose 对账/S7 反馈环降权/R2 co-change 隐式耦合边）
-- 《参照调研-codegraph双仓.md》——codegraph（78k★）/CodeGraphContext（4.4k★）双仓学习报告（2026-11-19）：五项铁证验证本仓路线（SQLite 收敛/依赖地狱反面教材/可复现性缺失代价/常驻进程工程税/无 PR CI 漂移）+九项优化候选提炼入构想v13+事故锚点全录（源文件路径+issue 号）
 - 《构想v13-参照调研优化候选.md》——参照调研提炼批（未立项，AA/BB 双字母新系列，A-Z 已耗尽）：9 项候选（AA 组 MCP 消费面：单强工具+成功形状错误/自适应输出预算/GCF 压缩编码；BB 组事实质量面：调用边置信度分层/死代码置信度三级/Golden 审计矩阵/ETL 健康面/确定性排序 checklist/A/B 防侧信道）每项带参照仓事故锚点
+- 《参照调研-codegraph双仓.md》——codegraph（78k★）/CodeGraphContext（4.4k★）双仓学习报告（2026-11-19）：五项铁证验证本仓路线（SQLite 收敛/依赖地狱反面教材/可复现性缺失代价/常驻进程工程税/无 PR CI 漂移）+九项优化候选提炼入构想v13+事故锚点全录（源文件路径+issue 号）
 - 《优先级总表-44项重排.md》——剩余 44 项（35 旧+9 v13）全盘排期定稿（2026-11-19）：重排判据五条/主推执行序九批（首两批 BB2 死代码置信度+AA1/AA2 MCP 消费面）/穿插甜点池九项/触发驱动池 21 项各带触发条件/依赖链更新（J8/A1/D10 已解锁项）——排期≠批准，主序批仍走设计稿→批准→实施
+
+**设计稿（立项→实施锚点）**
+
 - 《设计稿-AA1AA2-MCP消费面改造.md》——批②设计稿（D1-D8 全批 2026-11-20，实施 #199）：MCP 工具面 30→10 分族收敛（vrp_query 17 类型单强查询工具/CGC 四参律/写路径动词独立）+isError 面归零（_guard 拓至 Exception，与 codegraph 真故障-isError 分歧记档）+五层输出预算（24K 硬顶+JSON 感知确定性收缩/静态限额中央表+env 覆盖/progress_handler 超时 10×实测律/输入上界 1MiB-10K）；参照源码 file:line 逐行重读记实
 - 《设计稿-C7-混仓分治执法.md》——批③设计稿：混仓 not-enforceable→分治执法——写面互斥解法（wrapper 单次清场+引擎 write_findings/replace 机械参数，"分"已隐式存在于 derive 按语言过滤）/LANG_RUNNERS 表驱动路由（单语言路径字节级不变）/跨语言边 CBM edges 模块对聚合只上报不判（Bazel/Nx 双轨制参照，诚实差距记档）/状态聚合 partial+languages 明细/决策点 D1-D8（待批准实施）
-- 《竞品对照矩阵.md》——W20：与 SonarQube/CodeScene/deptrac/import-linter 定位对照（只引对家公开声明，不贬损，欢迎 PR 修正）
-- 《glossary.md》——Q24：术语表（Diátaxis reference 面；fid/remap/drift/verdict/evidence chain/OWNED_TABLES 等散落概念一站式，详处指针锚点锁 test_glossary 守卫）
-- 《理论出处.md》——W21：概念↔经典书/论文映射（glossary 姊妹篇理论维度；Clean Architecture/POSA/Martin 度量论文/变异测试 1978/克隆检测 1995/ACID 1983 等，无出处原创面诚实标注）
-- 《vendored-上游跟踪规范.md》——Z26：外部组件上游跟踪 SOP（季度检查+升级评估清单+钉位表，离线手动 dependabot）
-- 《第三方许可登记.md》——Z27：in-repo vendored/work 沙箱/pip 钉版本三段 license 全清单+兼容性结论（本地实查+上游 LICENSE 抓取，时点 2026-11-17）
-- 《致谢与轮子来源.md》——Z28：管道在用/测试基建/形态参照/理论经典全清单致谢+轮子学习方法论（学形态不引依赖/三判定/探针先行/红面自证/宁缺勿错）公开呈现
 - 《设计稿-R2-co-change隐式耦合边.md》——R2 立项设计稿：co_changes 表/OWNED 存续/git log 挖掘/幂等重算/阈值与决策点 D1-D4（待批准实施）
 - 《设计稿-J8-ETL增量化.md》——J8 立项设计稿：etl_file_state 工作树快照检测/fid 不变式（文件字节不变⇒fid 不变⇒行携带）/级联面精确枚举/交叉边 qn 锚/行集对拍等价判据/cbm 版本漂移强制全量/决策点 D1-D6（待批准实施）
 - 《设计稿-M16-curate工件三方合并.md》——M16 立项设计稿：curate_base 覆盖前快照表（OWNED）/slices 按 slice_id 六分支三方/structure 字段级（modules by module_id+layers by name+校验兜底）/冲突 decisions 留痕保 ours/决策点 D1-D6（待批准实施）
 - 《设计稿-J9-S2病理引擎并行.md》——J9 立项设计稿：引擎级四并发（线程池，并行实体是子进程）/vulture 地板决定收益上限（串行 55.6s→~40s）/逐 source 写序不变等价判据/mutate 三引擎不并行（#149 时序污染）/决策点 D1-D6（待批准实施）
 - 《设计稿-A1-架构腐化时间线.md》——A1 立项设计稿：采样回放（默认 20 点恒含首尾）/单 detached worktree 串行推进+J8 增量链（用户树零接触）/链式单库步间查度量/Tornhill 度量向量十字段/timeline.json 确定性静态件/单样本失败中止全回放（跳样本=说谎）/决策点 D1-D6（待批准实施）
-- 《渲染层方案.md》——archify 渲染层方案
-- 《跨项目实测报告-2026-11-10.md》——跨项目实测
-- 《契约/事务契约.md》——事务 schema/G 码对照/生产指南（AI 生产方必读）
-- 《契约/梳理工件契约.md》——梳理工件（slices/structure）schema 唯一权威格式说明（AI 生产方必读，配置 skills/vrp-curation/ 生产指南）
-- 《交接文档.md》——接手即读（环境/E2E 基准数字/代码地图/下一步）
-- 《踩坑历史.md》——实测坑与纪律
-- 《Checklist-并发归并确定性.md》——BB5 新并行代码点必过审查项（归并点显式排序/输出与串行恒等/优先复用 run_thunks/写面零交叉/过 census）+ CGC as_completed 完成序泄漏参照事故锚点 + 现有并行面审计表；census 守卫 tests/test_parallel_merge_census.py
 - 《设计稿-B4-测试覆盖对账.md》——批⑤设计稿（用户授权自批 2026-11-21，实施 #203）：外部 coverage.py JSON 导入（生产者外部零依赖红线）→ test_coverage 表（file_path 键 OWNED 存续/per-label 整批替换）→ test_linkage 静态关联 vs 实际行覆盖五桶对账（body 区间 def 行排除——import 执行非测试执行；linked_not_covered_measured=「静态说有测试但从不执行」假关联强信号）/unresolved_files 诚实上报/决策点 D1-D5
 - 《设计稿-F15BB3-查准查全基准与Golden审计矩阵.md》——批⑥设计稿（用户授权自批 2026-11-21，实施 #204）：Golden 审计矩阵——committed golden JSON 独立真值双面审计（CGC 循环完美门反面：导出与自己比=21/21 PASS 假象，真实 CALLS 准确率 84.6%）；violations 多集匹配（kind/file/line+R-AD payload 条件键）/symbols 五键精确近失成对；missing/spurious 双向计数+precision/recall 分母零→null 诚实；fixture 节一键重建可跑仓；七件真值集（5 s7 语言+2 ETL pin）零新增标注起步（F15 立项承诺兑现）；决策点 D1-D7
 - 《设计稿-BB1V17-调用边置信度分层与schema迁移矩阵.md》——批⑦设计稿（用户授权自批 2026-11-21，实施 #205）：调用边置信度分层+schema 迁移矩阵合批——edges.resolution_label 列（confidence 双阈值 0.85/0.70→EXTRACTED/INFERRED/AMBIGUOUS；None→NULL 未知不惩罚；三仓真值探针实证 evidence/strategy 白名单不可枚举故否决）+MIGRATIONS 迁移链（PRAGMA user_version=2，先 ALTER 后 executescript 视图硬约束）+v_dead_code 拆分 AMBIGUOUS 过滤（IS NULL OR 显式防三值逻辑坑）；决策点 D1-D8
-- 《schema版本承诺.md》——V18 政策（#205 rider）：facts.db schema 版本承诺——user_version 语义/N-1 库可迁移承诺/v0.x 破坏性变更随 minor 宽松政策/迁移链工程规则/反向风险记档/v1 保留基线槽说明
-- 《SARIF-CI消费指南.md》——G17 出圈：外部项目 CI 消费 vrp SARIF 指南（GitHub Actions upload-sarif 样例/字段对照表/两层截断诚实链（vrp cap 2000+propertyBag 总数标注 × GitHub 5000 上限）/跨仓 dogfood 实测（lusiem 1064 全量 507KB、tree-sitter-analyzer 15741→2000 截断 979KB）/GitLab 通用 CI 提示；零服务端红线不动——上传动作归消费方）
 - 《设计稿-C9-修复提案闭环.md》——批⑧设计稿（用户授权自批 2026-11-21，实施 #206）：修复提案闭环——单 finding 单文件 → LLM 产 transact 草案（事务契约 v1 载体零新 schema）/校验器 load_transaction 复用+三加验（WRONG_ID/WRONG_FILE/WRONG_OP 稳定回执码，拒收回执重试≤3）/单文件不可修 unfixable 诚实转义/D4 信任边界结构化（LLM 输出物理上只能变成草案文件，s6_transact 引用仅 load_transaction，源码守卫测试钉死）/防覆写 --force+run 目录同秒后缀/BB6 rider 合批；决策点 D1-D8
+
+**评估与出圈**
+
 - 《A-B评估协议-防侧信道.md》——BB6 rider（#206）：A/B 评估方法论协议——双臂封 CLI 守卫（codegraph WITHOUT 臂 26/28 次 Bash 摸到 CLI"控制臂不是控制臂"教训）/每臂 ≥2 次取中位/三反馈指标（驻留上下文占用/下一步动作充分性/字节分配效率）/低显著度渠道别投入（3 措辞变体全回归教训）/诚实披露（residual-context-occupancy 先例）；脚本面诚实缓议（触发驱动，待首个真实 A/B 验收场景）
-- 构想 v1-v6——历史方案，只读
+- 《SARIF-CI消费指南.md》——G17 出圈：外部项目 CI 消费 vrp SARIF 指南（GitHub Actions upload-sarif 样例/字段对照表/两层截断诚实链（vrp cap 2000+propertyBag 总数标注 × GitHub 5000 上限）/跨仓 dogfood 实测（lusiem 1064 全量 507KB、tree-sitter-analyzer 15741→2000 截断 979KB）/GitLab 通用 CI 提示；零服务端红线不动——上传动作归消费方）
+
+**治理与纪律**
+
+- 《Checklist-并发归并确定性.md》——BB5 新并行代码点必过审查项（归并点显式排序/输出与串行恒等/优先复用 run_thunks/写面零交叉/过 census）+ CGC as_completed 完成序泄漏参照事故锚点 + 现有并行面审计表；census 守卫 tests/test_parallel_merge_census.py
+- 《竞品对照矩阵.md》——W20：与 SonarQube/CodeScene/deptrac/import-linter 定位对照（只引对家公开声明，不贬损，欢迎 PR 修正）
+- 《vendored-上游跟踪规范.md》——Z26：外部组件上游跟踪 SOP（季度检查+升级评估清单+钉位表，离线手动 dependabot）
+- 《第三方许可登记.md》——Z27：in-repo vendored/work 沙箱/pip 钉版本三段 license 全清单+兼容性结论（本地实查+上游 LICENSE 抓取，时点 2026-11-17）
+- 《致谢与轮子来源.md》——Z28：管道在用/测试基建/形态参照/理论经典全清单致谢+轮子学习方法论（学形态不引依赖/三判定/探针先行/红面自证/宁缺勿错）公开呈现
+
+**其他**
+
+- 《渲染层方案.md》——archify 渲染层方案
+- 《跨项目实测报告-2026-11-10.md》——跨项目实测
 
 ## 平台
 
