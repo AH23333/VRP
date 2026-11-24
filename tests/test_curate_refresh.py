@@ -385,3 +385,282 @@ def test_cli_curate_refresh_missing_rc(tmp_path: Path, capsys) -> None:
     assert rc == 1
     out = json.loads(capsys.readouterr().out)
     assert out["structure"]["action"] == "missing"
+
+
+# --------------------------------------------------- #229 治愈写回磁盘
+
+
+def _write_ai(repo: Path, name: str, payload: object) -> Path:
+    ai_dir = repo / ".vrp" / "ai"
+    ai_dir.mkdir(parents=True, exist_ok=True)
+    path = ai_dir / name
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
+    return path
+
+
+def _ingest_slices_payload(repo: Path, slices: list[dict]) -> None:
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_payload(con, "slices", json.dumps(slices, ensure_ascii=False))
+        assert receipt["status"] == "accepted", receipt
+    finally:
+        con.close()
+
+
+def test_refresh_writes_back_structure_to_disk(tmp_path: Path) -> None:
+    """#229 主路径：治愈 remap 顺手写回磁盘声明——fid 换新、语义面原样。"""
+    repo = _mk_repo(tmp_path)
+    old_fids = _seed_symbols(repo, "old-p", ["a", "b", "c"], fid_prefix="old-")
+    disk_payload = _structure([_mod("m1", old_fids[:2]), _mod("m2", old_fids[2:])])
+    _write_ai(repo, "structure.json", disk_payload)
+    _ingest(repo, disk_payload)
+    _rename_project(repo, "old-p", "new-p")
+    new_fids = _seed_symbols(repo, "new-p", ["a", "b", "c"], fid_prefix="new-")
+    con = _con(repo)
+    con.execute("INSERT INTO meta (key, value) VALUES ('cbm_project', 'new-p')")
+    con.execute("UPDATE structure SET status = 'stale'")
+    con.commit()
+    con.close()
+
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+
+    assert receipt["structure"]["action"] == "refreshed"
+    assert receipt["disk_sync"]["structure"] == {
+        "file": ".vrp/ai/structure.json", "present": True, "remapped": 3, "dropped": 0,
+    }
+    disk = json.loads((repo / ".vrp" / "ai" / "structure.json").read_text(encoding="utf-8"))
+    assert [m["module_id"] for m in disk["modules"]] == ["m1", "m2"]
+    assert disk["modules"][0]["symbol_fids"] == new_fids[:2]
+    assert disk["modules"][1]["symbol_fids"] == [new_fids[2]]
+    # 语义面原样（最小侵入）
+    assert disk["modules"][0]["name"] == "模块m1"
+    assert disk["modules"][0]["responsibility"] == "职责m1"
+    assert disk["modules"][0]["layer"] == "core"
+    assert disk["layers"] == [{"name": "core", "may_depend_on": []}]
+
+
+def test_refresh_writes_back_slices_to_disk(tmp_path: Path) -> None:
+    repo = _mk_repo(tmp_path)
+    old_fids = _seed_symbols(repo, "p", ["a", "b"], fid_prefix="old-")
+    con = _con(repo)
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES"
+                " ('old-a', 'old-b', 'CALLS', 'structural')")
+    con.commit()
+    con.close()
+    slices = [{
+        "slice_id": "s1", "name": "线", "summary": "链路",
+        "steps": [{"fid": f, "role": "process"} for f in old_fids],
+    }]
+    _write_ai(repo, "slices.json", slices)
+    _ingest_slices_payload(repo, slices)
+    con = _con(repo)
+    con.execute("DELETE FROM symbols WHERE project = 'p'")
+    con.commit()
+    con.close()
+    new_fids = _seed_symbols(repo, "p", ["a", "b"], fid_prefix="new-")
+    con = _con(repo)
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES"
+                " ('new-a', 'new-b', 'CALLS', 'structural')")
+    con.commit()
+    con.close()
+
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+
+    assert receipt["slices"][0]["action"] == "refreshed"
+    assert receipt["disk_sync"]["slices"] == {
+        "file": ".vrp/ai/slices.json", "present": True, "remapped": 2,
+    }
+    disk = json.loads((repo / ".vrp" / "ai" / "slices.json").read_text(encoding="utf-8"))
+    assert [s["fid"] for s in disk[0]["steps"]] == new_fids
+    assert disk[0]["steps"][0]["role"] == "process"
+
+
+def test_refresh_writes_back_dropped_fid_and_empty_module(tmp_path: Path) -> None:
+    """#229 剔除面同构写回：死 fid 剔除 + 空模块剔除（镜像库内治愈）。"""
+    repo = _mk_repo(tmp_path)
+    _seed_symbols(repo, "old-p", ["a", "b", "c"], fid_prefix="old-")
+    old_fids = ["old-a", "old-b", "old-c"]
+    disk_payload = _structure([_mod("m1", old_fids[:2]), _mod("m2", [old_fids[2]])])
+    _write_ai(repo, "structure.json", disk_payload)
+    _ingest(repo, disk_payload)
+    _rename_project(repo, "old-p", "new-p")
+    _seed_symbols(repo, "new-p", ["a"], fid_prefix="new-")
+    con = _con(repo)
+    con.execute("INSERT INTO meta (key, value) VALUES ('cbm_project', 'new-p')")
+    con.execute("UPDATE structure SET status = 'stale'")
+    con.commit()
+    con.close()
+
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+
+    assert receipt["structure"]["action"] == "refreshed"
+    assert receipt["structure"]["dropped"] == 2
+    assert receipt["structure"]["modules_dropped"] == 1
+    sync = receipt["disk_sync"]["structure"]
+    assert sync["remapped"] == 1
+    assert sync["dropped"] == 2
+    disk = json.loads((repo / ".vrp" / "ai" / "structure.json").read_text(encoding="utf-8"))
+    # m1：old-a→new-a，old-b 剔除；m2：old-c 剔除后空模块同构剔除
+    assert [m["module_id"] for m in disk["modules"]] == ["m1"]
+    assert disk["modules"][0]["symbol_fids"] == ["new-a"]
+
+
+def test_refresh_slices_disk_sync_shared_fid_no_cross_slice_harm(tmp_path: Path) -> None:
+    """#229 核心边界：跨 slice 共享 fid——治愈条目换新，skipped 条目原样
+    （全文件替换会误伤 skipped 条目制造新脱节，按 slice_id 精确匹配防）。"""
+    repo = _mk_repo(tmp_path)
+    old_fids = _seed_symbols(repo, "p", ["a", "b", "c"], fid_prefix="old-")
+    con = _con(repo)
+    for src, dst in (("old-a", "old-b"), ("old-a", "old-c")):
+        con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES"
+                    f" ('{src}', '{dst}', 'CALLS', 'structural')")
+    con.commit()
+    con.close()
+    slices = [
+        {"slice_id": "s1", "name": "好线", "summary": "a 到 b",
+         "steps": [{"fid": "old-a", "role": "process"}, {"fid": "old-b", "role": "process"}]},
+        {"slice_id": "s2", "name": "坏线", "summary": "a 到 c",
+         "steps": [{"fid": "old-a", "role": "process"}, {"fid": "old-c", "role": "process"}]},
+    ]
+    _write_ai(repo, "slices.json", slices)
+    _ingest_slices_payload(repo, slices)
+    con = _con(repo)
+    # 全符号退场（c 永久消亡；a/b 轮换回归）——s1 可整线重映射，s2 不可
+    con.execute("DELETE FROM symbols WHERE project = 'p'")
+    con.commit()
+    con.close()
+    _seed_symbols(repo, "p", ["a", "b"], fid_prefix="new-")
+    con = _con(repo)
+    con.execute("INSERT INTO edges (src_fid, dst_fid, type, evidence) VALUES"
+                " ('new-a', 'new-b', 'CALLS', 'structural')")
+    con.commit()
+    con.close()
+
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+
+    by_id = {s["slice_id"]: s for s in receipt["slices"]}
+    assert by_id["s1"]["action"] == "refreshed"
+    assert by_id["s2"]["action"] == "skipped"
+    assert receipt["disk_sync"]["slices"]["remapped"] == 2
+    disk = {s["slice_id"]: s for s in json.loads(
+        (repo / ".vrp" / "ai" / "slices.json").read_text(encoding="utf-8"))}
+    assert [st["fid"] for st in disk["s1"]["steps"]] == ["new-a", "new-b"]
+    # skipped 条目原样：共享的 old-a 不被误换
+    assert [st["fid"] for st in disk["s2"]["steps"]] == ["old-a", "old-c"]
+
+
+def test_refresh_disk_sync_missing_file_honest(tmp_path: Path) -> None:
+    """curate-auto 场景（MCP 提交，无磁盘声明）：诚实记 present=False，
+    不替 LLM 造声明（不创建文件/目录）。"""
+    repo = _mk_repo(tmp_path)
+    old_fids = _seed_symbols(repo, "old-p", ["a"], fid_prefix="old-")
+    _ingest(repo, _structure([_mod("m", old_fids)]))
+    _rename_project(repo, "old-p", "new-p")
+    _seed_symbols(repo, "new-p", ["a"], fid_prefix="new-")
+    con = _con(repo)
+    con.execute("INSERT INTO meta (key, value) VALUES ('cbm_project', 'new-p')")
+    con.execute("UPDATE structure SET status = 'stale'")
+    con.commit()
+    con.close()
+
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+
+    assert receipt["structure"]["action"] == "refreshed"
+    assert receipt["disk_sync"]["structure"] == {
+        "file": ".vrp/ai/structure.json", "present": False, "remapped": 0, "dropped": 0,
+    }
+    assert not (repo / ".vrp" / "ai").exists()
+
+
+def test_refresh_disk_sync_unparseable_file_untouched(tmp_path: Path) -> None:
+    repo = _mk_repo(tmp_path)
+    old_fids = _seed_symbols(repo, "old-p", ["a"], fid_prefix="old-")
+    _ingest(repo, _structure([_mod("m", old_fids)]))
+    (repo / ".vrp" / "ai").mkdir(parents=True)
+    bad = repo / ".vrp" / "ai" / "structure.json"
+    bad.write_text("not-json{", encoding="utf-8")
+    _rename_project(repo, "old-p", "new-p")
+    _seed_symbols(repo, "new-p", ["a"], fid_prefix="new-")
+    con = _con(repo)
+    con.execute("INSERT INTO meta (key, value) VALUES ('cbm_project', 'new-p')")
+    con.execute("UPDATE structure SET status = 'stale'")
+    con.commit()
+    con.close()
+
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+
+    sync = receipt["disk_sync"]["structure"]
+    assert sync["present"] is True
+    assert sync["unparseable"] is True
+    assert sync["remapped"] == 0
+    assert bad.read_text(encoding="utf-8") == "not-json{"
+
+
+def test_refresh_disk_sync_absent_when_fresh(tmp_path: Path) -> None:
+    """fresh（无治愈发生）不写不记：收据无 disk_sync 节。"""
+    repo = _mk_repo(tmp_path)
+    fids = _seed_symbols(repo, "p", ["a", "b"])
+    _write_ai(repo, "structure.json", _structure([_mod("m", fids)]))
+    _ingest(repo, _structure([_mod("m", fids)]))
+    before = (repo / ".vrp" / "ai" / "structure.json").read_text(encoding="utf-8")
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+    assert receipt["structure"]["action"] == "fresh"
+    assert "disk_sync" not in receipt
+    assert (repo / ".vrp" / "ai" / "structure.json").read_text(encoding="utf-8") == before
+
+
+def test_refresh_disk_sync_no_rewrite_when_already_synced(tmp_path: Path) -> None:
+    """#228 手工同步场景：磁盘已先行换新 fid，写回幂等（不命中不重写）。"""
+    repo = _mk_repo(tmp_path)
+    old_fids = _seed_symbols(repo, "old-p", ["a", "b"], fid_prefix="old-")
+    _ingest(repo, _structure([_mod("m", old_fids)]))
+    _rename_project(repo, "old-p", "new-p")
+    new_fids = _seed_symbols(repo, "new-p", ["a", "b"], fid_prefix="new-")
+    # 磁盘先行人工同步（#228 手工实录场景）
+    synced = _structure([_mod("m", new_fids)])
+    _write_ai(repo, "structure.json", synced)
+    con = _con(repo)
+    con.execute("INSERT INTO meta (key, value) VALUES ('cbm_project', 'new-p')")
+    con.execute("UPDATE structure SET status = 'stale'")
+    con.commit()
+    con.close()
+
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_refresh(repo, con)
+    finally:
+        con.close()
+
+    assert receipt["structure"]["action"] == "refreshed"
+    sync = receipt["disk_sync"]["structure"]
+    assert sync["remapped"] == 0  # 磁盘已同步：remapping 键不命中
+    disk = json.loads((repo / ".vrp" / "ai" / "structure.json").read_text(encoding="utf-8"))
+    assert disk["modules"][0]["symbol_fids"] == new_fids

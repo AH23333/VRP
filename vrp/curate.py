@@ -126,6 +126,26 @@ def _validate_slice_array(con: sqlite3.Connection, raw: list) -> list[dict]:
     return errors
 
 
+def _per_slice_status(raw: list, errors: list[dict]) -> list[dict]:
+    """#229 rider（#228 观察兑现）：整批拒绝时的 per-slice 归属面。
+
+    文件级原子性下校验通过的 slice 被同文件他条连带拒（bystander），
+    收据 rejected=N 不可见谁真错——LLM/人工需逐条推断。自身有错=
+    self_invalid=true；自身无错=连带回滚 false（只需同文件真错者
+    修复后整文件重提）。非 dict 条目/坏或空 slice_id 保守判自身错
+    （对应无定位早退错误）。
+    """
+    bad = {e.get("slice_id") for e in errors if isinstance(e, dict) and isinstance(e.get("slice_id"), str)}
+    out: list[dict] = []
+    for item in raw:
+        sid = item.get("slice_id") if isinstance(item, dict) else None
+        if not isinstance(sid, str) or not sid.strip():
+            out.append({"slice_id": sid if isinstance(sid, str) else None, "self_invalid": True})
+            continue
+        out.append({"slice_id": sid, "self_invalid": sid in bad})
+    return out
+
+
 def _validate_structure(con: sqlite3.Connection, raw: object) -> list[dict]:
     errors: list[dict] = []
     if not isinstance(raw, dict):
@@ -414,6 +434,7 @@ def _curate_file(con: sqlite3.Connection, path: Path, kind: str) -> dict:
         if errors:
             entry["errors"].extend(errors)
             entry["rejected"] = len(raw)
+            entry["per_slice"] = _per_slice_status(raw, errors)
         else:
             _ingest_slices(con, raw)
             entry["status"], entry["accepted"] = "accepted", len(raw)
@@ -445,7 +466,8 @@ def curate_payload(con: sqlite3.Connection, kind: str, payload_json: str) -> dic
                     "errors": [_err("FILE_WRONG_SHAPE", "slices payload must be a JSON array")]}
         errors: list[dict] = _validate_slice_array(con, raw)
         if errors:
-            return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": len(raw), "errors": errors}
+            return {"kind": kind, "status": "rejected", "accepted": 0, "rejected": len(raw),
+                    "errors": errors, "per_slice": _per_slice_status(raw, errors)}
         _ingest_slices(con, raw)
         return {"kind": kind, "status": "accepted", "accepted": len(raw), "rejected": 0, "errors": [],
                 "stale": _revalidate_ingested(con, git_head=_meta_git_head(con), event="mcp")}
@@ -612,11 +634,20 @@ def _refresh_remap_fid(con: sqlite3.Connection, fid: str, cur_project: str) -> s
     return None
 
 
-def _refresh_structure_payload(con: sqlite3.Connection, raw: dict) -> dict:
+def _refresh_structure_payload(
+    con: sqlite3.Connection, raw: dict
+) -> tuple[dict, dict[str, str], set[str]]:
     """structure 重映射单件：模块 fid 刷新（空模块剔除/查重重映射去重），
-    全量重验通过才入库；fresh（无可重映射改动）不重入库。"""
+    全量重验通过才入库；fresh（无可重映射改动）不重入库。
+
+    返回 (收据条目, 重映射表, 剔除集)：重映射表=旧 fid → 新 fid、剔除集=
+    不可重映射被剔的死 fid（两者仅库内治愈成功时非空；fresh/failed 一律
+    空集）——#229 治愈写回磁盘的映射源。
+    """
     cur_project = _current_project(con)
     mods_out: list[dict] = []
+    remapping: dict[str, str] = {}
+    dropped_fids: set[str] = set()
     stats = {"kept_live": 0, "remapped": 0, "dropped": 0, "deduped": 0, "modules_dropped": 0}
     for mod in raw.get("modules", []):
         new_fids: list[str] = []
@@ -624,11 +655,13 @@ def _refresh_structure_payload(con: sqlite3.Connection, raw: dict) -> dict:
             new = _refresh_remap_fid(con, fid, cur_project)
             if new is None:
                 stats["dropped"] += 1
+                dropped_fids.add(fid)
                 continue
             if new == fid:
                 stats["kept_live"] += 1
             else:
                 stats["remapped"] += 1
+                remapping[fid] = new
             if new in new_fids:
                 stats["deduped"] += 1
                 continue
@@ -654,7 +687,90 @@ def _refresh_structure_payload(con: sqlite3.Connection, raw: dict) -> dict:
             struct_item["errors"] = errors
         else:
             _ingest_structure(con, payload)
-    return struct_item
+            return struct_item, remapping, dropped_fids
+    return struct_item, {}, set()
+
+
+def _sync_structure_file(path: Path, remapping: dict[str, str], dropped: set[str]) -> dict:
+    """#229 治愈写回单件（structure）：指针面同步——remap 替换 + dropped
+    剔除 + 空模块同构剔除（镜像库内治愈逻辑，#228 双源脱节根治）；语义面
+    （模块名/职责/层/layers/rules）原样保留（最小侵入，不覆盖文件上
+    未入库的其他修改）。文件缺失/解析坏/形状不符 → 诚实跳过不写。
+    """
+    entry: dict = {"file": f"{AI_DIR_NAME}/{path.name}", "present": path.is_file(),
+                   "remapped": 0, "dropped": 0}
+    if not entry["present"]:
+        return entry
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        entry["unparseable"] = True
+        return entry
+    replaced: set[str] = set()
+    removed = 0
+    if isinstance(raw, dict) and isinstance(raw.get("modules"), list):
+        mods_out: list[object] = []
+        for mod in raw["modules"]:
+            if not isinstance(mod, dict) or not isinstance(mod.get("symbol_fids"), list):
+                mods_out.append(mod)
+                continue
+            new_fids: list[object] = []
+            for fid in mod["symbol_fids"]:
+                if isinstance(fid, str) and fid in dropped:
+                    removed += 1
+                    continue
+                if isinstance(fid, str) and fid in remapping:
+                    replaced.add(fid)
+                    new_fids.append(remapping[fid])
+                else:
+                    new_fids.append(fid)
+            if not new_fids:
+                continue  # 空模块同构剔除（镜像库内治愈）
+            mod["symbol_fids"] = new_fids
+            mods_out.append(mod)
+        raw["modules"] = mods_out
+        if replaced or removed:
+            path.write_text(json.dumps(raw, ensure_ascii=False, indent=2),
+                            encoding="utf-8", newline="\n")
+    entry["remapped"] = len(replaced)
+    entry["dropped"] = removed
+    return entry
+
+
+def _sync_slices_file(path: Path, maps_by_slice: dict[str, dict[str, str]]) -> dict:
+    """#229 治愈写回单件（slices）：按 slice_id 条目精确匹配——只有库内
+    治愈成功的 slice 条目内的 step fid 被替换（跨 slice 共享 fid 不误伤
+    skipped 条目）；库有文件无的 slice 不新建（不替 LLM 造声明）；
+    文件缺失/解析坏/形状不符 → 诚实跳过不写。
+    """
+    entry: dict = {"file": f"{AI_DIR_NAME}/{path.name}", "present": path.is_file(), "remapped": 0}
+    if not entry["present"]:
+        return entry
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        entry["unparseable"] = True
+        return entry
+    replaced: set[str] = set()
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            fid_map = maps_by_slice.get(item.get("slice_id"))
+            if not fid_map:
+                continue
+            steps = item.get("steps")
+            if not isinstance(steps, list):
+                continue
+            for step in steps:
+                if isinstance(step, dict) and isinstance(step.get("fid"), str) and step["fid"] in fid_map:
+                    replaced.add(step["fid"])
+                    step["fid"] = fid_map[step["fid"]]
+        if replaced:
+            path.write_text(json.dumps(raw, ensure_ascii=False, indent=2),
+                            encoding="utf-8", newline="\n")
+    entry["remapped"] = len(replaced)
+    return entry
 
 
 def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
@@ -666,8 +782,18 @@ def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
     slice 逐步 fid 全可重映射且全量重验通过才刷新，否则原样保留
     （action=skipped 计数）。收据落 .vrp/curate-refresh-receipt.json；
     drift_history 记 event=curate-refresh 事件（与其他写路径同构）。
+
+    治愈写回磁盘（#229，#228 双源脱节根因兑现）：库内治愈发生的
+    remap/剔除顺手同步 .vrp/ai 声明文件（_sync_structure_file/
+    _sync_slices_file 指针面同步——structure 同构剔除 dropped fid
+    与空模块；slices 按 slice_id 条目精确匹配，跨 slice 共享 fid
+    不误伤 skipped 条目）；语义面原样保留（最小侵入）；文件缺失/
+    解析坏诚实跳过（不替 LLM 造声明）；收据 disk_sync 节记写回
+    结果，fresh（无治愈发生）不写不记。
     """
     receipt: dict = {"refreshed_at": _now(), "structure": None, "slices": []}
+    struct_remapping: dict[str, str] = {}
+    struct_dropped: set[str] = set()
     row = con.execute(
         "SELECT payload_json FROM structure WHERE status IN ('active', 'stale')"
         " ORDER BY id DESC LIMIT 1"
@@ -683,7 +809,7 @@ def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
         if not isinstance(raw, dict):
             struct_item = {"action": "failed", "errors": ["structure payload unparseable"]}
         else:
-            struct_item = _refresh_structure_payload(con, raw)
+            struct_item, struct_remapping, struct_dropped = _refresh_structure_payload(con, raw)
     receipt["structure"] = struct_item
     slice_rows = con.execute(
         "SELECT slice_id, name, status, payload_json FROM slices"
@@ -692,6 +818,7 @@ def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
     # 项目名仅在有待刷新工件时求值（空仓收据路径不触发 SystemExit）
     cur_project = _current_project(con) if slice_rows else ""
     slices_payloads: list[dict] = []
+    maps_by_slice: dict[str, dict[str, str]] = {}
     for slice_id, name, status, payload_json in slice_rows:
         item: dict = {"slice_id": slice_id, "status": status, "action": "skipped"}
         try:
@@ -701,6 +828,7 @@ def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
         if not isinstance(sraw, dict):
             item["reason"] = "payload unparseable"
         else:
+            step_map: dict[str, str] = {}
             new_steps: list[dict] = []
             ok = True
             changed = False
@@ -711,6 +839,7 @@ def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
                     break
                 if new != step.get("fid"):
                     changed = True
+                    step_map[step.get("fid", "")] = new
                 fresh_step = dict(step)
                 fresh_step["fid"] = new
                 new_steps.append(fresh_step)
@@ -727,9 +856,23 @@ def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
                 else:
                     item["action"] = "refreshed"
                     slices_payloads.append(fresh_slice)
+                    # 治愈成功才领写回映射：skipped/失败 slice 的条目不动
+                    maps_by_slice[slice_id] = step_map
         receipt["slices"].append(item)
     if slices_payloads:
         _ingest_slices(con, slices_payloads)
+    # 治愈写回磁盘（#229）：指针面同步；文件缺失/解析坏诚实跳过
+    disk_sync: dict = {}
+    if struct_remapping or struct_dropped:
+        disk_sync["structure"] = _sync_structure_file(
+            repo / AI_DIR_NAME / "structure.json", struct_remapping, struct_dropped
+        )
+    if maps_by_slice:
+        disk_sync["slices"] = _sync_slices_file(
+            repo / AI_DIR_NAME / "slices.json", maps_by_slice
+        )
+    if disk_sync:
+        receipt["disk_sync"] = disk_sync
     _record_drift_history(
         con,
         _meta_git_head(con),
@@ -741,6 +884,9 @@ def curate_refresh(repo: Path, con: sqlite3.Connection) -> dict:
             "slices_refreshed": sum(1 for s in receipt["slices"] if s["action"] == "refreshed"),
             "slices_fresh": sum(1 for s in receipt["slices"] if s["action"] == "fresh"),
             "slices_skipped": sum(1 for s in receipt["slices"] if s["action"] == "skipped"),
+            "structure_disk_remapped": (disk_sync.get("structure") or {}).get("remapped", 0),
+            "structure_disk_dropped": (disk_sync.get("structure") or {}).get("dropped", 0),
+            "slices_disk_remapped": (disk_sync.get("slices") or {}).get("remapped", 0),
         },
     )
     con.commit()

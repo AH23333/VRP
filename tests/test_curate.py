@@ -551,3 +551,48 @@ def test_curate_structure_rejection_receipt_counts_one(tmp_path):
         assert any(e["code"] == "STRUCT_UNKNOWN_LAYER" for e in entry["errors"])
     finally:
         con.close()
+
+
+# ----------------------------------------- #229 rider：整批拒 per-slice 归属面
+
+
+def test_curate_file_per_slice_status_bystander_visible(tmp_path):
+    """#229 rider（#228 观察兑现）：整批拒时 per_slice 归属面——校验通过的
+    bystander（被同文件他条连带拒）与真错者区分，修复面不再靠收据外推断。"""
+    repo = _mk_repo(tmp_path)
+    fids = _seed_chain(repo)
+    good = _slice(fids, slice_id="good-flow")
+    bad = _slice(["fid-a", "fid-ghost"], slice_id="bad-flow")
+    ai = repo / ".vrp" / "ai"
+    ai.mkdir(parents=True)
+    (ai / "slices.json").write_text(json.dumps([good, bad], ensure_ascii=False), encoding="utf-8")
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate(repo, con)
+        entry = receipt["files"][0]
+        assert entry["status"] == "rejected"
+        assert entry["rejected"] == 2
+        assert entry["per_slice"] == [
+            {"slice_id": "good-flow", "self_invalid": False},
+            {"slice_id": "bad-flow", "self_invalid": True},
+        ]
+        assert con.execute("SELECT COUNT(*) FROM slices").fetchone()[0] == 0  # 文件级原子性不变
+    finally:
+        con.close()
+
+
+def test_curate_payload_per_slice_status_mcp_path(tmp_path):
+    """MCP 提交面同构：curate_payload 拒绝收据带 per_slice；坏 slice_id 保守判自身错。"""
+    repo = _mk_repo(tmp_path)
+    fids = _seed_chain(repo)
+    rows = [_slice(fids, slice_id="ok-flow"), {"steps": "not-a-list"}]
+    con = _con(repo)
+    try:
+        receipt = curate_mod.curate_payload(con, "slices", json.dumps(rows, ensure_ascii=False))
+        assert receipt["status"] == "rejected"
+        assert receipt["per_slice"] == [
+            {"slice_id": "ok-flow", "self_invalid": False},
+            {"slice_id": None, "self_invalid": True},
+        ]
+    finally:
+        con.close()
