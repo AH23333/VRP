@@ -1394,16 +1394,17 @@ def test_render_report_archify_nondict_json_error_degrades(tmp_path, monkeypatch
 
 
 def _mk_slow_archify_mjs(tmp_path: Path) -> Path:
-    """node 慢垫片：spawn 孙 python（继承 stdio，20s）+ node 自身存活 20s——
-    archify.mjs spawn 子进程的同型形态（vendor 源码 child_process 实锤）。"""
+    """node 慢垫片：spawn 孙 python（继承 stdio，90s）+ node 自身存活 90s——
+    archify.mjs spawn 子进程的同型形态（vendor 源码 child_process 实锤）；
+    睡眠须>杀路径界 50s 保判别力（#232）。"""
     import sys
 
     slow_mjs = tmp_path / "slow_archify.mjs"
     slow_mjs.write_text(
         "import { spawn } from 'node:child_process';\n"
-        "spawn(process.env.VRP_TEST_PY, ['-c', 'import time; time.sleep(20)'],"
+        "spawn(process.env.VRP_TEST_PY, ['-c', 'import time; time.sleep(90)'],"
         " { stdio: ['ignore', 'inherit', 'inherit'] });\n"
-        "setTimeout(() => {}, 20000);\n",
+        "setTimeout(() => {}, 90000);\n",
         encoding="utf-8",
     )
     assert sys.executable
@@ -1429,7 +1430,7 @@ def test_run_archify_timeout_tree_killed(tmp_path, monkeypatch):
     wall = time.monotonic() - start
     assert rc is None
     assert "archify timed out after 2s" in err
-    assert wall < 15, f"tree-kill must return promptly, wall={wall:.1f}s (orphan-held pipe)"
+    assert wall < 50, f"tree-kill must return within kill-path budget 2+30+15s (#232), wall={wall:.1f}s; orphan-held pipe would hang to sleep(90)"
 
 
 def test_render_diagram_timeout_tree_killed(tmp_path, monkeypatch):
@@ -1453,7 +1454,7 @@ def test_render_diagram_timeout_tree_killed(tmp_path, monkeypatch):
     wall = time.monotonic() - start
     assert html is None
     assert "timed out after 2s" in err, err
-    assert wall < 15, f"tree-kill must return promptly, wall={wall:.1f}s (orphan-held pipe)"
+    assert wall < 50, f"tree-kill must return within kill-path budget 2+30+15s (#232), wall={wall:.1f}s; orphan-held pipe would hang to sleep(90)"
 
 
 # ------------------------------------------- _arch_id Unicode 守卫（R-H #79）

@@ -191,7 +191,7 @@ def test_run_rule_timeout_raises_runtime_error_tree_killed(repo, monkeypatch):
     from vrp.s2_astgrep import run_rule
 
     slow = repo / "slow_astgrep.py"
-    slow.write_text("import time\ntime.sleep(30)\nprint('[]')\n", encoding="utf-8")
+    slow.write_text("import time\ntime.sleep(90)\nprint('[]')\n", encoding="utf-8")
     if sys.platform == "win32":
         exe = repo / "fake_astgrep.cmd"
         exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
@@ -210,7 +210,7 @@ def test_run_rule_timeout_raises_runtime_error_tree_killed(repo, monkeypatch):
     start = time_mod.monotonic()
     with pytest.raises(RuntimeError, match="timed out"):
         run_rule(str(exe), rule, repo)
-    assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
+    assert time_mod.monotonic() - start < 50, "tree-kill must return within kill-path budget 2+30+15s (#232); orphan-held pipe would hang to sleep(90)"
 
 
 DANGEROUS_PY = """import pickle

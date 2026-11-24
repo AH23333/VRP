@@ -174,7 +174,7 @@ def test_run_knip_nondict_report_returns_none(tmp_path, monkeypatch):
 def _fake_slow_tool(tmp_path, body_name):
     """跨平台慢工具垫片（R-AI 范式）：win32 .cmd（cmd.exe 直子→python 孙，#84 形态）/ POSIX .sh。"""
     slow = tmp_path / body_name
-    slow.write_text("import time\ntime.sleep(30)\nprint('{}')\n", encoding="utf-8")
+    slow.write_text("import time\ntime.sleep(90)\nprint('{}')\n", encoding="utf-8")
     if sys.platform == "win32":
         exe = tmp_path / (body_name + ".cmd")
         exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
@@ -197,7 +197,7 @@ def test_run_knip_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
     )
     start = time.monotonic()
     assert run_knip(str(exe), tmp_path) is None
-    assert time.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
+    assert time.monotonic() - start < 50, "tree-kill must return within kill-path budget 2+30+15s (#232); orphan-held pipe would hang to sleep(90)"
 
 
 def test_run_vulture_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
@@ -212,4 +212,4 @@ def test_run_vulture_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
     )
     start = time.monotonic()
     assert run_vulture(str(exe), tmp_path) is None
-    assert time.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
+    assert time.monotonic() - start < 50, "tree-kill must return within kill-path budget 2+30+15s (#232); orphan-held pipe would hang to sleep(90)"

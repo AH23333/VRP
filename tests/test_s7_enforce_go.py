@@ -405,7 +405,7 @@ def test_execute_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
     import time as time_mod
 
     slow = tmp_path / "slow_go.py"
-    slow.write_text("import time\ntime.sleep(30)\nprint('ok')\n", encoding="utf-8")
+    slow.write_text("import time\ntime.sleep(90)\nprint('ok')\n", encoding="utf-8")
     if sys.platform == "win32":
         exe = tmp_path / "fake_go.cmd"
         exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
@@ -417,7 +417,7 @@ def test_execute_timeout_tree_killed_returns_none(tmp_path, monkeypatch):
     monkeypatch.setattr(s7_enforce_go, "find_go", lambda: str(exe))
     start = time_mod.monotonic()
     assert s7_enforce_go._execute(tmp_path, 2) == (None, None, None)
-    assert time_mod.monotonic() - start < 15, "tree-kill must return promptly; orphan-held pipe would hang"
+    assert time_mod.monotonic() - start < 50, "tree-kill must return within kill-path budget 2+30+15s (#232); orphan-held pipe would hang to sleep(90)"
 
 
 def test_run_go_enforcer_failed_keeps_findings(tmp_path, monkeypatch):

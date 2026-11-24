@@ -50,7 +50,7 @@ def test_build_raw_pack_timeout_tree_killed(tmp_path, monkeypatch):
     import time
 
     slow = tmp_path / "slow_repomix.py"
-    slow.write_text("import time\ntime.sleep(20)\nprint('ok')\n", encoding="utf-8")
+    slow.write_text("import time\ntime.sleep(90)\nprint('ok')\n", encoding="utf-8")
     if sys.platform == "win32":
         exe = tmp_path / "fake_repomix.cmd"
         exe.write_text(f'@"{sys.executable}" "{slow}" %*\n', encoding="utf-8")
@@ -64,5 +64,5 @@ def test_build_raw_pack_timeout_tree_killed(tmp_path, monkeypatch):
     with pytest.raises(subprocess.TimeoutExpired):
         s5_rawpack.build_raw_pack(tmp_path, timeout=2)
     wall = time.monotonic() - start
-    assert wall < 15, f"tree-kill must raise promptly, wall={wall:.1f}s (orphan-held pipe)"
+    assert wall < 50, f"tree-kill must raise within kill-path budget 2+30+15s (#232), wall={wall:.1f}s; orphan-held pipe would hang to sleep(90)"
     assert not list((tmp_path / ".vrp").glob("*.tmp-*")), "timed-out run must leave no temp residue"

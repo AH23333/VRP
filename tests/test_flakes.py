@@ -34,14 +34,14 @@ def _entry(**overrides) -> dict:
 
 
 def test_seed_registry_valid_against_real_tree():
-    """种子条目 schema+漂移双绿（真树核验：s7 测试在树）。"""
+    """种子条目 schema 绿（#232 定案 resolved——漂移树核验按纪律豁免，历史证据在册）。"""
     assert flakes.validate() == []
     assert flakes.FLAKES[0]["test_id"].endswith("test_execute_timeout_tree_killed_returns_none")
 
 
 def test_seed_first_observation_not_registered():
     """首观测不进表纪律：fd0d7db 两判例（rawpack 定案缺陷已修/testsig 环境瞬态）
-    与 #170 push 负载红不进表——表内只留可核验 active 条目。"""
+    与 #170 push 负载红不进表——表内只留可核验条目（active/resolved）。"""
     blob = json.dumps(flakes.FLAKES, ensure_ascii=False)
     assert "rawpack" not in blob and "testsig" not in blob
     assert len(flakes.FLAKES) == 1
@@ -93,7 +93,7 @@ def test_render_text_shape(capsys):
     text = flakes.render_text(flakes.registry())
     assert "[观测]" in text  # 种子 count=1 非抖王
     assert "test_execute_timeout_tree_killed_returns_none" in text
-    assert "timing/active" in text
+    assert "timing/resolved" in text
     assert "summary: 1 条目  抖王 0  隔离候选 0" in text
     assert "[drift]" not in text  # 种子零漂移
     kings_text = flakes.render_text(

@@ -36,7 +36,7 @@ FLAKES: tuple[dict, ...] = (
     {
         "test_id": "tests/test_s7_enforce.py::test_execute_timeout_tree_killed_returns_none",
         "category": "timing",
-        "status": "active",
+        "status": "resolved",
         "count": 1,
         "first_seen": "2026-11-15",
         "last_seen": "2026-11-15",
@@ -44,7 +44,9 @@ FLAKES: tuple[dict, ...] = (
         "note": (
             "#120 观察记实：全量首跑高负载窗 488.66s 单发红、单跑 8.71s 绿；"
             "_execute 只消费 timed_out，本批改动严格不可能使其失败——R-W 负载 flake 族；"
-            "复发升级隔离候选"
+            "#232 定案出表：断言界 15s<杀路径预算 47s（2s timeout+taskkill 30s R-Y 阀"
+            "+15s AU-1 drain）静态不一致=测试界缺陷非产品 flake——界 15→50+垫片"
+            "sleep 30→90 判别力保持（AU-1 回归悬到 90s>50 红）"
         ),
     },
 )
