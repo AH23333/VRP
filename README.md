@@ -183,7 +183,7 @@ python -m pytest -m "deep or not deep" -q  # 全量 3826 例（阶段性完工�
 开发与测试全在本地完成（工具链沙箱、verify 仓、CBM 缓存均为本地资源）；GitHub（`AH23333/VRP`）仅作 push 与 release 目标，**不做 CI/Actions**。
 
 - **本地门禁**：`.githooks/pre-push`（`git config core.hooksPath .githooks` 激活）——推送前快速层 2297 例全绿才放行（~4-8min，git push/sh 环境实测可至 ~19min——工具超时须留足）；跳过用 `git push --no-verify`
-- **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.2**（2026-11-16，Latest：S7 执法引擎 21 语言收齐+AI 梳理层全链，174 commits 自 v0.1.1）
+- **发布**：GitHub release API 打 tag 发版（v0.1.0 起）；当前 **v0.1.3**（2026-11-25，Latest：优先级总表主序九批+甜点池全收官——ETL 增量化+引擎并行、MCP 消费面重构、混仓分治执法、调用边置信度分层、argcheck 参数级对账、timeline 架构考古，83 commits 自 v0.1.2）
 
 ## 外部工具（可选，缺失则降级）
 
