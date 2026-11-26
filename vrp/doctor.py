@@ -17,6 +17,7 @@ from __future__ import annotations
 import platform
 import shutil
 import sys
+from pathlib import Path
 
 from . import procs
 from . import s1_cbm, s2_astgrep, s2_cargo_mutants, s2_jscpd, s2_mutate_run, s2_p4, s2_stryker
@@ -55,7 +56,7 @@ ENGINE_SPEC: list[dict] = [
     _spec("go", "engine", "install Go or VRP_GO_BIN", (s7_enforce_go, "find_go")),
     _spec("archify", "engine", "vrp/vendor/archify 收编缺失 or VRP_ARCHIFY_MJS", (render_mod, "find_archify_mjs")),
     _spec("code-atlas", "engine", "work/code-atlas-npx 沙箱 or VRP_CODE_ATLAS_JS", (xcheck_mod, "ca_js_path")),
-    _spec("scc", "engine", "install scc for fast census (census_fallback 兜底)"),
+    _spec("scc", "engine", "install scc for fast census (census_fallback as backstop)"),
 ]
 
 
@@ -116,12 +117,16 @@ def _check(spec: dict) -> dict:
     }
 
 
-def run_doctor() -> dict:
-    """聚合诊断：core 缺失名单 + engine 缺失名单 + 逐项检查面。"""
+def run_doctor(repo: Path | None = None) -> dict:
+    """聚合诊断：core 缺失名单 + engine 缺失名单 + 逐项检查面。
+
+    repo 给定时追加 llm 节（config_cmd.doctor_llm_section 惰性挂接——
+    模块级导入会拉 llm_client/urllib 链，doctor 纯环境探测场景不必付）。
+    """
     checks = [_check(spec) for spec in CORE_SPEC + ENGINE_SPEC]
     missing_core = [c["name"] for c in checks if c["tier"] == "core" and not c["ok"]]
     missing_engine = [c["name"] for c in checks if c["tier"] == "engine" and not c["ok"]]
-    return {
+    result = {
         "checked": len(checks),
         "ok": sum(1 for c in checks if c["ok"]),
         "missing_core": missing_core,
@@ -129,6 +134,11 @@ def run_doctor() -> dict:
         "python_ok": sys.version_info >= MIN_PYTHON,
         "checks": checks,
     }
+    if repo is not None:
+        from . import config_cmd
+
+        result["llm"] = config_cmd.doctor_llm_section(Path(repo))
+    return result
 
 
 def doctor_rc(result: dict) -> int:
@@ -137,8 +147,8 @@ def doctor_rc(result: dict) -> int:
 
 
 def render_text(result: dict) -> str:
-    lines = ["vrp doctor - 工具链环境自诊断", ""]
-    for tier, title in (("core", "CORE（管道阻断层）"), ("engine", "ENGINE（能力降级层）")):
+    lines = ["vrp doctor - toolchain environment self-check", ""]
+    for tier, title in (("core", "CORE (pipeline blockers)"), ("engine", "ENGINE (degraded capabilities)")):
         lines.append(title)
         for c in result["checks"]:
             if c["tier"] != tier:
@@ -148,6 +158,17 @@ def render_text(result: dict) -> str:
                 lines.append(f"  [ok]      {c['name']}{ver} - {c['located']}")
             else:
                 lines.append(f"  [missing] {c['name']} - {c['hint']}")
+        lines.append("")
+    llm = result.get("llm")
+    if llm is not None:
+        status = llm.get("status")
+        lines.append("LLM (analysis backend)")
+        if status == "ok":
+            lines.append(f"  [ok]      {llm.get('model')} - reachable")
+        elif status == "unconfigured":
+            lines.append(f"  [missing] llm - not configured, run '{llm.get('hint', 'vrp config')}'")
+        else:
+            lines.append(f"  [missing] llm - {llm.get('error', status)}: {llm.get('detail', '')}".rstrip())
         lines.append("")
     lines.append(
         f"summary: {result['ok']}/{result['checked']} ok"

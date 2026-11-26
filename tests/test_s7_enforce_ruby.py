@@ -950,5 +950,5 @@ def test_run_ruby_derive_timeout(tmp_path, monkeypatch):
 
 def test_cli_enforce_ruby_wiring(tmp_path, capsys):
     repo = _mk_ruby_repo(tmp_path)
-    rc = cli.main(["enforce", str(repo)])
+    rc = cli.main(["enforce", str(repo), "--json"])
     assert rc == 0

@@ -65,8 +65,8 @@ def _etl_matrix(tmp_path, rel: str, truth_n: int, actual_n: int, matched_n: int,
     if cache_db.exists():
         cache_db.unlink()
     try:
-        run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-        run_vrp(["etl", str(repo)], cwd=ROOT)
+        run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+        run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
         con = sqlite3.connect(f"file:{repo / '.vrp' / 'facts.db'}?mode=ro", uri=True)
         try:
             s_face = golden.audit_symbols(con, spec["truth"]["symbols"])

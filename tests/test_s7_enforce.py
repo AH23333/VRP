@@ -762,7 +762,7 @@ def test_cli_enforce_wiring(tmp_path, monkeypatch, capsys):
     repo = _mk_repo(tmp_path)
     monkeypatch.setattr(s7_enforce, "find_import_linter", lambda: "fake-lint-imports")
     monkeypatch.setattr(s7_enforce, "_execute", _mock_exec(1, CANNED_BROKEN))
-    rc = cli.main(["enforce", str(repo)])
+    rc = cli.main(["enforce", str(repo), "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "ok"
@@ -779,7 +779,7 @@ def test_cli_enforce_timeout_flag_accepted(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(s7_enforce, "find_import_linter", lambda: "fake-lint-imports")
     monkeypatch.setattr(s7_enforce, "_execute", fake_exec)
-    rc = cli.main(["enforce", str(repo), "--timeout", "33"])
+    rc = cli.main(["enforce", str(repo), "--timeout", "33", "--json"])
     assert rc == 0
     assert seen == [33]
 

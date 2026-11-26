@@ -535,7 +535,7 @@ def test_run_go_single_layer_not_enforceable(tmp_path):
 def test_cli_enforce_go_wiring(tmp_path, monkeypatch, capsys):
     repo = _mk_go_repo(tmp_path)
     monkeypatch.setattr(s7_enforce_go, "_execute", lambda repo, timeout: (0, _stream(repo), ""))
-    rc = cli.main(["enforce", str(repo)])
+    rc = cli.main(["enforce", str(repo), "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "ok"

@@ -37,8 +37,8 @@ def inv_repo(tmp_path_factory):
     cache_db = CBM_CACHE / f"{repo.name}.db"
     if cache_db.exists():
         cache_db.unlink()
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     yield repo
     if cache_db.exists():
         cache_db.unlink()
@@ -59,17 +59,17 @@ def test_etl_idempotent(inv_repo):
     db = inv_repo / ".vrp" / "facts.db"
     before_symbols = _table_fingerprint(db, "symbols")
     before_edges = _table_fingerprint(db, "edges")
-    run_vrp(["etl", str(inv_repo)], cwd=ROOT)
+    run_vrp(["etl", "--json", str(inv_repo)], cwd=ROOT)
     assert _table_fingerprint(db, "symbols") == before_symbols
     assert _table_fingerprint(db, "edges") == before_edges
 
 
 def test_s2_idempotent_and_view_alignment(inv_repo):
-    out1 = run_vrp(["s2", str(inv_repo)], cwd=ROOT)
+    out1 = run_vrp(["s2", "--json", str(inv_repo)], cwd=ROOT)
     first = json.loads(out1)
     assert first["dead_code_candidates"] == 1
     assert first["p4"]["vulture"] == 1
-    out2 = run_vrp(["s2", str(inv_repo)], cwd=ROOT)
+    out2 = run_vrp(["s2", "--json", str(inv_repo)], cwd=ROOT)
     second = json.loads(out2)
     assert first == second
     con = sqlite3.connect(inv_repo / ".vrp" / "facts.db")
@@ -84,8 +84,8 @@ def test_s2_idempotent_and_view_alignment(inv_repo):
 
 
 def test_xcheck_reproducible(inv_repo):
-    out1 = json.loads(run_vrp(["xcheck", str(inv_repo)], cwd=ROOT))
-    out2 = json.loads(run_vrp(["xcheck", str(inv_repo)], cwd=ROOT))
+    out1 = json.loads(run_vrp(["xcheck", "--json", str(inv_repo)], cwd=ROOT))
+    out2 = json.loads(run_vrp(["xcheck", "--json", str(inv_repo)], cwd=ROOT))
     assert out1["ca_calls"] == out2["ca_calls"]
     assert out1["cbm_calls"] == out2["cbm_calls"]
     assert out1["agreement"] == out2["agreement"]
@@ -93,13 +93,13 @@ def test_xcheck_reproducible(inv_repo):
 
 
 def test_validate_idempotent(inv_repo):
-    out1 = run_vrp(["validate", str(inv_repo)], cwd=ROOT)
-    out2 = run_vrp(["validate", str(inv_repo)], cwd=ROOT)
+    out1 = run_vrp(["validate", "--json", str(inv_repo)], cwd=ROOT)
+    out2 = run_vrp(["validate", "--json", str(inv_repo)], cwd=ROOT)
     assert out1 == out2
 
 
 def test_dossier_schema_stable(inv_repo):
-    out = run_vrp(["dossier", str(inv_repo), "--task", "T2", "--skip-external"], cwd=ROOT)
+    out = run_vrp(["dossier", "--json", str(inv_repo), "--task", "T2", "--skip-external"], cwd=ROOT)
     payload = json.loads(out.split("== S5 dossier ==")[1].strip())
     assert payload["task"] == "T2"
     doc = json.loads((inv_repo / ".vrp" / "dossier.json").read_text(encoding="utf-8"))
@@ -116,7 +116,7 @@ def test_task_profiles_share_sums(task):
 
 
 def test_dossier_skip_external_matches_with_external_fields(inv_repo):
-    run_vrp(["dossier", str(inv_repo), "--task", "T3", "--skip-external"], cwd=ROOT)
+    run_vrp(["dossier", "--json", str(inv_repo), "--task", "T3", "--skip-external"], cwd=ROOT)
     doc = json.loads((inv_repo / ".vrp" / "dossier.json").read_text(encoding="utf-8"))
     views = doc["views"]
     assert views["architecture"].get("status") in ("skipped", "ok", None)

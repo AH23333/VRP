@@ -58,7 +58,7 @@ def _ledger_engine_count(repo):
 
 
 def _status_ledger_count(repo):
-    out = json.loads(run_vrp(["status", str(repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["status", "--json", str(repo)], cwd=ROOT))
     return out["counts"]["discrepancy_ledger"]
 
 
@@ -67,10 +67,10 @@ def xcheck_state(lusiem_repo):
     repo = lusiem_repo
     if not _db(repo).exists():
         pytest.skip("lusiem facts.db not prepared")
-    s1 = json.loads(run_vrp(["xcheck", str(repo)], cwd=ROOT))
+    s1 = json.loads(run_vrp(["xcheck", "--json", str(repo)], cwd=ROOT))
     rows1 = _ledger_rows(repo)
     status1 = _status_ledger_count(repo)
-    s2 = json.loads(run_vrp(["xcheck", str(repo)], cwd=ROOT))
+    s2 = json.loads(run_vrp(["xcheck", "--json", str(repo)], cwd=ROOT))
     rows2 = _ledger_rows(repo)
     status2 = _status_ledger_count(repo)
     return {
@@ -201,7 +201,7 @@ def test_xcheck_does_not_touch_p4_categories(lusiem_repo):
     marker_id = con.execute("SELECT MAX(id) FROM discrepancy_ledger").fetchone()[0]
     con.close()
     try:
-        summary = json.loads(run_vrp(["xcheck", str(repo)], cwd=ROOT))
+        summary = json.loads(run_vrp(["xcheck", "--json", str(repo)], cwd=ROOT))
         con = sqlite3.connect(f"file:{_db(repo)}?mode=ro", uri=True)
         try:
             marker_present = con.execute(

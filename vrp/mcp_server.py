@@ -22,6 +22,7 @@ from __future__ import annotations
 import functools
 import json
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
 
@@ -487,6 +488,11 @@ def build_server(repo: Path) -> "MCPServer":
 
 
 def run_stdio(repo: Path) -> None:
+    # stdio 是 MCP 协议信道——stdout 一个杂字节都会毁帧。用户在交互终端手跑
+    # `vrp-mcp` 时（stdin 是 TTY）给 stderr 一句提示，避免"卡住无输出"的困惑；
+    # 真客户端拉起时 stdin 是管道，不提示。
+    if sys.stdin.isatty():
+        print("vrp mcp server (stdio) - waiting for MCP protocol on stdin, not for human input", file=sys.stderr)
     server = build_server(repo)
     server.run("stdio")
 

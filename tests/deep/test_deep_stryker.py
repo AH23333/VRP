@@ -107,8 +107,8 @@ def stryker_repo():
     cache_db = CBM_CACHE / f"{repo.name}.db"
     if cache_db.exists():
         cache_db.unlink()
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     yield repo
     if cache_db.exists():
         cache_db.unlink()
@@ -119,7 +119,7 @@ def stryker_repo():
 
 def test_stryker_e2e(stryker_repo):
     repo = stryker_repo
-    out = json.loads(run_vrp(["mutate-run", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
+    out = json.loads(run_vrp(["mutate-run", "--json", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
     assert out["status"] == "ok"
     assert out["engines"] == {"stryker": "ok"}
     assert out["targets"] == 2
@@ -175,8 +175,8 @@ def test_stryker_findings_and_evidence_written(stryker_repo):
 
 def test_stryker_idempotent(stryker_repo):
     repo = stryker_repo
-    first = json.loads(run_vrp(["mutate-run", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
-    second = json.loads(run_vrp(["mutate-run", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
+    first = json.loads(run_vrp(["mutate-run", "--json", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
+    second = json.loads(run_vrp(["mutate-run", "--json", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
     assert first["status"] == second["status"] == "ok"
     assert first["mutants_total"] == second["mutants_total"]
     assert first["killed"] == second["killed"]

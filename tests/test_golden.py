@@ -333,7 +333,7 @@ def test_cli_golden_wiring_and_determinism(tmp_path, capsys):
         "symbols": [{"qn": "q.a", "label": "Class", "file": "a.py", "start": 1, "end": 2}],
     }
     path = _golden(data, tmp_path)
-    assert cli.main(["golden", str(repo), "--file", str(path)]) == 0  # rc 恒 0（D5）
+    assert cli.main(["golden", str(repo), "--file", str(path), "--json"]) == 0  # rc 恒 0（D5）
     first = json.loads(capsys.readouterr().out)
     assert first["ok"] is True
     assert first["name"] == "cli-unit"
@@ -342,7 +342,7 @@ def test_cli_golden_wiring_and_determinism(tmp_path, capsys):
     assert first["faces"]["violations"]["spurious"] == 0
     assert first["faces"]["symbols"]["matched"] == 1
     assert "note" in first
-    assert cli.main(["golden", str(repo), "--file", str(path)]) == 0
+    assert cli.main(["golden", str(repo), "--file", str(path), "--json"]) == 0
     second = json.loads(capsys.readouterr().out)
     assert first == second  # determinism：同库同真值同 receipt
 

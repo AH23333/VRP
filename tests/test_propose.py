@@ -188,12 +188,12 @@ def test_propose_invalid_params_rejected(tmp_path):
 def test_propose_cli_wiring(tmp_path, capsys):
     """CLI vrp propose 接线：默认参数 + rc 语义（ok=False → rc=1）。"""
     repo = _mk_repo(tmp_path)
-    argv = cli.build_parser().parse_args(["propose", str(repo)])
+    argv = cli.build_parser().parse_args(["propose", str(repo), "--json"])
     assert argv.func is cli.cmd_propose
     assert argv.func(argv) == 1  # 空仓零候选诚实 rc=1
     assert "no candidate symbols" in capsys.readouterr().out
     _add_symbol(repo, "f1", "pkg.a", "a", "pkg/x.py", 1)
-    argv = cli.build_parser().parse_args(["propose", str(repo)])
+    argv = cli.build_parser().parse_args(["propose", str(repo), "--json"])
     assert argv.func(argv) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True

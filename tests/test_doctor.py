@@ -165,12 +165,41 @@ def test_render_text_shape(monkeypatch):
     assert "engine missing: astgrep" in text
 
 
-def test_parser_no_repo_arg():
+def test_parser_repo_arg():
     args = build_parser().parse_args(["doctor"])
     assert args.func is cmd_doctor
-    assert not hasattr(args, "repo")
+    assert args.repo == "."
     args_json = build_parser().parse_args(["doctor", "--json"])
     assert args_json.json is True
+    args_repo = build_parser().parse_args(["doctor", "some/repo"])
+    assert args_repo.repo == "some/repo"
+
+
+def test_llm_section_mounted_on_repo(monkeypatch):
+    """E 批：repo 给定 → llm 节挂接（config_cmd.doctor_llm_section 惰性）。"""
+    from vrp import config_cmd
+
+    _patch_all_present(monkeypatch)
+    monkeypatch.setattr(config_cmd, "doctor_llm_section", lambda repo: {"status": "ok", "model": "test-model"})
+    result = doctor.run_doctor(Path("some/repo"))
+    assert result["llm"] == {"status": "ok", "model": "test-model"}
+    # repo 缺省 → 无 llm 键（render_text 容忍）
+    assert "llm" not in doctor.run_doctor()
+
+
+def test_llm_render_tri_state(monkeypatch):
+    """render_text：ok/unconfigured/error 三态；无 llm 键不崩。"""
+    _patch_all_present(monkeypatch)
+    base = doctor.run_doctor()
+    text = doctor.render_text(base)
+    assert "LLM" not in text  # 无 llm 键 → 不渲染该节
+    ok = dict(base, llm={"status": "ok", "model": "test-model"})
+    assert "LLM (analysis backend)" in doctor.render_text(ok)
+    assert "[ok]      test-model - reachable" in doctor.render_text(ok)
+    unconf = dict(base, llm={"status": "unconfigured", "hint": "vrp config"})
+    assert "[missing] llm - not configured, run 'vrp config'" in doctor.render_text(unconf)
+    err = dict(base, llm={"status": "error", "error": "network", "detail": "conn refused"})
+    assert "[missing] llm - network: conn refused" in doctor.render_text(err)
 
 
 def test_cli_end_to_end_json(monkeypatch, capsys):
@@ -185,7 +214,7 @@ def test_cli_end_to_end_json(monkeypatch, capsys):
             {"name": "git", "tier": "core", "ok": True, "located": "C:/git.exe", "version": "2.44.0", "hint": None},
         ],
     }
-    monkeypatch.setattr(doctor, "run_doctor", lambda: fixed)
+    monkeypatch.setattr(doctor, "run_doctor", lambda repo: fixed)
     rc = cli_main(["doctor", "--json"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
@@ -204,7 +233,7 @@ def test_cli_end_to_text_rc_on_core_missing(monkeypatch, capsys):
             {"name": "cbm", "tier": "core", "ok": False, "located": None, "version": None, "hint": "install cbm"},
         ],
     }
-    monkeypatch.setattr(doctor, "run_doctor", lambda: fixed)
+    monkeypatch.setattr(doctor, "run_doctor", lambda repo: fixed)
     rc = cli_main(["doctor"])
     out = capsys.readouterr().out
     assert rc == 1

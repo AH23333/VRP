@@ -638,7 +638,7 @@ def test_nav_seams_cli_wiring(tmp_path, capsys):
     from vrp import cli
     repo = _mk_repo(tmp_path)
     _add_symbol(repo, "f1", "pkg.a.x", "x", "pkg/a.py", 1)
-    argv = cli.build_parser().parse_args(["seams", str(repo)])
+    argv = cli.build_parser().parse_args(["seams", str(repo), "--json"])
     assert argv.func is cli.cmd_seams
     assert argv.func(argv) == 0
     out = json.loads(capsys.readouterr().out)

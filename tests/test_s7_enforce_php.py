@@ -748,7 +748,7 @@ def test_run_php_derive_timeout(tmp_path, monkeypatch):
 
 def test_cli_enforce_php_wiring(tmp_path, capsys):
     repo = _mk_php_repo(tmp_path)
-    rc = cli.main(["enforce", str(repo)])
+    rc = cli.main(["enforce", str(repo), "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "ok"

@@ -11,7 +11,7 @@ pytestmark = pytest.mark.deep
 
 
 def _run_plan(repo, budget):
-    out = json.loads(run_vrp(["mutate-plan", str(repo), "--budget", str(budget)], cwd=ROOT))
+    out = json.loads(run_vrp(["mutate-plan", "--json", str(repo), "--budget", str(budget)], cwd=ROOT))
     plan_path = Path(out["plan"])
     targets = json.loads(plan_path.read_text(encoding="utf-8"))
     return out, targets

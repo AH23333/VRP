@@ -229,8 +229,8 @@ def test_tx008_t2_delete_dead_file_and_replay(tx_scratch):
     (repo / "pkg" / "legacy.py").write_text("def orphan():\n    return 1\n", encoding="utf-8")
     git(repo, "add", "-A")
     git(repo, "-c", "user.email=d@t", "-c", "user.name=d", "commit", "-q", "-m", "add legacy")
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     path = _write_tx(
         repo,
         "tx-008.json",

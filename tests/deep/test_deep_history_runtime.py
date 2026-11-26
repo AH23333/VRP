@@ -61,7 +61,7 @@ def test_history_coupling_fk_clean_and_payload(lusiem_repo):
 def test_history_coupling_survives_etl_rerun(lusiem_repo):
     before = _history_tuples(lusiem_repo)
     assert len(before) > 0
-    run_vrp(["etl", str(lusiem_repo)], cwd=ROOT)
+    run_vrp(["etl", "--json", str(lusiem_repo)], cwd=ROOT)
     after = _history_tuples(lusiem_repo)
     assert after == before
 
@@ -83,8 +83,8 @@ def freeze_repo(tmp_path_factory):
     cache_db = CBM_CACHE / f"{repo.name}.db"
     if cache_db.exists():
         cache_db.unlink()
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     facts_db = repo / ".vrp" / "facts.db"
     summary = s4_freeze.freeze(repo, facts_db, repo.name)
     yield {"repo": repo, "db": facts_db, "summary": summary}

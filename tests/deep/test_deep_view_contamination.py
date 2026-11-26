@@ -131,7 +131,7 @@ def test_big_repo_all_views_synthetic_sweep(big_repo):
 
 
 def test_big_repo_dossier_hotspots_section_all_real(big_repo):
-    run_vrp(["dossier", str(big_repo), "--task", "T2", "--skip-external"], cwd=ROOT, timeout=1800)
+    run_vrp(["dossier", "--json", str(big_repo), "--task", "T2", "--skip-external"], cwd=ROOT, timeout=1800)
     doc = json.loads((big_repo / ".vrp" / "dossier.json").read_text(encoding="utf-8"))
     hot = doc["views"]["sql_views"]["hotspots"]
     assert isinstance(hot, list) and len(hot) >= 1
@@ -180,14 +180,14 @@ def test_cli_etl_heals_damaged_facts_db(tmp_path):
     (repo / "pkg" / "calc.py").write_text(
         "def add(a, b):\n    return a + b\n", encoding="utf-8"
     )
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     con = sqlite3.connect(repo / ".vrp" / "facts.db")
     con.execute("DROP VIEW v_hotspots")
     con.execute("DROP TABLE annotations")
     con.commit()
     con.close()
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     con = sqlite3.connect(f"file:{repo / '.vrp' / 'facts.db'}?mode=ro", uri=True)
     try:
         assert con.execute("SELECT COUNT(*) FROM v_hotspots").fetchone()[0] >= 0

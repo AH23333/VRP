@@ -201,12 +201,12 @@ def test_cli_coverage_wiring(tmp_path, capsys):
     _add_gap(repo, "pytest.ini", "parse_unusable", "1-105")
     _add_gap(repo, "docs", "not_indexed_dir", "excluded subtree")
     parser = cli.build_parser()
-    args = parser.parse_args(["coverage", str(repo)])
+    args = parser.parse_args(["coverage", str(repo), "--json"])
     rc = args.func(args)
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["mode"] == "summary" and out["total_rows"] == 2
     args = parser.parse_args(
-        ["coverage", str(repo), "--path", "pytest.ini", "--path", "docs/x.md", "--kind", "parse_unusable"]
+        ["coverage", str(repo), "--path", "pytest.ini", "--path", "docs/x.md", "--kind", "parse_unusable", "--json"]
     )
     rc = args.func(args)
     out = json.loads(capsys.readouterr().out)

@@ -53,27 +53,27 @@ def smoke_repo(tmp_path_factory):
     cache_db = CBM_CACHE / f"{repo.name}.db"
     if cache_db.exists():
         cache_db.unlink()
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     yield repo
     if cache_db.exists():
         cache_db.unlink()
 
 
 def test_cmd_precheck(smoke_repo):
-    out = json.loads(run_vrp(["precheck", str(smoke_repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["precheck", "--json", str(smoke_repo)], cwd=ROOT))
     assert "project" in out or "repo" in out or bool(out)
 
 
 def test_cmd_index_then_etl(smoke_repo):
-    out = json.loads(run_vrp(["index", str(smoke_repo), "--reindex"], cwd=ROOT))
+    out = json.loads(run_vrp(["index", "--json", str(smoke_repo), "--reindex"], cwd=ROOT))
     assert out.get("status") in ("indexed", "reused", "ok") or bool(out)
-    stats = json.loads(run_vrp(["etl", str(smoke_repo)], cwd=ROOT))
+    stats = json.loads(run_vrp(["etl", "--json", str(smoke_repo)], cwd=ROOT))
     assert stats["symbols"] >= 3
 
 
 def test_cmd_xcheck(smoke_repo):
-    out = json.loads(run_vrp(["xcheck", str(smoke_repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["xcheck", "--json", str(smoke_repo)], cwd=ROOT))
     assert out["ca_calls"] >= 0
     assert out["cbm_calls"] >= 0
 
@@ -85,21 +85,21 @@ def test_cmd_run_reuses(smoke_repo):
 
 
 def test_cmd_status(smoke_repo):
-    out = json.loads(run_vrp(["status", str(smoke_repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["status", "--json", str(smoke_repo)], cwd=ROOT))
     meta = out.get("meta", {})
     assert int(meta.get("count_symbols", "0")) >= 3 or "symbols" in out
 
 
 def test_cmd_s2_and_mutate_plan(smoke_repo):
-    out = json.loads(run_vrp(["s2", str(smoke_repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["s2", "--json", str(smoke_repo)], cwd=ROOT))
     assert out["dead_code_candidates"] == 1
-    plan = json.loads(run_vrp(["mutate-plan", str(smoke_repo), "--budget", "5"], cwd=ROOT))
+    plan = json.loads(run_vrp(["mutate-plan", "--json", str(smoke_repo), "--budget", "5"], cwd=ROOT))
     assert plan["budget"] == 5
     assert plan["selected"] >= 0
 
 
 def test_cmd_validate_and_gate(smoke_repo):
-    out = json.loads(run_vrp(["validate", str(smoke_repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["validate", "--json", str(smoke_repo)], cwd=ROOT))
     assert out["coverage"]["total"] >= 3
     claims = [
         {
@@ -114,19 +114,19 @@ def test_cmd_validate_and_gate(smoke_repo):
     claims_path = smoke_repo / ".vrp" / "claims.json"
     claims_path.parent.mkdir(parents=True, exist_ok=True)
     claims_path.write_text(json.dumps(claims), encoding="utf-8")
-    gated = json.loads(run_vrp(["gate", str(smoke_repo), str(claims_path)], cwd=ROOT))
+    gated = json.loads(run_vrp(["gate", "--json", str(smoke_repo), str(claims_path)], cwd=ROOT))
     assert "claims" in gated or "results" in gated or bool(gated)
 
 
 def test_cmd_freeze_skip_commands(smoke_repo):
-    blocks = _json_blocks(run_vrp(["freeze", str(smoke_repo), "--skip-commands"], cwd=ROOT))
+    blocks = _json_blocks(run_vrp(["freeze", "--json", str(smoke_repo), "--skip-commands"], cwd=ROOT))
     assert blocks
     flat = json.dumps(blocks, ensure_ascii=False)
     assert "graph.db.zst" in flat or "graph_baseline" in flat
 
 
 def test_cmd_dossier_skip_external(smoke_repo):
-    run_vrp(["dossier", str(smoke_repo), "--task", "T4", "--skip-external"], cwd=ROOT)
+    run_vrp(["dossier", "--json", str(smoke_repo), "--task", "T4", "--skip-external"], cwd=ROOT)
     doc = json.loads((smoke_repo / ".vrp" / "dossier.json").read_text(encoding="utf-8"))
     assert doc["task"] == "T4"
     assert set(doc["views"].keys()) == set(s5_dossier.SECTION_ORDER)
@@ -158,7 +158,7 @@ def test_cmd_transact_preserved_across_etl(smoke_repo):
     finally:
         con.close()
     assert before >= 1
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     con = sqlite3.connect(repo / ".vrp" / "facts.db")
     try:
         after = con.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]

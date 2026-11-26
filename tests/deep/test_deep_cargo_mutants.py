@@ -82,8 +82,8 @@ def cargo_repo():
     cache_db = CBM_CACHE / f"{repo.name}.db"
     if cache_db.exists():
         cache_db.unlink()
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     yield repo
     if cache_db.exists():
         cache_db.unlink()
@@ -92,7 +92,7 @@ def cargo_repo():
 
 def test_cargo_mutants_e2e(cargo_repo):
     repo = cargo_repo
-    out = json.loads(run_vrp(["mutate-run", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
+    out = json.loads(run_vrp(["mutate-run", "--json", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
     assert out["status"] == "ok"
     assert out["engines"] == {"cargo-mutants": "ok"}
     assert out["targets"] == 2
@@ -153,8 +153,8 @@ def test_cargo_mutants_findings_and_evidence_written(cargo_repo):
 
 def test_cargo_mutants_idempotent(cargo_repo):
     repo = cargo_repo
-    first = json.loads(run_vrp(["mutate-run", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
-    second = json.loads(run_vrp(["mutate-run", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
+    first = json.loads(run_vrp(["mutate-run", "--json", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
+    second = json.loads(run_vrp(["mutate-run", "--json", str(repo), "--budget", "2"], cwd=ROOT, timeout=900))
     assert first["status"] == second["status"] == "ok"
     assert first["mutants_total"] == second["mutants_total"]
     assert first["killed"] == second["killed"]

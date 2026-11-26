@@ -393,7 +393,7 @@ def test_run_ts_cli_enforce_wiring(tmp_path, monkeypatch, capsys):
     repo = _mk_repo(tmp_path)
     monkeypatch.setattr(s7_enforce_ts, "find_depcruise", lambda: Path("fake-depcruise.cmd"))
     monkeypatch.setattr(s7_enforce_ts, "_execute", _mock_exec(0, CANNED_TS_JSON))
-    rc = cli.main(["enforce", str(repo)])
+    rc = cli.main(["enforce", str(repo), "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "ok"

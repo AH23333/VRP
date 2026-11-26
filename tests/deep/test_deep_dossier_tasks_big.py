@@ -17,7 +17,7 @@ def big_dossiers(big_repo):
     dossiers = {}
     for task in ("T1", "T3", "T4"):
         out = run_vrp(
-            ["dossier", str(big_repo), "--task", task, "--skip-external"],
+            ["dossier", str(big_repo), "--task", task, "--skip-external", "--json"],
             cwd=ROOT,
             timeout=1800,
         )

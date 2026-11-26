@@ -314,14 +314,14 @@ def test_cli_impact_wiring(tmp_path, capsys):
     repo = _mk_repo(tmp_path)
     _add_symbol(repo, "f1", "a.foo", "a.py", 1, 2)
     parser = cli.build_parser()
-    args = parser.parse_args(["impact", str(repo), "--path", "a.py"])
+    args = parser.parse_args(["impact", str(repo), "--path", "a.py", "--json"])
     assert args.func(args) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["level"] == "impact" and out["depth"] == 2
     assert [s["qn"] for s in out["seeds"]] == ["a.foo"]
     args = parser.parse_args(
         ["impact", str(repo), "--path", "a.py", "--depth", "3",
-         "--direction", "both", "--no-tests"]
+         "--direction", "both", "--no-tests", "--json"]
     )
     assert args.func(args) == 0
     out = json.loads(capsys.readouterr().out)

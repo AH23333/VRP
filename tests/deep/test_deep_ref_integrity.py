@@ -96,7 +96,7 @@ def test_tx_scratch_no_orphans(tx_scratch):
 
 
 def test_tx_scratch_etl_rerun_keeps_integrity(tx_scratch):
-    run_vrp(["etl", str(tx_scratch)], cwd=ROOT)
+    run_vrp(["etl", "--json", str(tx_scratch)], cwd=ROOT)
     con = _open_ro(tx_scratch)
     try:
         orphan = con.execute(

@@ -143,7 +143,7 @@ def test_cli_verdicts_list_and_tid(tmp_path, capsys, monkeypatch):
     )
     args_touched = cli.build_parser().parse_args(["verdicts", str(repo)])
     assert args_touched.func is cli.cmd_verdicts
-    assert cli.main(["verdicts", str(repo)]) == 0
+    assert cli.main(["verdicts", str(repo), "--json"]) == 0
     out = json.loads(capsys.readouterr().out.split("== S6 verdicts ==")[1])
     assert out["count"] == 2
     assert out["verdicts"][1]["tid"] == "tx-2"

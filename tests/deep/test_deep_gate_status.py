@@ -35,8 +35,8 @@ def gate_repo(tmp_path_factory):
     cache_db = CBM_CACHE / f"{repo.name}.db"
     if cache_db.exists():
         cache_db.unlink()
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     yield repo
     if cache_db.exists():
         cache_db.unlink()
@@ -48,7 +48,7 @@ def _write_claims(path: Path, claims) -> Path:
 
 
 def _run_gate(repo: Path, claims_path: Path) -> dict:
-    return json.loads(run_vrp(["gate", str(repo), str(claims_path)], cwd=ROOT))
+    return json.loads(run_vrp(["gate", "--json", str(repo), str(claims_path)], cwd=ROOT))
 
 
 def _counts(repo: Path, table: str) -> int:
@@ -280,15 +280,15 @@ def test_gate_records_gate_results_row(gate_repo, tmp_path):
 def test_gate_claims_file_must_be_array(gate_repo, tmp_path):
     claims = tmp_path / "not-array.json"
     claims.write_text('{"not": "a list"}', encoding="utf-8")
-    run_vrp(["gate", str(gate_repo), str(claims)], cwd=ROOT, expect_rc=1)
+    run_vrp(["gate", "--json", str(gate_repo), str(claims)], cwd=ROOT, expect_rc=1)
 
 
 def test_gate_missing_claims_file(gate_repo, tmp_path):
-    run_vrp(["gate", str(gate_repo), str(tmp_path / "missing.json")], cwd=ROOT, expect_rc=1)
+    run_vrp(["gate", "--json", str(gate_repo), str(tmp_path / "missing.json")], cwd=ROOT, expect_rc=1)
 
 
 def test_status_big_repo_counts_consistent(big_repo):
-    out = json.loads(run_vrp(["status", str(big_repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["status", "--json", str(big_repo)], cwd=ROOT))
     con = sqlite3.connect(f"file:{big_repo / '.vrp' / 'facts.db'}?mode=ro", uri=True)
     try:
         expected_counts = {
@@ -312,5 +312,5 @@ def test_status_big_repo_counts_consistent(big_repo):
 def test_status_missing_facts_db(tmp_path):
     empty = tmp_path / "no-facts"
     empty.mkdir()
-    out = json.loads(run_vrp(["status", str(empty)], cwd=ROOT))
+    out = json.loads(run_vrp(["status", "--json", str(empty)], cwd=ROOT))
     assert out == {"facts_db": None}

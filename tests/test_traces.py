@@ -268,7 +268,7 @@ def test_cli_traces_wiring(tmp_path, capsys):
     _add_symbol(repo, "f2", "pkg.b")
     f = _write_traces(tmp_path, "t.json", {"traces": [{"caller": "pkg.a", "callee": "pkg.b"}]})
     parser = cli.build_parser()
-    args = parser.parse_args(["traces", str(repo), "--file", str(f), "--label", "cli-run"])
+    args = parser.parse_args(["traces", str(repo), "--file", str(f), "--label", "cli-run", "--json"])
     rc = args.func(args)
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["ok"] and out["label"] == "cli-run"
@@ -331,7 +331,7 @@ def test_cmd_status_cbm_version_stale_faces(tmp_path, monkeypatch, capsys):
     con.commit()
     con.close()
     parser = cli.build_parser()
-    args = parser.parse_args(["status", str(repo)])
+    args = parser.parse_args(["status", str(repo), "--json"])
     for current, stale in (("0.13.0", True), ("0.12.1", False), (None, None)):
         monkeypatch.setattr(s1_cbm, "cbm_version", lambda timeout=30, c=current: c)
         args.func(args)
@@ -347,7 +347,7 @@ def test_cmd_status_cbm_version_no_record_unknown(tmp_path, monkeypatch, capsys)
     repo = _mk_repo(tmp_path)
     monkeypatch.setattr(s1_cbm, "cbm_version", lambda timeout=30: "0.12.1")
     parser = cli.build_parser()
-    args = parser.parse_args(["status", str(repo)])
+    args = parser.parse_args(["status", str(repo), "--json"])
     args.func(args)
     out = json.loads(capsys.readouterr().out)
     node = out["cbm_version"]

@@ -215,16 +215,24 @@ def test_cli_profile_end_to_end(tmp_path, capsys):
 
 
 def test_cli_help_renders_with_percent_literals():
-    """回归锁（#165 门禁抓红）：argparse help 字面 % 必须转义 %%——
-    profile 帮助文本 top1%/top10% 未转义时 --help 渲染直接
-    ValueError: unsupported format character（pyz E2E 先抓，专项锁死）。
+    """回归锁（#165 门禁抓红）：help 渲染遇字面 % 不得 ValueError——
+    top1%/top10% 原先裸躺在 profile 的 help=（%-展开直接炸）；D 批改造后
+    下沉为 description（不经 % 展开），主 help + profile --help 双渲染
+    专项锁死（描述回迁 help= 不转义时此测试必红）。
     """
     import contextlib
     import io
 
-    buf = io.StringIO()
+    parser = build_parser()
+    main_buf = io.StringIO()
     with pytest.raises(SystemExit) as exc:
-        with contextlib.redirect_stdout(buf):
-            build_parser().parse_args(["--help"])
+        with contextlib.redirect_stdout(main_buf):
+            parser.parse_args(["--help"])
     assert exc.value.code == 0
-    assert "top1%/top10%" in buf.getvalue()
+
+    sub_buf = io.StringIO()
+    with pytest.raises(SystemExit) as sub_exc:
+        with contextlib.redirect_stdout(sub_buf):
+            parser.parse_args(["profile", "--help"])
+    assert sub_exc.value.code == 0
+    assert "top1%/top10%" in sub_buf.getvalue()

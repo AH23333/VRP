@@ -30,8 +30,8 @@ def jscpd_eval(tmp_path_factory):
     cache_db = CBM_CACHE / f"{repo.name}.db"
     if cache_db.exists():
         cache_db.unlink()
-    run_vrp(["index", str(repo), "--reindex"], cwd=ROOT)
-    run_vrp(["etl", str(repo)], cwd=ROOT)
+    run_vrp(["index", "--json", str(repo), "--reindex"], cwd=ROOT)
+    run_vrp(["etl", "--json", str(repo)], cwd=ROOT)
     yield repo
     if cache_db.exists():
         cache_db.unlink()
@@ -50,7 +50,7 @@ def _ledger_rows(repo, category="p2-cross-check-jscpd"):
 
 def test_dup_eval_verbatim_clone_detected_and_agreed(jscpd_eval):
     repo = jscpd_eval
-    out = json.loads(run_vrp(["s2", str(repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["s2", "--json", str(repo)], cwd=ROOT))
     p2 = out["p2"]
     assert p2["jscpd"] >= 1
     con = sqlite3.connect(f"file:{repo / '.vrp' / 'facts.db'}?mode=ro", uri=True)
@@ -86,7 +86,7 @@ def test_dup_eval_no_false_positive_on_controls(jscpd_eval):
 
 def test_lusiem_recall_backstop(lusiem_repo):
     repo = lusiem_repo
-    out = json.loads(run_vrp(["s2", str(repo)], cwd=ROOT))
+    out = json.loads(run_vrp(["s2", "--json", str(repo)], cwd=ROOT))
     p2 = out["p2"]
     assert p2["jscpd"] >= 50
     assert p2["ledger_rows"] >= p2["jscpd"]
@@ -103,5 +103,5 @@ def test_lusiem_recall_backstop(lusiem_repo):
     finally:
         con.close()
     assert cbm_pairs > 0
-    rerun = json.loads(run_vrp(["s2", str(repo)], cwd=ROOT))
+    rerun = json.loads(run_vrp(["s2", "--json", str(repo)], cwd=ROOT))
     assert rerun["p2"] == p2

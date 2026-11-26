@@ -630,7 +630,7 @@ def test_run_mixed_objc_and_py_divide_and_conquer(tmp_path):
     assert total == 1  # 只剩本 run 新写（单语言引擎不清他语言 findings）
 def test_cli_enforce_objc_wiring(tmp_path, capsys):
     repo = _mk_objc_repo(tmp_path)
-    rc = cli.main(["enforce", str(repo)])
+    rc = cli.main(["enforce", str(repo), "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["engine"] == "objc-import-parser"

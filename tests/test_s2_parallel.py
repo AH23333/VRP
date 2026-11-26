@@ -65,7 +65,7 @@ def _findings_rows(repo):
 
 
 def _run_cmd_s2(repo, capsys):
-    rc = cli.cmd_s2(type("Args", (), {"repo": str(repo)})())
+    rc = cli.cmd_s2(type("Args", (), {"repo": str(repo), "json": True})())
     out = capsys.readouterr().out
     return rc, out
 

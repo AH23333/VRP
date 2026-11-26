@@ -764,7 +764,7 @@ def test_cli_report_wiring(tmp_path, monkeypatch, capsys):
 
     repo = _mk_repo(tmp_path)
     _seed(repo)
-    rc = cli.main(["report", str(repo)])
+    rc = cli.main(["report", str(repo), "--json"])
     assert rc == 0
     assert (repo / ".vrp" / "report" / "report.html").is_file()
     assert "S8 report" in capsys.readouterr().out

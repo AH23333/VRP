@@ -350,7 +350,7 @@ def test_cli_testcov_wiring(tmp_path, capsys):
     _add_link(repo, "t1", "f1")
     f = _write_cov(tmp_path, "cov.json", {"src/x.py": _cov_entry([11], [])})
     parser = cli.build_parser()
-    args = parser.parse_args(["testcov", str(repo), "--file", str(f), "--label", "cli-run"])
+    args = parser.parse_args(["testcov", str(repo), "--file", str(f), "--label", "cli-run", "--json"])
     rc = args.func(args)
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["ok"] and out["label"] == "cli-run"
