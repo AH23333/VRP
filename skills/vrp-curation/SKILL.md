@@ -1,6 +1,6 @@
 ---
 name: vrp-curation
-description: vrp curation production guide - how the AI produces slices/structure artifacts, submits them through curate validation, handles rejection codes, and re-curates drifted artifacts. Use when curating business lines (slices), the overall structure (structure), or processing curate receipts.
+description: vrp curation production guide - how the AI produces slices/structure artifacts, submits them through curate validation, handles rejection codes, and re-curates drifted artifacts. Use when curating business lines (slices), the overall structure (module partition + layer DAG), handling curate receipts or rejection codes, running enforce over layer rules, or re-curating artifacts that drifted after transactions landed - also when the user asks to map business flows, partition the codebase into modules, define layering rules, or says "carve this repo up" / "trace the checkout flow".
 ---
 
 # vrp-curation: curation production guide
@@ -34,6 +34,36 @@ Validation is **deterministic** (machine-checked; everything passes or nothing i
 ```
 
 After a structure is ingested, run `enforce()` (S7): broken layer contracts become P9 findings - report them to the user and fold them into refactor targets.
+
+## Worked example: one slice, end to end
+
+Goal: persist the checkout flow as a slice (three steps, two acts).
+
+1. Gather: `vrp_query(search, "checkout")` -> fid `S101` (`POST /checkout` handler), plus nearby order/persist symbols
+2. Verify adjacency: `vrp_query(callers, "S101")` and `vrp_query(callees, "S101")` confirm real edges `S101 -> S205` (CALLS) and `S205 -> S312` (CALLS) - no gaps, nothing invented
+3. Produce `slices.json` per the contract:
+
+```json
+[{
+  "slice_id": "checkout-flow",
+  "name": "checkout flow",
+  "summary": "POST /checkout validates the cart and persists the order",
+  "steps": [
+    {"fid": "<S101 sha>", "role": "entry", "note": "POST /checkout route"},
+    {"fid": "<S205 sha>", "role": "process", "note": "cart validation"},
+    {"fid": "<S312 sha>", "role": "persist", "note": "order persistence"}
+  ],
+  "acts": [
+    {"name": "entry", "from_step": 0, "to_step": 1},
+    {"name": "persist", "from_step": 2, "to_step": 2}
+  ]
+}]
+```
+
+4. `curate_submit("slices", payload_json)` -> receipt `accepted: ["checkout-flow"]`
+5. `vrp_query(slice, target="checkout-flow")` -> three steps, two acts, edges present - matches what was written
+
+If step 4 had returned `SLICE_MISSING_EDGE` on step 1->2, the edge was wishful thinking: re-verify with `vrp_query(callers/callees)`, shorten the slice scope, resubmit the whole file.
 
 ## Validation red lines (common rejection causes)
 

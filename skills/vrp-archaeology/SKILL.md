@@ -1,6 +1,6 @@
 ---
 name: vrp-archaeology
-description: vrp archaeology protocol - understand an unfamiliar or legacy repo before touching it. Build the fact layer, read the intake briefing, replay the rot timeline (when did it start to decay), mine implicit coupling, triage pathology findings, then navigate by fid. Use when the task is "understand this codebase" / "where did it go wrong" / "onboard me onto this repo" - not restructuring (see vrp-loop).
+description: vrp archaeology protocol - understand an unfamiliar or legacy repo before touching it. Build the fact layer, read the intake briefing, replay the rot timeline (when did it start to decay), mine implicit co-change coupling, triage pathology findings, then navigate by fid. Use when the task is "understand this codebase", "onboard me onto this repo", "where did it go wrong", "when did this get messy", a legacy-code assessment, pre-migration due diligence, or a tech-debt audit - read-only, zero writes; for restructuring see vrp-loop.
 ---
 
 # vrp-archaeology: repo archaeology protocol
@@ -37,10 +37,10 @@ vrp-loop's job; curation (slices/structure) is vrp-curation's job.
    only). Divergence between the co-change graph and the CALLS graph is the
    discovery: files that change together but do not call each other.
 5. **Pathology inventory**: `vrp findings <repo>` (S6-scored, open formula -
-     every score shows its components), `vrp score <repo>` for the formula
-     applied, `vrp graph <repo>` (PageRank + LPA communities vs curated
-     structure Jaccard - disagreement between AI curation and graph theory is
-     a finding), `vrp s2 <repo>` for the full engine sweep.
+   every score shows its components), `vrp score <repo>` for the formula
+   applied, `vrp graph <repo>` (PageRank + LPA communities vs curated
+   structure Jaccard - disagreement between AI curation and graph theory is
+   a finding), `vrp s2 <repo>` for the full engine sweep.
    Unknown P-code -> `vrp explain <P9>`.
 6. **Navigate by fid** (MCP `vrp_query`): search / architecture / module /
    symbol / callers / callees / path / seams / coverage / impact.
@@ -53,8 +53,19 @@ vrp-loop's job; curation (slices/structure) is vrp-curation's job.
    AI-curated overview, pathology checkup, fusion.html single-page; SARIF
    included) for the human; `vrp tour <repo>` for onboarding order (needs a
    curated structure). Optional deep audits: `vrp xcheck` (cross-engine
-   agreement), `vrp golden` (precision/recall vs committed truth), 
+   agreement), `vrp golden` (precision/recall vs committed truth),
    `vrp testcov` (coverage reconciliation), `vrp pitindex` (pit -> test index).
+
+## Worked example: "when did this repo start to rot?"
+
+Input: an unfamiliar 3-year-old repo, user asks "it feels messy - when did it go wrong?"
+
+1. `vrp status <repo>` -> facts.db missing -> `vrp run <repo>` (full pipeline, rc=0)
+2. `vrp dossier <repo> --task T1` -> intake briefing: 15 modules, top files by churn, open pathology summary
+3. `vrp timeline <repo>` -> 20-sample replay, turning points say the largest dead-code jump is between commits `c81e2f` (2024-03) and `d94a1b` (2024-04): dead code 3% -> 11%, cycle count 18 -> 41
+4. `vrp cochange <repo>` -> top pair `pay/legacy_bridge.py` + `pay/v2/adapter.py` (support 14, confidence 0.61) with **no CALLS edge** - the v1/v2 straddle changes as one unit but the graph does not see it
+5. `vrp findings <repo>` -> top finding P8 (hub) on the same bridge file; score components shown (impact 0.9 / evidence 4 / span 2)
+6. Correlate: the 2024-03/04 window matches the v2 migration start the user remembers - hand over the timeline.json turning points + cochange pair as the evidence-backed answer, with `vrp report <repo>` for the full picture
 
 ## Command quick reference
 
@@ -69,6 +80,8 @@ vrp-loop's job; curation (slices/structure) is vrp-curation's job.
 | What does P-code mean? | `vrp explain <code>` |
 | Human-facing report | `vrp report <repo>` |
 | Reading order for a newcomer | `vrp tour <repo>` |
+| AI-written one-shot narrative | `vrp analyze <repo>` (LLM report from dossier T1 + top findings; needs `vrp config` first) |
+| Interactive AI Q&A over the repo | `vrp chat <repo>` (REPL; dossier T1 briefing injected; /quit /dossier /findings /refresh /clear) |
 
 ## Red lines
 

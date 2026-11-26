@@ -1,6 +1,6 @@
 ---
 name: vrp-review
-description: vrp evidence-based review protocol - back a code review or repo audit with deterministic static evidence. Fresh facts, findings ranked by the open score formula, change blast radius with suggested tests, coverage reconciliation (fake test linkage exposed), runtime trace import, SARIF review comments. Advisory, never a gate - the human decides. Use for "review this repo/PR/changeset", "is the test story real", "audit before release".
+description: vrp evidence-based review protocol - back a code review or repo audit with deterministic static evidence. Fresh facts, findings ranked by the open score formula, change blast radius with suggested tests, coverage reconciliation (fake test linkage exposed), runtime trace import, SARIF review comments. Advisory, never a gate - the human decides. Use for "review this repo/PR/changeset", "is the test story real", "audit before release/refactor", pre-merge sanity check, or a due-diligence pass where every claim must cite its evidence.
 ---
 
 # vrp-review: evidence-based review protocol
@@ -47,7 +47,19 @@ repo - findings feed fixpropose/transact, but the human pulls the trigger.
    `vrp golden <repo> --file truth.json` - precision/recall against committed
    golden truth; missing (under-report) and spurious (over-report) counted
    both directions; rc is always 0 - a bad number is a finding, not a failure.
-   SARIF hand-off for CI consumers: `docs/SARIF-CI消费指南.md`.
+   SARIF hand-off for CI consumers: `docs/评估/SARIF-CI消费指南.md`.
+
+## Worked example: PR review with a test-story check
+
+Input: a 12-file PR touching `pay/` + a claim that "tests cover the changes".
+
+1. `vrp status <repo>` -> stale -> `vrp refresh <repo>` (recovery chain, rc=0)
+2. `vrp findings <repo>` -> 2 new P8 hub findings on `pay/v2/adapter.py` since the PR branch
+3. `vrp impact <repo> --base main` -> diff-hunk BFS: 34 symbols reached, 5 suggested tests (from test_linkage), saturation note at depth 3
+4. CI produced coverage.json -> `vrp testcov <repo> --file coverage.json --label pr-123`:
+   `linked_not_covered_measured` lists `test_pay_adapter.py::test_refund` - statically linked to the changed code but **never executed** in the run - the "tests cover it" claim is half fake; report it
+5. `vrp review <repo>` -> `review-comments.json` beside findings.sarif - paste into the PR
+6. Verdict to the user: merge-blocking evidence = fake test linkage + 2 new hub findings; advisory only, human decides
 
 ## Honesty rules
 

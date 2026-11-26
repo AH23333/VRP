@@ -1,6 +1,6 @@
 ---
 name: vrp-loop
-description: AI restructuring loop over the vrp MCP tools - navigate, verify, produce transactions, preview, run, read verdicts, fix-and-retry (max 3 per transaction). Use for any agent connected to a vrp MCP server (`vrp mcp <repo>`).
+description: AI restructuring loop over the vrp MCP tools - navigate by fid, verify call edges, produce contract transactions, preview diffs, run them through the G0-G6 gates, read verdicts, fix-and-retry (max 3 per transaction). Use whenever an agent connected to a vrp MCP server must refactor, restructure, rename, move or delete symbols, or execute any change to a repo whose fact layer vrp manages - even if the user just says "clean this up", "rename X" or "extract this module".
 ---
 
 # vrp-loop: AI restructuring loop protocol v2
@@ -27,6 +27,32 @@ description: AI restructuring loop over the vrp MCP tools - navigate, verify, pr
 6. **Read the verdict**: `vrp_query(query_type=tx_verdicts)` (target=<tid> for a single record); on failure read `failed_gate` + `failed_codes`
 7. **Fix and retry**: repair tx_json per the failure codes, preview -> run again; **max 3 retries per transaction** - after 3 failures change approach or drop the target and tell the user why
 8. **Regression**: when the batch is done, ask the user to run `vrp run <repo>` to rebuild the fact layer + `vrp dossier` to re-check pathology (open verdicts feed into the dossier evidence section automatically)
+
+## Worked example: rename a function (T1)
+
+Goal: rename `p.a.old` -> `p.a.new` and update the two import sites.
+
+1. `vrp_query(search, "old")` -> fid `S7`, file `pkg/a.py`, qualified_name `p.a.old`
+2. `vrp_query(callers, "S7")` -> fids `S21` (pkg/b.py), `S34` (pkg/c.py) - blast radius closed at 2 callers
+3. Produce tx_json (fetch current file content first; edits are full-file overwrites):
+
+```json
+{
+  "id": "tx-rename-old",
+  "type": "T1",
+  "summary": "rename p.a.old -> p.a.new",
+  "declared_moves": [{"from": "p.a.old", "to": "p.a.new"}],
+  "edits": [
+    {"file": "pkg/a.py", "op": "modify", "content": "def new():\n    return 1\n"},
+    {"file": "pkg/b.py", "op": "modify", "content": "from .a import new\n..."},
+    {"file": "pkg/c.py", "op": "modify", "content": "from .a import new\n..."}
+  ]
+}
+```
+
+4. `tx_preview(tx_json)` -> diff touches exactly 3 files, rename declared -> matches intent
+5. `tx_run(tx_json)` -> verdict PASS, gate G0-G5 green, git commit created
+6. `vrp_query(tx_verdicts, "tx-rename-old")` confirms `committed`
 
 ## Enforcement loop (S7)
 
