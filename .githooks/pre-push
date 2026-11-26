@@ -1,3 +1,12 @@
 #!/bin/sh
 # vrp 本地门禁：快速层测试全绿才放行推送（~4-8min；跳过用 git push --no-verify）
+# 环境自护栏（#243）：钩子原样继承调用壳环境——裸壳 TEMP=C:\...\Temp（长路径/低余量/
+# 他工具共享）曾致 tmp_path 夹具层 1165 OSError 快败（2026-11-26 push 实录，瞬态）；
+# 对齐套件护栏纪律：TEMP 短路径 D:\vrtmp（存在才启用，否则回退环境默认）。
+if [ -d "D:/vrtmp" ]; then
+  export TMPDIR='D:\vrtmp'
+  export TEMP='D:\vrtmp'
+  export TMP='D:\vrtmp'
+fi
+export PYTHONIOENCODING=utf-8
 python -m pytest -q
