@@ -3,7 +3,9 @@
 - 单协议：POST {base_url}/chat/completions（OpenAI-compatible，D2）
 - stdlib urllib 实现，零第三方依赖（D3）
 - 传输层重试：429/5xx 退避 ≤2，不消耗验证重试额度（§13.4）
-- key 任何形态不落盘：留痕一律走 LlmConfig.echo() 掩码（D5）
+- key 任何形态不落盘：留痕一律走 LlmConfig.echo() 掩码（D5）；
+  config 的 llm.api_key 明文字段是 vrp config --store-key 的用户显式选择，
+  读取优先级 env（api_key_env）> 明文（api_key）
 - 响应剥离容错（D8）：围栏剥离 + 首 {/[ 到末 }/] 提取，失败抛 ValueError
 """
 
@@ -90,20 +92,30 @@ def load_config(repo: Path, env: dict | None = None) -> LlmConfig:
     for name, value in (("timeout", timeout), ("max_output_tokens", max_output_tokens)):
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"config llm.{name} must be a positive integer")
+    # key 优先级：api_key_env 环境变量 > api_key 明文字段（vrp config --store-key 面）。
+    # 双字段时环境变量赢——轮换 key 只改 env 不动文件；env 未设回退明文（向后兼容：
+    # 旧 inline-only 配置行为不变）。两源都空按未配置诚实报错。
     env_map = os.environ if env is None else env
     api_key = ""
     source = ""
-    if isinstance(llm.get("api_key"), str) and llm["api_key"]:
-        api_key = llm["api_key"]
-        source = "inline"
-    elif isinstance(llm.get("api_key_env"), str) and llm["api_key_env"]:
-        var = llm["api_key_env"]
-        api_key = env_map.get(var, "")
-        if not api_key:
+    env_var = llm.get("api_key_env")
+    inline = llm.get("api_key")
+    has_env_spec = isinstance(env_var, str) and bool(env_var)
+    has_inline = isinstance(inline, str) and bool(inline)
+    if has_env_spec:
+        api_key = env_map.get(env_var, "")
+        if api_key:
+            source = f"env:{env_var}"
+        elif has_inline:
+            api_key = inline
+            source = "inline"
+        else:
             raise ValueError(
-                f"config llm.api_key_env references unset environment variable: {var}"
+                f"config llm.api_key_env references unset environment variable: {env_var}"
             )
-        source = f"env:{var}"
+    elif has_inline:
+        api_key = inline
+        source = "inline"
     else:
         raise ValueError(
             "config llm needs an API key: set 'api_key_env' (recommended) or 'api_key'"
