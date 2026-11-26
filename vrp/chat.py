@@ -402,7 +402,8 @@ def run_chat(
     try:
         config = load_config(repo)
     except ValueError as exc:
-        raise SystemExit(f"LLM not configured: {exc}\nrun 'vrp config' first to configure the LLM API (.vrp/config.json)")
+        # G2：wizard 引导前置，手动模板（exc 内 JSON）退居其后
+        raise SystemExit(f"LLM not configured: run 'vrp config' first to configure the LLM API (.vrp/config.json)\n{exc}")
     call = chat_fn or _default_chat
     system = _inject_brief(repo, say)
     history: list[dict] = []

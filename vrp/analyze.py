@@ -205,8 +205,9 @@ def run_analyze(
     try:
         config = load_config(repo)
     except ValueError as exc:
-        # 人话引导（消息语言纪律：exception 面与 print 面统一英文）
-        raise SystemExit(f"LLM not configured: {exc}\nrun 'vrp config' first to configure the LLM API (.vrp/config.json)")
+        # 人话引导（消息语言纪律：exception 面与 print 面统一英文）——
+        # G2：wizard 引导前置，手动模板（exc 内 JSON）退居其后
+        raise SystemExit(f"LLM not configured: run 'vrp config' first to configure the LLM API (.vrp/config.json)\n{exc}")
     call = chat_fn or _default_chat
     pause = time.sleep if sleep_fn is None else sleep_fn
     state, _detail = facts_state(repo)
