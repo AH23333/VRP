@@ -35,7 +35,7 @@ def cbm_repo(tmp_path, monkeypatch):
     (repo / "a.py").write_text("def old():\n    return 1\n", encoding="utf-8")
     cbm = tmp_path / "proj.db"
     _mk_cbm(cbm)
-    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name: cbm)
+    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name, repo=None: cbm)
     return repo
 
 

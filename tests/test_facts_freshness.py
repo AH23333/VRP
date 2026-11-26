@@ -106,7 +106,7 @@ def test_etl_records_git_head(tmp_path, monkeypatch):
     con.execute("CREATE TABLE file_hashes (project TEXT, rel_path TEXT, sha256 TEXT)")
     con.commit()
     con.close()
-    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name: cbm)
+    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name, repo=None: cbm)
     monkeypatch.setattr(etl, "current_git_head", lambda r: "feedface")
 
     out_db = repo / ".vrp" / "facts.db"

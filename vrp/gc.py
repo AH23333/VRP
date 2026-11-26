@@ -74,9 +74,13 @@ def _classify(db_path: Path) -> dict:
     return entry
 
 
-def audit_cache(cache_dir: Path | None = None) -> dict:
-    """审计段：cache_dir() 下 *.db 逐库分类（名序确定）。"""
-    cdir = cache_dir if cache_dir is not None else s1_cbm.cache_dir()
+def audit_cache(cache_dir: Path | None = None, repo: Path | str | None = None) -> dict:
+    """审计段：cache_dir 下 *.db 逐库分类（名序确定）。
+
+    cache_dir 缺省解析：显式参数 > CBM_CACHE_DIR env > ``<repo>/.vrp/cache``
+    （repo 给定时，per-repo 缓存面）> home 兜底（s1_cbm.cache_dir）。
+    """
+    cdir = cache_dir if cache_dir is not None else s1_cbm.cache_dir(repo)
     dbs: list[dict] = []
     if cdir.is_dir():
         for db_path in sorted(cdir.glob("*.db")):
@@ -104,9 +108,14 @@ def _sidecars(db_path: Path) -> list[Path]:
     return [p for p in (Path(f"{db_path}-wal"), Path(f"{db_path}-shm")) if p.exists()]
 
 
-def run_gc(cache_dir: Path | None = None, yes: bool = False, dry_run: bool = False) -> dict:
+def run_gc(
+    cache_dir: Path | None = None,
+    yes: bool = False,
+    dry_run: bool = False,
+    repo: Path | str | None = None,
+) -> dict:
     """三段式入口：恒先审计；--dry-run 只列将删清单；--yes 才动盘（候选 db+边车逐件真删，失败逐件记录）。"""
-    result = audit_cache(cache_dir)
+    result = audit_cache(cache_dir, repo=repo)
     result["mode"] = "gc" if yes else ("dry-run" if dry_run else "audit")
     result["deleted"] = []
     result["failed"] = []

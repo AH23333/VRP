@@ -217,7 +217,7 @@ def test_cap_brief_noop():
 
 def test_build_dossier_t3_raw_pack_pointer(tmp_path, con, monkeypatch):
     facts_db = _dump_facts(tmp_path, con)
-    monkeypatch.setattr("vrp.s5_dossier.get_architecture", lambda name: {"modules": []})
+    monkeypatch.setattr("vrp.s5_dossier.get_architecture", lambda name, repo=None: {"modules": []})
     monkeypatch.setattr(
         "vrp.s5_dossier.s5_cabrief.repo_map_brief",
         lambda repo, max_tokens=4000, timeout=120: {"status": "ok", "text": "map text", "chars": 8, "max_tokens": max_tokens},
@@ -236,7 +236,7 @@ def test_build_dossier_t3_raw_pack_pointer(tmp_path, con, monkeypatch):
 
 
 def _no_arch(monkeypatch):
-    monkeypatch.setattr("vrp.s5_dossier.get_architecture", lambda name: {"modules": []})
+    monkeypatch.setattr("vrp.s5_dossier.get_architecture", lambda name, repo=None: {"modules": []})
 
 
 def test_build_dossier_arch_failure_degrades(tmp_path, con, monkeypatch):
@@ -245,7 +245,7 @@ def test_build_dossier_arch_failure_degrades(tmp_path, con, monkeypatch):
     still assemble ("failed" is never conflated with "skipped")."""
     facts_db = _dump_facts(tmp_path, con)
 
-    def boom(name):
+    def boom(name, repo=None):
         raise RuntimeError("cbm daemon down")
 
     monkeypatch.setattr("vrp.s5_dossier.get_architecture", boom)

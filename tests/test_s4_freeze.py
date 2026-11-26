@@ -85,13 +85,13 @@ def test_write_runtime_evidence(con):
 
 
 def test_graph_baseline_artifact_missing(repo, monkeypatch):
-    monkeypatch.setattr("vrp.s1_cbm.run_cli", lambda args, timeout=3600: {"ok": True})
+    monkeypatch.setattr("vrp.s1_cbm.run_cli", lambda args, timeout=3600, cache_dir=None: {"ok": True})
     with pytest.raises(RuntimeError, match="artifact missing"):
         s4_freeze.graph_baseline(repo, "proj")
 
 
 def test_graph_baseline_ok(repo, monkeypatch):
-    def fake_run_cli(args, timeout=3600):
+    def fake_run_cli(args, timeout=3600, cache_dir=None):
         artifact = repo / ".codebase-memory" / "graph.db.zst"
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_bytes(b"zst-bytes")

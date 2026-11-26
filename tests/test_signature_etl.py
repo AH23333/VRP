@@ -83,7 +83,7 @@ def sig_repo(tmp_path, monkeypatch):
         (3, "proj", "Variable", "X", "p.X", "a.py", 8, 8,
          json.dumps({"lines": 1})),
     ])
-    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name: cbm)
+    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name, repo=None: cbm)
     return repo
 
 

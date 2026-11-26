@@ -126,7 +126,7 @@ def _patch_fake_cbm(monkeypatch, tmp_path: Path, repo: Path) -> dict:
         return {"project": name, "db": str(cbm_path), "status": "indexed"}
 
     monkeypatch.setattr(s1_cbm, "index_repository", _fake_index)
-    monkeypatch.setattr(s1_cbm, "cbm_db_path", lambda name: cbm_path)
+    monkeypatch.setattr(s1_cbm, "cbm_db_path", lambda name, repo=None: cbm_path)
     monkeypatch.setattr(s1_cbm, "cbm_version", lambda timeout=30: "t-1")
     return {"tl_name": tl_name, "cbm_path": cbm_path}
 

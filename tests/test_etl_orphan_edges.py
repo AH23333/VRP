@@ -41,7 +41,7 @@ def built(tmp_path, monkeypatch):
     (repo / "b.py").write_text("def h():\n    pass\n", encoding="utf-8")
     cbm = tmp_path / "proj.db"
     _mk_cbm(cbm)
-    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name: cbm)
+    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name, repo=None: cbm)
     out_db = repo / ".vrp" / "facts.db"
     etl.run_etl(repo, "proj", out_db=out_db)
     con = sqlite3.connect(out_db)

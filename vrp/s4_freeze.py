@@ -109,6 +109,7 @@ def graph_baseline(repo: Path, name: str, timeout: int = 3600) -> dict:
     result = s1_cbm.run_cli(
         ["index_repository", "--repo-path", str(repo), "--name", name, "--persistence"],
         timeout=timeout,
+        cache_dir=s1_cbm.cache_dir(repo),
     )
     artifact = repo / ".codebase-memory" / "graph.db.zst"
     if not artifact.exists():
@@ -126,6 +127,7 @@ def test_impact(repo: Path, name: str, timeout: int = 300) -> dict:
         return s1_cbm.run_cli(
             ["detect_changes", "--project", name, "--scope", "tests"],
             timeout=timeout,
+            cache_dir=s1_cbm.cache_dir(repo),
         )
     except RuntimeError as exc:
         return {"error": str(exc)[:1000]}

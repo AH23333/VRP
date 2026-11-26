@@ -24,16 +24,24 @@ def find_cbm() -> Path:
     )
 
 
-def cache_dir() -> Path:
+def cache_dir(repo: Path | str | None = None) -> Path:
+    """CBM 缓存目录解析（三层，用户零配置）。
+
+    1. 环境变量 ``CBM_CACHE_DIR``——显式覆盖（deep 测试共享缓存等场景）
+    2. ``<repo>/.vrp/cache/``——默认：缓存跟随被分析仓的 vrp 项目目录，
+       与 facts.db 同居（.vrp 应被 gitignore），零手动设置
+    3. ``~/.cache/codebase-memory-mcp``——无 repo 上下文的兜底（CBM 自身默认）
+    """
     env = os.environ.get("CBM_CACHE_DIR")
     if env:
         return Path(env)
-    home = Path.home()
-    return home / ".cache" / "codebase-memory-mcp"
+    if repo is not None:
+        return Path(repo) / ".vrp" / "cache"
+    return Path.home() / ".cache" / "codebase-memory-mcp"
 
 
-def cbm_db_path(name: str) -> Path:
-    return cache_dir() / f"{name}.db"
+def cbm_db_path(name: str, repo: Path | str | None = None) -> Path:
+    return cache_dir(repo) / f"{name}.db"
 
 
 def find_cbm_db(name: str, repo_path: str) -> Path | None:
@@ -45,10 +53,10 @@ def find_cbm_db(name: str, repo_path: str) -> Path | None:
     so fall back to scanning the cache dir for a db whose recorded provenance
     matches ``repo_path`` (dogfood batch 2026-11-04).
     """
-    db = cbm_db_path(name)
+    db = cbm_db_path(name, repo_path)
     if db.exists():
         return db
-    cdir = cache_dir()
+    cdir = cache_dir(repo_path)
     if cdir.is_dir():
         for cand in sorted(cdir.glob("*.db")):
             try:
@@ -113,13 +121,20 @@ def cbm_version(timeout: int = 30) -> str | None:
     return None
 
 
-def run_cli(args: list[str], timeout: int = 3600) -> dict:
+def run_cli(args: list[str], timeout: int = 3600, cache_dir: Path | None = None) -> dict:
     exe = find_cbm()
+    # 缓存目录对齐：CBM 子进程读同一 CBM_CACHE_DIR 环境变量；per-repo 默认
+    # （<repo>/.vrp/cache）不在 CBM 自身的默认面里——必须显式注入子进程 env，
+    # 否则 vrp 侧 cache_dir(repo) 与 CBM 实际写库位置漂移（R-AJ 面）。
+    # env 已显式设置时注入同值（恒等）；未设置时注入 per-repo 解析值。
+    env = None
+    if cache_dir is not None:
+        env = {**os.environ, "CBM_CACHE_DIR": str(cache_dir)}
     # R-AI: 树杀超时（procs.run_tree，#84 孙进程孤儿纪律）+ 超时统一转
     # RuntimeError——裸 subprocess.run 超时泄漏 TimeoutExpired，穿透
     # mcp _guard 捕获元组炸 server，且 test_impact 的 except RuntimeError
     # （docstring "never a gate"）接不住，freeze 整体死于 best-effort 步骤。
-    result = procs.run_tree([str(exe), "cli", *args], timeout=timeout)
+    result = procs.run_tree([str(exe), "cli", *args], timeout=timeout, env=env)
     if result["timed_out"]:
         raise RuntimeError(
             f"cbm cli timed out after {timeout}s: {' '.join(args)}\n"
@@ -154,6 +169,8 @@ def index_repository(repo: Path, name: str, reindex: bool = False, timeout: int 
     溯源缺失/异仓时标注 rebuild_reason 提示，不再静默。
     """
     repo_path = str(Path(repo).resolve())
+    cdir = cache_dir(repo_path)
+    cdir.mkdir(parents=True, exist_ok=True)
     rebuild_reason = None
     db = find_cbm_db(name, repo_path)
     if db is not None:
@@ -163,14 +180,16 @@ def index_repository(repo: Path, name: str, reindex: bool = False, timeout: int 
         elif recorded != repo_path:
             rebuild_reason = "repo-path-mismatch"
     result = run_cli(
-        ["index_repository", "--repo-path", str(repo), "--name", name], timeout=timeout
+        ["index_repository", "--repo-path", str(repo), "--name", name],
+        timeout=timeout,
+        cache_dir=cdir,
     )
     project = str(result.get("project") or name)
     if "/" in project or "\\" in project:
         # CBM 报告的 project 名直接拼 cache 路径——含分隔符会写出
         # cache 子目录（路径逃逸面），宁可拒绝也不猜测
         raise RuntimeError(f"cbm reported unsafe project name: {project!r}")
-    db = cache_dir() / f"{project}.db"
+    db = cdir / f"{project}.db"
     result["status"] = "indexed"
     result["project"] = project
     result["db"] = str(db)

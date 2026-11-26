@@ -1,6 +1,6 @@
 """BB1/V17 (#205): resolution_label 判据与 ETL 标注接线。
 
-三仓真值探针（2026-11-21, docs/设计稿-BB1V17 §1）锚定的判据：
+三仓真值探针（2026-11-21, docs/设计稿/设计稿-BB1V17 §1）锚定的判据：
 confidence 双阈值 0.85/0.70，None=未知不惩罚（CALL_REFERENCE 全族与
 未迁移旧行保持原行为）。CGC calls.py 三值词汇对齐（EXTRACTED/
 INFERRED/AMBIGUOUS），非逐级 tier 复刻——VRP 无解析器 tier 可透传。

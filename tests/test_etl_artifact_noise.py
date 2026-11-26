@@ -155,7 +155,7 @@ def test_run_etl_writes_artifact_hints_json(tmp_path, monkeypatch):
     (repo / "a.py").write_text("def old():\n    return 1\n", encoding="utf-8")
     cbm = tmp_path / "proj.db"
     _mk_cbm(cbm)
-    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name: cbm)
+    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name, repo=None: cbm)
     stats = etl.run_etl(repo, "proj")
     hints_path = repo / ".vrp" / "artifact-hints.json"
     assert hints_path.is_file()

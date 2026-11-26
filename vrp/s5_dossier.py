@@ -222,9 +222,11 @@ def strongly_connected(con: sqlite3.Connection, report_cap: int = SCC_REPORT_CAP
     }
 
 
-def get_architecture(name: str, timeout: int = 300) -> dict:
+def get_architecture(name: str, timeout: int = 300, repo: Path | str | None = None) -> dict:
     return s1_cbm.run_cli(
-        ["get_architecture", "--project", name, "--format", "json"], timeout=timeout
+        ["get_architecture", "--project", name, "--format", "json"],
+        timeout=timeout,
+        cache_dir=s1_cbm.cache_dir(repo) if repo is not None else None,
     )
 
 
@@ -385,7 +387,7 @@ def build_dossier(
         # failure——R-AR 前只捕 RuntimeError，缺 cbm 穿降级契约直炸
         # MCP server（_guard 元组无 OSError 族）。
         try:
-            arch_payload = get_architecture(name)
+            arch_payload = get_architecture(name, repo=repo)
         except (RuntimeError, FileNotFoundError) as exc:
             arch_payload = {"status": "failed", "reason": str(exc)[:500]}
     if skip_external:

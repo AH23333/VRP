@@ -22,7 +22,7 @@ def _fake_cbm(db_path, calls):
     """Mimic the CBM binary: each run rebuilds the db from scratch with a
     store_meta that has no vrp provenance row."""
 
-    def fake(args, timeout=3600):
+    def fake(args, timeout=3600, cache_dir=None):
         calls.append(args)
         db_path.unlink(missing_ok=True)
         con = sqlite3.connect(db_path)
@@ -99,7 +99,7 @@ def test_cbm_renamed_project_uses_returned_project(tmp_path, cache, monkeypatch)
     slug_db = cache / "D-path-slug-proj.db"
     calls: list = []
 
-    def fake(args, timeout=3600):
+    def fake(args, timeout=3600, cache_dir=None):
         calls.append(args)
         con = sqlite3.connect(slug_db)
         con.execute("CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT)")
@@ -189,7 +189,7 @@ def test_index_repository_rejects_separator_in_project(tmp_path, cache, monkeypa
     """R-D C5：CBM 报告的 project 名含路径分隔符——拒绝（cache 子目录写/逃逸面）。"""
     calls: list = []
 
-    def fake(args, timeout=3600):
+    def fake(args, timeout=3600, cache_dir=None):
         calls.append(args)
         return {"ok": True, "project": "evil/name"}
 

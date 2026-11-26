@@ -258,7 +258,7 @@ def run_etl(repo: Path, cbm_name: str, out_db: Path | None = None, full: bool = 
     if db_path is None:
         raise FileNotFoundError(
             f"CBM db not found for project '{cbm_name}' (nor by repo provenance): "
-            f"{s1_cbm.cbm_db_path(cbm_name)}"
+            f"{s1_cbm.cbm_db_path(cbm_name, repo)}"
         )
     project = db_path.stem
     s1_cbm.verify_cbm_schema(db_path)

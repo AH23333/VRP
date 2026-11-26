@@ -443,7 +443,7 @@ def test_etl_hook_marks_drift_and_ledger_remaps_full_cycle(tmp_path, monkeypatch
     (repo / "a.py").write_text("def old():\n    return 1\n", encoding="utf-8")
     cbm = tmp_path / "proj.db"
     _mk_cbm(cbm)
-    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name: cbm)
+    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name, repo=None: cbm)
     out_db = repo / ".vrp" / "facts.db"
 
     stats = etl.run_etl(repo, "proj", out_db=out_db)
@@ -533,7 +533,7 @@ def test_etl_hook_keeps_fresh_artifacts_active(tmp_path, monkeypatch):
     (repo / "a.py").write_text("def old():\n    return 1\n", encoding="utf-8")
     cbm = tmp_path / "proj.db"
     _mk_cbm(cbm)
-    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name: cbm)
+    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name, repo=None: cbm)
     out_db = repo / ".vrp" / "facts.db"
 
     etl.run_etl(repo, "proj", out_db=out_db)

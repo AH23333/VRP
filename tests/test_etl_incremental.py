@@ -69,7 +69,7 @@ def world(tmp_path, monkeypatch):
     (repo / "c.py").write_text(C_CONTENT, encoding="utf-8", newline="\n")
     cbm = tmp_path / "proj.db"
     _mk_cbm(cbm, V1_NODES, V1_EDGES, V1_HASHES, V1_COV)
-    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name: cbm)
+    monkeypatch.setattr(etl.s1_cbm, "cbm_db_path", lambda name, repo=None: cbm)
     monkeypatch.setattr(etl.s1_cbm, "cbm_version", lambda timeout=30: "t-1")
     return repo
 
